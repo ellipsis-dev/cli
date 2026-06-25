@@ -1,4 +1,4 @@
-export const VERSION = '0.1.1'
+export const VERSION = '0.1.2'
 
 // The bare default; env (ELLIPSIS_API_BASE_URL / ELLIPSIS_API_BASE) and the
 // config file take precedence and are layered in resolveApiBase() (config.ts).
