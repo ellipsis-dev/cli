@@ -37,7 +37,8 @@ agent ping                        # check authenticated /v1 connectivity
 ```
 
 Most commands accept `--json` to print the raw API response. The CLI talks to
-the public `/v1` REST API; point it elsewhere with `ELLIPSIS_API_BASE`.
+the public `/v1` REST API; point it elsewhere with `ELLIPSIS_API_BASE_URL`
+(or the legacy `ELLIPSIS_API_BASE`).
 
 `agent run get --watch` polls run status until the run finishes. Token-level
 output streaming over WebSocket is specified in
@@ -50,6 +51,15 @@ behind the same `--watch` flag.
 verification URL (and opens it unless `--no-browser`), and polls until you
 approve the request in the dashboard. The issued user token is stored under
 `~/.config/ellipsis/config.json` (mode 0600) and attributes runs to you.
+
+**Credentials resolve in this order (highest wins):** explicit argument →
+environment (`ELLIPSIS_API_TOKEN` / `ELLIPSIS_API_BASE_URL`, with the legacy
+`ELLIPSIS_API_BASE` accepted as a fallback) → config file → default. This lets
+the CLI run headlessly — e.g. inside an Ellipsis cloud sandbox where a
+per-sandbox token and base URL are injected into the environment — with no
+`agent login` and no config file on disk. `agent logout` only clears the
+on-disk token; a token supplied via `ELLIPSIS_API_TOKEN` lives in the
+environment and keeps working until you unset it.
 
 ## Develop
 

@@ -1,5 +1,4 @@
-import { DEFAULT_API_BASE } from './constants'
-import { loadConfig } from './config'
+import { resolveApiBase, resolveToken } from './config'
 import type {
   AgentRun,
   BudgetSummary,
@@ -35,10 +34,11 @@ export class ApiClient {
   private readonly base: string
   private readonly token?: string
 
+  // Both args are optional overrides; when omitted, each is resolved through
+  // the precedence chain (explicit → env → config → default) in config.ts.
   constructor(base?: string, token?: string) {
-    const config = loadConfig()
-    this.base = base ?? config.apiBase ?? DEFAULT_API_BASE
-    this.token = token ?? config.token
+    this.base = resolveApiBase(base)
+    this.token = resolveToken(token)
   }
 
   async request<T>(
