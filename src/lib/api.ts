@@ -1,9 +1,36 @@
 import { DEFAULT_API_BASE } from './constants'
 import { loadConfig } from './config'
+import type {
+  AgentRun,
+  BudgetSummary,
+  CliAuthPoll,
+  CliAuthStart,
+  ListAgentConfigsResponse,
+  ListAgentRunsQuery,
+  ListAgentRunsResponse,
+  SavedAgentConfig,
+  StartAgentRunRequest,
+  UsageDashboard,
+  WhoAmI,
+} from './types'
 
-// Thin REST client. The typed request/response surface will move to
-// @ellipsis/sdk (generated from the backend OpenAPI spec) once that
-// package exists; this CLI then imports it instead of hand-rolling types.
+// Thin REST client over the public `/v1` API. The typed request/response
+// surface mirrors ellipsis/src/public_api/routers/v1/v1_router.py and will move
+// to @ellipsis/sdk (generated from the backend OpenAPI spec) once that package
+// exists; this CLI then imports it instead of hand-rolling types.
+
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly method: string,
+    readonly path: string,
+    readonly detail: string,
+  ) {
+    super(`${method} ${path} failed: ${status} ${detail}`)
+    this.name = 'ApiError'
+  }
+}
+
 export class ApiClient {
   private readonly base: string
   private readonly token?: string
@@ -14,8 +41,14 @@ export class ApiClient {
     this.token = token ?? config.token
   }
 
-  async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const res = await fetch(`${this.base}${path}`, {
+  async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    query?: Record<string, unknown>,
+  ): Promise<T> {
+    const url = this.base + path + buildQuery(query)
+    const res = await fetch(url, {
       method,
       headers: {
         'content-type': 'application/json',
@@ -24,8 +57,100 @@ export class ApiClient {
       body: body === undefined ? undefined : JSON.stringify(body),
     })
     if (!res.ok) {
-      throw new Error(`${method} ${path} failed: ${res.status} ${res.statusText}`)
+      throw new ApiError(res.status, method, path, await errorDetail(res))
     }
-    return (await res.json()) as T
+    // Some endpoints (DELETEs, acks) return empty bodies; tolerate that.
+    const text = await res.text()
+    return (text ? JSON.parse(text) : undefined) as T
   }
+
+  // ------------------------------- identity -------------------------------
+
+  whoami(): Promise<WhoAmI> {
+    return this.request('GET', '/v1/me')
+  }
+
+  // ----------------------------- usage / budget ---------------------------
+
+  getBudget(): Promise<BudgetSummary> {
+    return this.request('GET', '/v1/budget')
+  }
+
+  getUsage(): Promise<UsageDashboard> {
+    return this.request('GET', '/v1/usage')
+  }
+
+  // ------------------------------ agent runs ------------------------------
+
+  startAgentRun(req: StartAgentRunRequest): Promise<AgentRun> {
+    return this.request('POST', '/v1/agents/runs', req)
+  }
+
+  async listAgentRuns(query?: ListAgentRunsQuery): Promise<AgentRun[]> {
+    const res = await this.request<ListAgentRunsResponse>(
+      'GET',
+      '/v1/agents/runs',
+      undefined,
+      query as Record<string, unknown> | undefined,
+    )
+    return res.runs
+  }
+
+  getAgentRun(runId: string): Promise<AgentRun> {
+    return this.request('GET', `/v1/agents/runs/${encodeURIComponent(runId)}`)
+  }
+
+  // ----------------------------- agent configs ----------------------------
+
+  async listAgentConfigs(): Promise<SavedAgentConfig[]> {
+    const res = await this.request<ListAgentConfigsResponse>(
+      'GET',
+      '/v1/agents/configs',
+    )
+    return res.configs
+  }
+
+  getAgentConfig(configId: string): Promise<SavedAgentConfig> {
+    return this.request('GET', `/v1/agents/configs/${encodeURIComponent(configId)}`)
+  }
+
+  // --------------------------- device-code auth ---------------------------
+  // Unauthenticated: the CLI has no credential yet — that's what it's obtaining.
+
+  startCliAuth(): Promise<CliAuthStart> {
+    return this.request('POST', '/v1/cli-auth/start')
+  }
+
+  pollCliAuth(deviceCode: string): Promise<CliAuthPoll> {
+    return this.request('POST', '/v1/cli-auth/poll', { device_code: deviceCode })
+  }
+}
+
+export function buildQuery(query?: Record<string, unknown>): string {
+  if (!query) return ''
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null) continue
+    // Repeat the key for arrays (FastAPI's `Query()` list convention).
+    if (Array.isArray(value)) {
+      for (const item of value) params.append(key, String(item))
+    } else {
+      params.append(key, String(value))
+    }
+  }
+  const qs = params.toString()
+  return qs ? `?${qs}` : ''
+}
+
+// Surface the server's `{"detail": ...}` message when present; fall back to the
+// status text. Keeps `agent` error output actionable instead of bare codes.
+export async function errorDetail(res: Response): Promise<string> {
+  try {
+    const body = (await res.json()) as { detail?: unknown }
+    if (typeof body.detail === 'string') return body.detail
+    if (body.detail) return JSON.stringify(body.detail)
+  } catch {
+    // not JSON
+  }
+  return res.statusText
 }
