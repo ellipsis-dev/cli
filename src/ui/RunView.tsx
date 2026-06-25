@@ -14,29 +14,29 @@ export function RunView({ runId, token }: Props): React.ReactElement {
   const [status, setStatus] = useState<string>('connecting')
 
   useEffect(() => {
-    return streamRun({
-      token,
-      runId,
-      onFrame: (frame: StreamFrame) => {
-        switch (frame.type) {
-          case 'stdout':
-          case 'stderr':
-            setLines((prev) => [...prev, frame.data ?? ''])
-            break
-          case 'status':
-            setStatus(frame.status ?? 'running')
-            break
-          case 'done':
-            setStatus('done')
-            exit()
-            break
-          case 'error':
-            setStatus(`error: ${frame.data ?? 'unknown'}`)
-            exit()
-            break
-        }
-      },
-    })
+    const controller = new AbortController()
+    const onFrame = (frame: StreamFrame) => {
+      switch (frame.type) {
+        case 'stdout':
+        case 'stderr':
+          setLines((prev) => [...prev, frame.data ?? ''])
+          break
+        case 'status':
+          setStatus(frame.status ?? 'running')
+          break
+      }
+    }
+    streamRun({ token, runId, onFrame, signal: controller.signal })
+      .then((outcome) => {
+        if (outcome.type === 'error') setStatus(`error: ${outcome.message}`)
+        else if (outcome.type === 'done') setStatus('done')
+        exit()
+      })
+      .catch((err: Error) => {
+        setStatus(`error: ${err.message}`)
+        exit()
+      })
+    return () => controller.abort()
   }, [runId, token, exit])
 
   const done = status === 'done'
@@ -45,7 +45,10 @@ export function RunView({ runId, token }: Props): React.ReactElement {
     <Box flexDirection="column">
       <Box>
         {done ? <Text color="green">✓ </Text> : <Spinner type="dots" />}
-        <Text color="cyan"> run {runId} — {status}</Text>
+        <Text color="cyan">
+          {' '}
+          run {runId} — {status}
+        </Text>
       </Box>
       {lines.map((line, i) => (
         <Text key={i}>{line}</Text>
