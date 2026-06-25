@@ -25,18 +25,24 @@ agent run start --config <id>     # start a run from a saved config
 agent run start --config-file f.json   # ...or from an inline config
 agent run list --limit 20         # list recent runs (filter by --source, --days, …)
 agent run get <run-id>            # inspect one run
-agent run view                    # attach to the latest run and stream output
+agent run get <run-id> --watch    # follow a run until it finishes
 
 agent config list                 # list saved agent configs
-agent config get <config-id>      # inspect one config
+agent config get <config-id>      # show one config as YAML (-o json for JSON)
+agent config init [path]          # scaffold a starter config (default: agents/my_agent.yaml)
 
 agent budget                      # current budget summary
 agent usage                       # usage dashboard for the period
-agent ping                        # check API connectivity
+agent ping                        # check authenticated /v1 connectivity
 ```
 
 Most commands accept `--json` to print the raw API response. The CLI talks to
 the public `/v1` REST API; point it elsewhere with `ELLIPSIS_API_BASE`.
+
+`agent run get --watch` polls run status until the run finishes. Token-level
+output streaming over WebSocket is specified in
+[`docs/RUN_STREAMING_SPEC.md`](docs/RUN_STREAMING_SPEC.md) and will slot in
+behind the same `--watch` flag.
 
 ### Auth
 

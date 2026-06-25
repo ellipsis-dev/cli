@@ -17,3 +17,8 @@ jobs:
       - run: bun run typecheck
       - run: bun run test
       - run: bun run build
+      # Compile-smoke: the release Bun-compiles a single binary, which bundles
+      # everything (unlike tsup) and can fail where `build` passes. Catch that
+      # here so a release tag never breaks on it.
+      - run: bun build src/cli.tsx --compile --outfile /tmp/agent
+      - run: /tmp/agent --version
