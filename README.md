@@ -45,6 +45,20 @@ npm run compile             # single-binary build (bun)
 | `src/ui/`         | Ink components for interactive / streaming views |
 | `src/lib/`        | API client, WebSocket client, config, constants  |
 
+### Releasing
+
+Pushing a `v*` tag triggers `.github/workflows/release.yml`, which Bun-compiles
+binaries for macOS and Linux (arm64 + x64), publishes a GitHub release with the
+tarballs, and regenerates the formula in
+[`ellipsis-dev/homebrew-cli`](https://github.com/ellipsis-dev/homebrew-cli).
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+The cross-repo push needs a `HOMEBREW_TAP_TOKEN` secret (a token with
+contents:write on the tap repo) set on this repo.
+
 ### Status
 
 Skeleton. Command tree and streaming UI are wired; network calls (auth, run

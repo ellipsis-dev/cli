@@ -1,0 +1,104 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (without leading v), e.g. 0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Stamp version into the binary
+        run: |
+          V="${{ steps.version.outputs.version }}"
+          sed -i "s/export const VERSION = '.*'/export const VERSION = '$V'/" src/lib/constants.ts
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build platform binaries
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for t in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
+            echo "::group::build $t"
+            bun build src/cli.tsx --compile --target=bun-"$t" --outfile agent
+            tar -czf "dist/agent-$t.tar.gz" agent
+            rm -f agent
+            echo "::endgroup::"
+          done
+
+      - name: Compute checksums
+        id: sha
+        run: |
+          set -euo pipefail
+          cd dist
+          for t in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
+            sum=$(sha256sum "agent-$t.tar.gz" | cut -d' ' -f1)
+            echo "${t//-/_}=$sum" >> "$GITHUB_OUTPUT"
+          done
+          sha256sum *.tar.gz > checksums.txt
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt
+
+      - name: Check out the Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: ellipsis-dev/homebrew-cli
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Regenerate the formula
+        run: |
+          set -euo pipefail
+          sed \
+            -e "s|__VERSION__|${{ steps.version.outputs.version }}|g" \
+            -e "s|__SHA_DARWIN_ARM64__|${{ steps.sha.outputs.darwin_arm64 }}|g" \
+            -e "s|__SHA_DARWIN_X64__|${{ steps.sha.outputs.darwin_x64 }}|g" \
+            -e "s|__SHA_LINUX_ARM64__|${{ steps.sha.outputs.linux_arm64 }}|g" \
+            -e "s|__SHA_LINUX_X64__|${{ steps.sha.outputs.linux_x64 }}|g" \
+            .github/homebrew/agent.rb.tmpl > tap/Formula/agent.rb
+
+      - name: Commit and push the formula
+        run: |
+          set -euo pipefail
+          cd tap
+          git config user.name "ellipsis-bot"
+          git config user.email "bot@ellipsis.dev"
+          git add Formula/agent.rb
+          if git diff --cached --quiet; then
+            echo "Formula unchanged; nothing to push."
+          else
+            git commit -m "agent ${{ steps.version.outputs.version }}"
+            git push
+          fi
