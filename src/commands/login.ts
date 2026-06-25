@@ -37,6 +37,15 @@ export function registerLogin(program: Command): void {
       // Drop the token but keep apiBase so the next login targets the same API.
       const { apiBase } = loadConfig()
       saveConfig(apiBase ? { apiBase } : {})
-      console.log('Logged out.')
+      // logout only clears the on-disk token. A token supplied via
+      // ELLIPSIS_API_TOKEN (e.g. inside a sandbox) lives in the environment and
+      // keeps working — don't claim to have cleared what we can't.
+      if (process.env.ELLIPSIS_API_TOKEN) {
+        console.log(
+          'Removed stored credentials. ELLIPSIS_API_TOKEN is still set in the environment, so that session stays active until it is unset.',
+        )
+      } else {
+        console.log('Logged out.')
+      }
     })
 }
