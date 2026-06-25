@@ -1,0 +1,41 @@
+{
+  "name": "@ellipsis/cli",
+  "version": "0.1.0",
+  "description": "Ellipsis agent CLI — drive the Ellipsis cloud from your terminal",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "agent": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.tsx",
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "compile": "bun build src/cli.tsx --compile --outfile agent",
+    "start": "node dist/cli.js"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "ink": "^5.0.1",
+    "ink-spinner": "^5.0.0",
+    "react": "^18.3.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "@types/react": "^18.3.0",
+    "@types/ws": "^8.5.12",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
