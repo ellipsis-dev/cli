@@ -75,7 +75,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ellipsis-dev/homebrew-cli
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # Write-scoped deploy key for the tap repo only (the workflow's own
+          # GITHUB_TOKEN can't reach a second repo). checkout configures the SSH
+          # remote + key, so the push step below authenticates over SSH.
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           path: tap
 
       - name: Regenerate the formula

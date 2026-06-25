@@ -106,8 +106,11 @@ tarballs, and regenerates the formula in
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-The cross-repo push needs a `HOMEBREW_TAP_TOKEN` secret (a token with
-contents:write on the tap repo) set on this repo.
+The cross-repo push to the tap uses a write-scoped **deploy key**: the public
+half is registered on `ellipsis-dev/homebrew-cli` (Settings → Deploy keys, write
+access), and the private half is stored as the `HOMEBREW_TAP_DEPLOY_KEY` secret
+on this repo. The workflow checks out the tap over SSH with it. A deploy key is
+scoped to that one repo only — no account-wide PAT involved.
 
 ### Status
 
