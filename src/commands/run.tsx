@@ -1,13 +1,22 @@
 import type { Command } from 'commander'
 import { readFileSync } from 'node:fs'
-import React from 'react'
-import { render } from 'ink'
-import { RunView } from '../ui/RunView'
-import { requireToken } from '../lib/config'
 import { ApiClient } from '../lib/api'
-import { printJson, runAction } from '../lib/output'
+import { formatTs, printJson, printTable, runAction, usdFromMillicents } from '../lib/output'
 import { collect, collectKeyValue, toInt } from '../lib/args'
-import type { AgentRun, AgentRunSource, StartAgentRunRequest } from '../lib/types'
+import type {
+  AgentRun,
+  AgentRunSource,
+  AgentRunStatus,
+  StartAgentRunRequest,
+} from '../lib/types'
+
+// Statuses past which a run no longer changes — `--watch` stops here.
+const TERMINAL_STATUSES: ReadonlySet<AgentRunStatus> = new Set<AgentRunStatus>([
+  'completed',
+  'error',
+  'cancelled',
+  'stopped',
+])
 
 export function registerRun(program: Command): void {
   const run = program.command('run').description('Start and inspect agent runs')
@@ -56,7 +65,7 @@ export function registerRun(program: Command): void {
             return
           }
           console.log(`✓ started run ${run.id} (${run.status})`)
-          console.log(`  attach with: agent run view ${run.id}`)
+          console.log(`  follow with: agent run get ${run.id} --watch`)
         })
       },
     )
@@ -98,9 +107,18 @@ export function registerRun(program: Command): void {
             console.log('No runs found.')
             return
           }
-          for (const r of runs) {
-            console.log(`${r.id}  ${r.status.padEnd(16)} ${r.created_at}`)
-          }
+          printTable(
+            ['ID', 'STATUS', 'SOURCE', 'CREATED', 'COST'],
+            runs.map((r) => [
+              r.id,
+              r.status,
+              r.source ?? '—',
+              formatTs(r.created_at),
+              usdFromMillicents(
+                r.cost_tokens + r.cost_sandbox_cpu + r.cost_sandbox_memory + r.cost_fee,
+              ),
+            ]),
+          )
         })
       },
     )
@@ -108,28 +126,23 @@ export function registerRun(program: Command): void {
   run
     .command('get <runId>')
     .description('Get a single agent run (GET /v1/agents/runs/{id})')
+    .option('-w, --watch', 'poll until the run reaches a terminal status')
+    .option('-i, --interval <seconds>', 'poll interval for --watch', toInt, 3)
     .option('--json', 'output raw JSON')
-    .action(async (runId: string, opts: { json?: boolean }) => {
+    .action(async (runId: string, opts: { watch?: boolean; interval: number; json?: boolean }) => {
       await runAction(async () => {
-        const r = await new ApiClient().getAgentRun(runId)
+        const api = new ApiClient()
+        if (opts.watch) {
+          await watchRun(api, runId, opts.interval, opts.json)
+          return
+        }
+        const r = await api.getAgentRun(runId)
         if (opts.json) {
           printJson(r)
           return
         }
         printRunSummary(r)
       })
-    })
-
-  run
-    .command('view')
-    .description('Attach to a run and stream its output (defaults to the latest run)')
-    .argument('[runId]', 'run id; defaults to the most recent run')
-    .action((runId?: string) => {
-      // Streaming is a separate WebSocket surface, not part of /v1 (deferred in
-      // documents/eng/ELLIPSIS_API_AND_CLI.md §7). The server-side frame
-      // protocol is still stubbed.
-      const token = requireToken()
-      render(<RunView runId={runId ?? 'latest'} token={token} />)
     })
 
   run
@@ -145,6 +158,41 @@ export function registerRun(program: Command): void {
     })
 }
 
+// Poll a run until it reaches a terminal status, printing each status
+// transition. This is status-level "live" — the /v1 API exposes run state, not
+// the step-by-step stdout/stderr stream. Token-level streaming over WebSocket is
+// specified separately (see docs/RUN_STREAMING_SPEC.md) and will slot in behind
+// this same `--watch` flag.
+export async function watchRun(
+  api: ApiClient,
+  runId: string,
+  intervalSeconds: number,
+  json?: boolean,
+): Promise<void> {
+  const intervalMs = Math.max(1, intervalSeconds) * 1000
+  let last: AgentRunStatus | undefined
+  for (;;) {
+    const r = await api.getAgentRun(runId)
+    if (r.status !== last) {
+      if (!json) {
+        const reason = r.status_reason ? ` — ${r.status_reason}` : ''
+        console.log(`${nowClock()}  ${r.status}${reason}`)
+      }
+      last = r.status
+    }
+    if (TERMINAL_STATUSES.has(r.status)) {
+      if (json) {
+        printJson(r)
+      } else {
+        console.log('')
+        printRunSummary(r)
+      }
+      return
+    }
+    await sleep(intervalMs)
+  }
+}
+
 function printRunSummary(r: AgentRun): void {
   console.log(`id:        ${r.id}`)
   console.log(`status:    ${r.status}${r.status_reason ? ` (${r.status_reason})` : ''}`)
@@ -153,6 +201,11 @@ function printRunSummary(r: AgentRun): void {
   console.log(`created:   ${r.created_at}`)
   console.log(`updated:   ${r.updated_at}`)
   console.log(`tokens:    ${r.tokens_total.toLocaleString()}`)
+  console.log(
+    `cost:      ${usdFromMillicents(
+      r.cost_tokens + r.cost_sandbox_cpu + r.cost_sandbox_memory + r.cost_fee,
+    )}`,
+  )
   const keys = Object.keys(r.metadata ?? {})
   if (keys.length) {
     console.log('metadata:')
@@ -166,4 +219,13 @@ function readJsonFile(path: string): Record<string, unknown> {
   } catch (err) {
     throw new Error(`could not read config file ${path}: ${(err as Error).message}`)
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// Local wall-clock HH:MM:SS for the --watch transition log.
+function nowClock(): string {
+  return new Date().toTimeString().slice(0, 8)
 }
