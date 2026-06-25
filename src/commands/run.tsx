@@ -1,8 +1,16 @@
 import type { Command } from 'commander'
 import { readFileSync } from 'node:fs'
 import { ApiClient } from '../lib/api'
+import { requireToken, resolveApiBase } from '../lib/config'
 import { formatTs, printJson, printTable, runAction, usdFromMillicents } from '../lib/output'
 import { collect, collectKeyValue, toInt } from '../lib/args'
+import {
+  resolveWsBase,
+  streamRun,
+  StreamUnavailableError,
+  type StreamFrame,
+  type StreamOutcome,
+} from '../lib/ws'
 import type {
   AgentRun,
   AgentRunSource,
@@ -133,7 +141,7 @@ export function registerRun(program: Command): void {
       await runAction(async () => {
         const api = new ApiClient()
         if (opts.watch) {
-          await watchRun(api, runId, opts.interval, opts.json)
+          await watchRunStreaming(api, runId, opts.interval, opts.json)
           return
         }
         const r = await api.getAgentRun(runId)
@@ -158,11 +166,94 @@ export function registerRun(program: Command): void {
     })
 }
 
+// `--watch` entry point: stream the run's output live over WebSocket, and fall
+// back to REST status polling if streaming is unavailable (e.g. a backend
+// without the endpoint). Identical UX either way — the same flag covers both.
+export async function watchRunStreaming(
+  api: ApiClient,
+  runId: string,
+  intervalSeconds: number,
+  json?: boolean,
+): Promise<void> {
+  const token = requireToken()
+  const wsBase = resolveWsBase(resolveApiBase())
+
+  // The server sends a `status` frame as its keepalive, so collapse unchanged
+  // statuses — both to keep the human log quiet and the NDJSON stream clean.
+  let lastStatus: string | undefined
+  const onFrame = (frame: StreamFrame) => {
+    if (frame.type === 'status') {
+      if (frame.status === lastStatus) return
+      lastStatus = frame.status
+    }
+    if (json) {
+      console.log(JSON.stringify(frame))
+      return
+    }
+    renderFrameHuman(frame)
+  }
+
+  let outcome: StreamOutcome
+  try {
+    outcome = await streamRun({ token, runId, wsBase, onFrame })
+  } catch (err) {
+    if (err instanceof StreamUnavailableError) {
+      if (!json) {
+        console.error(
+          `live stream unavailable (${err.message}); falling back to status polling`,
+        )
+      }
+      await watchRun(api, runId, intervalSeconds, json)
+      return
+    }
+    throw err // StreamAuthError and anything unexpected: surfaced by runAction.
+  }
+
+  if (outcome.type === 'aborted') return
+  if (outcome.type === 'error') {
+    process.exitCode = 1
+    return
+  }
+  // Terminal `done` frame. Output already streamed live; print a one-line cap.
+  if (!json) {
+    const mark = outcome.status === 'completed' ? '✓' : '✗'
+    console.log(`\n${mark} run ${runId} ${outcome.status}`)
+  }
+  if (exitCodeForStatus(outcome.status) !== 0) process.exitCode = 1
+}
+
+function renderFrameHuman(frame: StreamFrame): void {
+  switch (frame.type) {
+    case 'status':
+      console.log(`${nowClock()}  ${frame.status}`)
+      break
+    case 'stdout':
+      writeChunk(process.stdout, frame.data)
+      break
+    case 'stderr':
+      writeChunk(process.stderr, frame.data)
+      break
+    case 'error':
+      console.error(`error: ${frame.message ?? frame.data ?? 'stream error'}`)
+      break
+    case 'done':
+      break // handled by the caller
+  }
+}
+
+function writeChunk(stream: NodeJS.WriteStream, data?: string): void {
+  if (!data) return
+  stream.write(data.endsWith('\n') ? data : data + '\n')
+}
+
+// Exit 0 for a successful terminal status, non-zero otherwise (spec §4.1).
+export function exitCodeForStatus(status: string): number {
+  return status === 'completed' ? 0 : 1
+}
+
 // Poll a run until it reaches a terminal status, printing each status
-// transition. This is status-level "live" — the /v1 API exposes run state, not
-// the step-by-step stdout/stderr stream. Token-level streaming over WebSocket is
-// specified separately (see docs/RUN_STREAMING_SPEC.md) and will slot in behind
-// this same `--watch` flag.
+// transition. This is the status-level fallback used when live streaming isn't
+// available: the /v1 REST API exposes run state, not the step-by-step stream.
 export async function watchRun(
   api: ApiClient,
   runId: string,
