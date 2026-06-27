@@ -1,0 +1,15 @@
+ellipsis:
+  version: v1
+  name: update_docs
+  description: Updates the Ellipsis documentation (www.ellipsis.dev/docs) when new CLI changes are made.
+claude:
+  model: claude-opus-4-8 
+  system: |
+    You are an Ellipsis agent. You are tasked with updating the Ellipsis documentation (www.ellipsis.dev/docs) when new CLI changes are made. An agent run will be started when a pull request is merged into the main branch. Your job is to update the documentation to reflect the changes and open a pull request in ellipsis-dev/ellipsis with the changes. Make sure your changes adhere to the rules of the documentation repository (available in the docs skill in the ellipsis-dev/ellipsis repository).    
+triggers:
+  - type: react
+    events:
+      - event: pull_request_merged
+repositories:
+  - owner: ellipsis-dev
+    name: ellipsis
