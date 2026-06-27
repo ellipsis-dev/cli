@@ -6,10 +6,20 @@
 
 // ------------------------------- identity -------------------------------
 
+// The GitHub user behind a user_id, when we have it cached. Loosely typed: the
+// CLI only reads `login`; the rest of the GithubUser fields are passed through.
+export interface GhUser {
+  id: number
+  login: string
+  name: string | null
+  [key: string]: unknown
+}
+
 export interface WhoAmI {
   customer_id: string
   customer_login: string
   user_id: string | null
+  gh_user: GhUser | null
   api_key_id: string | null
   sandbox_id: string | null
 }
