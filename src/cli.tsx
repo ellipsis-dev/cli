@@ -3,6 +3,7 @@ import { registerLogin } from './commands/login'
 import { registerMe } from './commands/me'
 import { registerRun } from './commands/run'
 import { registerConfig } from './commands/config'
+import { registerTemplate } from './commands/template'
 import { registerUsage } from './commands/usage'
 import { registerPing } from './commands/ping'
 import { VERSION } from './lib/constants'
@@ -18,6 +19,7 @@ registerLogin(program)
 registerMe(program)
 registerRun(program)
 registerConfig(program)
+registerTemplate(program)
 registerUsage(program)
 registerPing(program)
 
