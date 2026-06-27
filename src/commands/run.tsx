@@ -21,7 +21,7 @@ import type {
 
 // Poll cadence for the `--watch` REST fallback (used only when live WebSocket
 // streaming is unavailable). Not user-configurable — the fallback is rare.
-const FALLBACK_POLL_INTERVAL_SECONDS = 3
+const FALLBACK_POLL_INTERVAL_SECONDS = 2
 
 // Statuses past which a run no longer changes — `--watch` stops here.
 const TERMINAL_STATUSES: ReadonlySet<AgentRunStatus> = new Set<AgentRunStatus>([
