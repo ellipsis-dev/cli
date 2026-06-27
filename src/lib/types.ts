@@ -133,6 +133,43 @@ export interface ListAgentConfigsResponse {
   configs: SavedAgentConfig[]
 }
 
+// Create-config payload for POST /v1/agents/configs. Exactly one of `config`
+// (inline) or `template_id` (a gallery template slug). `repository` is a bare
+// repo name in the caller's account — the owner is always the account.
+export interface CreateAgentConfigRequest {
+  config?: AgentConfig
+  template_id?: string
+  repository: string
+  // File path within the repo. Omit for the default agents/<slug>.yaml; if set
+  // it must be a location Ellipsis syncs (.yaml/.yml under agents/, .agents/,
+  // ellipsis/, or .ellipsis/ at any depth).
+  path?: string
+}
+
+// Result of creating a config: the pending row plus the pull request that adds
+// its YAML file. The agent goes live once that PR merges and syncs.
+export interface CreatedAgentConfig {
+  config: SavedAgentConfig
+  path: string
+  pull_request_url: string
+}
+
+// A built-in starter template served by GET /v1/agents/templates. `yaml` is the
+// schema-valid agent config the CLI writes to disk; the rest is display copy.
+export interface AgentTemplate {
+  slug: string
+  name: string
+  description: string
+  tags: string[]
+  summary: string
+  use_case: string
+  yaml: string
+}
+
+export interface ListAgentTemplatesResponse {
+  templates: AgentTemplate[]
+}
+
 export interface ListAgentRunsQuery {
   config_id?: string
   source?: AgentRunSource[]

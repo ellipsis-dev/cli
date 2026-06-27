@@ -61,27 +61,66 @@ export function registerConfig(program: Command): void {
 
   config
     .command('init [path]')
-    .description(`Scaffold a starter agent config YAML (default: ${DEFAULT_CONFIG_PATH})`)
+    .description(
+      `Scaffold a starter agent config YAML locally (default: ${DEFAULT_CONFIG_PATH}), ` +
+        'or with --template create the agent in a repo by opening a pull request',
+    )
     .option('-f, --force', 'overwrite the file if it already exists')
-    .action((path: string | undefined, opts: { force?: boolean }) => {
-      // Configs are sourced from YAML in GitHub, not created through the API
-      // (see documents/eng/ELLIPSIS_API_AND_CLI.md), so `init` is a local
-      // scaffold the user commits to a path Ellipsis syncs from.
-      const target = path ?? DEFAULT_CONFIG_PATH
-      if (existsSync(target) && !opts.force) {
-        console.error(`error: ${target} already exists (use --force to overwrite)`)
-        process.exitCode = 1
-        return
-      }
-      const name = basename(target, extname(target))
-      mkdirSync(dirname(target), { recursive: true })
-      writeFileSync(target, starterConfig(name))
-      console.log(`✓ wrote ${target}`)
-      console.log(
-        'Commit it to your default branch — Ellipsis syncs agent configs from GitHub.',
-      )
-    })
+    .option(
+      '--template <slug>',
+      'create the agent from an Ellipsis template by opening a pull request (see `agent template list`)',
+    )
+    .option(
+      '--repo <name>',
+      'repository name to open the pull request against (required with --template)',
+    )
+    .option(
+      '--path <path>',
+      'file path within the repo for the config (default: agents/<slug>.yaml; must be a synced location)',
+    )
+    .action(
+      async (
+        path: string | undefined,
+        opts: { force?: boolean; template?: string; repo?: string; path?: string },
+      ) => {
+        // With --template the agent is created in your repo: Ellipsis opens a
+        // pull request that adds the config file and returns it. Without it,
+        // this is a local scaffold you commit yourself.
+        if (opts.template) {
+          if (!opts.repo) {
+            console.error('error: --repo <name> is required with --template')
+            process.exitCode = 1
+            return
+          }
+          await runAction(async () => {
+            const created = await new ApiClient().createAgentConfig({
+              template_id: opts.template,
+              repository: opts.repo!,
+              path: opts.path,
+            })
+            console.log(`✓ opened a pull request adding the agent (${created.path})`)
+            console.log(created.pull_request_url)
+            console.log('Merge it to deploy the agent.')
+          })
+          return
+        }
+        const target = path ?? DEFAULT_CONFIG_PATH
+        if (existsSync(target) && !opts.force) {
+          console.error(`error: ${target} already exists (use --force to overwrite)`)
+          process.exitCode = 1
+          return
+        }
+        const name = basename(target, extname(target))
+        mkdirSync(dirname(target), { recursive: true })
+        writeFileSync(target, starterConfig(name))
+        console.log(`✓ wrote ${target}`)
+        console.log(COMMIT_HINT)
+      },
+    )
 }
+
+const COMMIT_HINT =
+  'Commit it to your default branch. Ellipsis syncs agent configs from GitHub.'
 
 // A minimal valid agent config. `claude.system` is the only required field;
 // everything else has a server-side default. Roots Ellipsis syncs from:
