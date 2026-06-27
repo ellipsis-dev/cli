@@ -1,13 +1,17 @@
 import { resolveApiBase, resolveToken } from './config'
 import type {
   AgentRun,
+  AgentTemplate,
   BudgetSummary,
   CliAuthPoll,
   CliAuthStart,
+  CreateAgentConfigRequest,
+  CreatedAgentConfig,
   GetSandboxVariablesResponse,
   ListAgentConfigsResponse,
   ListAgentRunsQuery,
   ListAgentRunsResponse,
+  ListAgentTemplatesResponse,
   SandboxVariableInput,
   SandboxVariableSummary,
   SavedAgentConfig,
@@ -113,6 +117,12 @@ export class ApiClient {
     return res.configs
   }
 
+  // Opens a pull request that adds the config's YAML to the repo's agents/
+  // directory; the agent goes live once it merges and syncs.
+  createAgentConfig(req: CreateAgentConfigRequest): Promise<CreatedAgentConfig> {
+    return this.request('POST', '/v1/agents/configs', req)
+  }
+
   getAgentConfig(configId: string): Promise<SavedAgentConfig> {
     return this.request('GET', `/v1/agents/configs/${encodeURIComponent(configId)}`)
   }
@@ -146,6 +156,20 @@ export class ApiClient {
       `/v1/sandboxes/variables/${encodeURIComponent(name)}`,
     )
     return res.variables
+  }
+
+  // ---------------------------- agent templates ---------------------------
+
+  async listAgentTemplates(): Promise<AgentTemplate[]> {
+    const res = await this.request<ListAgentTemplatesResponse>(
+      'GET',
+      '/v1/agents/templates',
+    )
+    return res.templates
+  }
+
+  getAgentTemplate(slug: string): Promise<AgentTemplate> {
+    return this.request('GET', `/v1/agents/templates/${encodeURIComponent(slug)}`)
   }
 
   // --------------------------- device-code auth ---------------------------

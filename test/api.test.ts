@@ -138,3 +138,67 @@ describe('ApiClient sandbox variables', () => {
     expect((init as RequestInit).method).toBe('DELETE')
   })
 })
+
+describe('agent templates', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('unwraps the templates array from the list response', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ templates: [{ slug: 'a' }, { slug: 'b' }] }), {
+          status: 200,
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await new ApiClient('http://api.test', 't').listAgentTemplates()
+    expect(out.map((t) => t.slug)).toEqual(['a', 'b'])
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/agents/templates')
+  })
+
+  it('fetches a single template by slug (encoded)', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ slug: 'ci-failure-triager', yaml: 'x' }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await new ApiClient('http://api.test', 't').getAgentTemplate('ci-failure-triager')
+    expect(out.yaml).toBe('x')
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'http://api.test/v1/agents/templates/ci-failure-triager',
+    )
+  })
+})
+
+describe('createAgentConfig', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('POSTs template_id + repository and returns the pull request', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            config: { id: 'cfg_1' },
+            path: 'agents/ci-failure-triager.yaml',
+            pull_request_url: 'https://github.com/octocat/api/pull/7',
+          }),
+          { status: 200 },
+        ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await new ApiClient('http://api.test', 't').createAgentConfig({
+      template_id: 'ci-failure-triager',
+      repository: 'api',
+    })
+    expect(out.pull_request_url).toBe('https://github.com/octocat/api/pull/7')
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('http://api.test/v1/agents/configs')
+    expect((init as RequestInit).method).toBe('POST')
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      template_id: 'ci-failure-triager',
+      repository: 'api',
+    })
+  })
+})
