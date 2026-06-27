@@ -4,6 +4,7 @@
   "description": "Ellipsis agent CLI — drive the Ellipsis cloud from your terminal",
   "license": "MIT",
   "type": "module",
+  "packageManager": "bun@1.3.14",
   "bin": {
     "agent": "dist/cli.js"
   },
