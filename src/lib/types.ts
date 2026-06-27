@@ -141,6 +141,30 @@ export interface ListAgentRunsQuery {
   limit?: number
 }
 
+// -------------------------- sandbox variables ---------------------------
+// Customer-scoped environment variables injected into a sandbox when an agent
+// config names them. Values are write-only: the API accepts them but never
+// returns them, so the summary carries only the name and timestamps.
+
+export interface SandboxVariableSummary {
+  name: string
+  created_at: string
+  updated_at: string
+}
+
+export interface GetSandboxVariablesResponse {
+  variables: SandboxVariableSummary[]
+}
+
+export interface SandboxVariableInput {
+  name: string
+  value: string
+}
+
+export interface PutSandboxVariablesRequest {
+  variables: SandboxVariableInput[]
+}
+
 // ------------------------------ cli auth --------------------------------
 
 export interface CliAuthStart {

@@ -4,9 +4,12 @@ import type {
   BudgetSummary,
   CliAuthPoll,
   CliAuthStart,
+  GetSandboxVariablesResponse,
   ListAgentConfigsResponse,
   ListAgentRunsQuery,
   ListAgentRunsResponse,
+  SandboxVariableInput,
+  SandboxVariableSummary,
   SavedAgentConfig,
   StartAgentRunRequest,
   UsageDashboard,
@@ -112,6 +115,37 @@ export class ApiClient {
 
   getAgentConfig(configId: string): Promise<SavedAgentConfig> {
     return this.request('GET', `/v1/agents/configs/${encodeURIComponent(configId)}`)
+  }
+
+  // -------------------------- sandbox variables ---------------------------
+  // All three return the full current list (the backend echoes it after every
+  // mutation), so callers can render the resulting state.
+
+  async listSandboxVariables(): Promise<SandboxVariableSummary[]> {
+    const res = await this.request<GetSandboxVariablesResponse>(
+      'GET',
+      '/v1/sandboxes/variables',
+    )
+    return res.variables
+  }
+
+  async putSandboxVariables(
+    variables: SandboxVariableInput[],
+  ): Promise<SandboxVariableSummary[]> {
+    const res = await this.request<GetSandboxVariablesResponse>(
+      'PUT',
+      '/v1/sandboxes/variables',
+      { variables },
+    )
+    return res.variables
+  }
+
+  async deleteSandboxVariable(name: string): Promise<SandboxVariableSummary[]> {
+    const res = await this.request<GetSandboxVariablesResponse>(
+      'DELETE',
+      `/v1/sandboxes/variables/${encodeURIComponent(name)}`,
+    )
+    return res.variables
   }
 
   // --------------------------- device-code auth ---------------------------
