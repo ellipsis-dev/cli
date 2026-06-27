@@ -93,6 +93,52 @@ describe('ApiClient.request', () => {
   })
 })
 
+describe('ApiClient sandbox variables', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('lists variables and unwraps the response envelope', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ variables: [{ name: 'A', created_at: '', updated_at: '' }] }), {
+          status: 200,
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await new ApiClient('http://api.test', 't').listSandboxVariables()
+    expect(out).toEqual([{ name: 'A', created_at: '', updated_at: '' }])
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/sandboxes/variables')
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
+  })
+
+  it('PUTs the variables batch and returns the echoed list', async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ variables: [] }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await new ApiClient('http://api.test', 't').putSandboxVariables([{ name: 'TOKEN', value: 'x' }])
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('http://api.test/v1/sandboxes/variables')
+    expect((init as RequestInit).method).toBe('PUT')
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      variables: [{ name: 'TOKEN', value: 'x' }],
+    })
+  })
+
+  it('URL-encodes the name on delete', async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ variables: [] }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await new ApiClient('http://api.test', 't').deleteSandboxVariable('MY/VAR')
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('http://api.test/v1/sandboxes/variables/MY%2FVAR')
+    expect((init as RequestInit).method).toBe('DELETE')
+  })
+})
+
 describe('agent templates', () => {
   afterEach(() => vi.unstubAllGlobals())
 
