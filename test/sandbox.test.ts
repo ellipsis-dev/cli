@@ -1,5 +1,36 @@
 import { describe, expect, it } from 'vitest'
-import { collectInputs, parseAssignment, parseEnvFile } from '../src/commands/sandbox'
+import {
+  collectInputs,
+  parseAssignment,
+  parseEnvFile,
+  parseJsonVars,
+} from '../src/commands/sandbox'
+
+describe('parseJsonVars', () => {
+  it('parses a flat object of name → value', () => {
+    expect(parseJsonVars('{"A":"1","B":"two"}')).toEqual([
+      { name: 'A', value: '1' },
+      { name: 'B', value: 'two' },
+    ])
+  })
+
+  it('accepts an empty object', () => {
+    expect(parseJsonVars('{}')).toEqual([])
+  })
+
+  it('throws on invalid JSON', () => {
+    expect(() => parseJsonVars('{not json}')).toThrow(/invalid JSON/)
+  })
+
+  it('rejects a top-level array', () => {
+    expect(() => parseJsonVars('["A","B"]')).toThrow(/object of variable name/)
+  })
+
+  it('rejects non-string values', () => {
+    expect(() => parseJsonVars('{"A":1}')).toThrow(/value for 'A' must be a string/)
+    expect(() => parseJsonVars('{"A":{"nested":"x"}}')).toThrow(/value for 'A' must be a string/)
+  })
+})
 
 describe('parseAssignment', () => {
   it('parses KEY=VALUE', () => {

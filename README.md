@@ -32,7 +32,7 @@ agent config get <config-id>      # show one config as YAML (-o json for JSON)
 agent config init [path]          # scaffold a starter config (default: agents/my_agent.yaml)
 
 agent sandbox variable list       # list sandbox env variable names (values are write-only)
-agent sandbox variable set A=1 B=2     # create/update variables (or --from-file .env)
+agent sandbox variable set A=1 B=2     # create/update variables (or --from-file .env/.json)
 agent sandbox variable rm K       # delete a variable
 
 agent budget                      # current budget summary

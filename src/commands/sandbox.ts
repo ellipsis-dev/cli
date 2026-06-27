@@ -27,7 +27,7 @@ export function registerSandbox(program: Command): void {
   variable
     .command('set [assignments...]')
     .description('Create or update variables, e.g. `set A=1 B=2` (PUT /v1/sandboxes/variables)')
-    .option('-f, --from-file <path>', 'load KEY=VALUE pairs from a .env-style file')
+    .option('-f, --from-file <path>', 'load variables from a .env or .json file')
     .option('--json', 'output raw JSON')
     .action(async (assignments: string[], opts: { fromFile?: string; json?: boolean }) => {
       await runAction(async () => {
@@ -66,8 +66,8 @@ export function collectInputs(
 ): SandboxVariableInput[] {
   const inputs: SandboxVariableInput[] = []
   if (fromFile) {
-    const fileInputs = parseEnvFile(readFileSync(fromFile, 'utf8'))
-    if (fileInputs.length === 0) throw new Error(`no KEY=VALUE pairs found in ${fromFile}`)
+    const fileInputs = readVarsFromFile(fromFile)
+    if (fileInputs.length === 0) throw new Error(`no variables found in ${fromFile}`)
     inputs.push(...fileInputs)
   }
   for (const raw of assignments) {
@@ -79,6 +79,38 @@ export function collectInputs(
   }
   if (inputs.length === 0) {
     throw new Error('provide KEY=VALUE pairs, or --from-file <path>')
+  }
+  return inputs
+}
+
+// Read a variables file, picking the format by extension: `.json` is a flat
+// object of name → value, anything else is a .env-style KEY=VALUE file.
+function readVarsFromFile(path: string): SandboxVariableInput[] {
+  const contents = readFileSync(path, 'utf8')
+  return path.toLowerCase().endsWith('.json')
+    ? parseJsonVars(contents)
+    : parseEnvFile(contents)
+}
+
+// Parse a flat JSON object of name → value. Values must be strings (sandbox
+// variable values are strings); a nested object, array, or non-string value is
+// rejected rather than silently coerced.
+export function parseJsonVars(contents: string): SandboxVariableInput[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(contents)
+  } catch (err) {
+    throw new Error(`invalid JSON: ${(err as Error).message}`)
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('expected a JSON object of variable name to value')
+  }
+  const inputs: SandboxVariableInput[] = []
+  for (const [name, value] of Object.entries(parsed)) {
+    if (typeof value !== 'string') {
+      throw new Error(`value for '${name}' must be a string`)
+    }
+    inputs.push({ name, value })
   }
   return inputs
 }
