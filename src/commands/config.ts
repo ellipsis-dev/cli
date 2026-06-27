@@ -2,7 +2,9 @@ import { InvalidArgumentError, type Command } from 'commander'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname } from 'node:path'
 import { ApiClient } from '../lib/api'
+import { resolveAppBase } from '../lib/config'
 import { formatTs, printJson, printTable, printYaml, runAction } from '../lib/output'
+import { configUrl } from '../lib/urls'
 import type { SavedAgentConfig } from '../lib/types'
 
 const DEFAULT_CONFIG_PATH = 'agents/my_agent.yaml'
@@ -43,12 +45,17 @@ export function registerConfig(program: Command): void {
     .option('-o, --output <format>', 'output format: yaml (default) or json', parseFormat, 'yaml')
     .action(async (configId: string, opts: { output: 'yaml' | 'json' }) => {
       await runAction(async () => {
-        const c = await new ApiClient().getAgentConfig(configId)
+        const api = new ApiClient()
+        // -o json is the machine-readable mode: emit only the raw config.
         if (opts.output === 'json') {
-          printJson(c)
-        } else {
-          printYaml(c)
+          printJson(await api.getAgentConfig(configId))
+          return
         }
+        // Fetch the config and the login (for the link) together. The link goes
+        // to stderr so the YAML on stdout stays clean for piping/redirecting.
+        const [c, me] = await Promise.all([api.getAgentConfig(configId), api.whoami()])
+        printYaml(c)
+        console.error(`\nview: ${configUrl(resolveAppBase(), me.customer_login, configId)}`)
       })
     })
 

@@ -23,8 +23,10 @@ agent me                          # show the current credential's identity
 
 agent run start --config <id>     # start a run from a saved config
 agent run start --config-file f.json   # ...or from an inline config
+agent run start --template welcome-to-ellipsis   # ...or from a maintained template
+agent run start --config <id> --watch  # start and immediately stream it
 agent run list --limit 20         # list recent runs (filter by --source, --days, …)
-agent run get <run-id>            # inspect one run
+agent run get <run-id>            # inspect one run (prints a dashboard link)
 agent run get <run-id> --watch    # follow a run until it finishes
 
 agent config list                 # list saved agent configs
@@ -40,10 +42,11 @@ Most commands accept `--json` to print the raw API response. The CLI talks to
 the public `/v1` REST API; point it elsewhere with `ELLIPSIS_API_BASE_URL`
 (or the legacy `ELLIPSIS_API_BASE`).
 
-`agent run get --watch` polls run status until the run finishes. Token-level
-output streaming over WebSocket is specified in
-[`docs/RUN_STREAMING_SPEC.md`](docs/RUN_STREAMING_SPEC.md) and will slot in
-behind the same `--watch` flag.
+`--watch` (on both `run start` and `run get`) streams the run's output live over
+WebSocket until it reaches a terminal status, falling back to status polling
+every `--interval` seconds when streaming is unavailable. Either way it first
+prints a clickable dashboard link. The stream protocol is specified in
+[`docs/RUN_STREAMING_SPEC.md`](docs/RUN_STREAMING_SPEC.md).
 
 ### Auth
 
