@@ -19,6 +19,10 @@ import type {
   StartAgentRunRequest,
 } from '../lib/types'
 
+// Poll cadence for the `--watch` REST fallback (used only when live WebSocket
+// streaming is unavailable). Not user-configurable — the fallback is rare.
+const FALLBACK_POLL_INTERVAL_SECONDS = 3
+
 // Statuses past which a run no longer changes — `--watch` stops here.
 const TERMINAL_STATUSES: ReadonlySet<AgentRunStatus> = new Set<AgentRunStatus>([
   'completed',
@@ -48,7 +52,6 @@ export function registerRun(program: Command): void {
     )
     .option('-s, --source <source>', 'run source', 'cli')
     .option('-w, --watch', 'stream the run live until it reaches a terminal status')
-    .option('-i, --interval <seconds>', 'poll interval for the --watch fallback', toInt, 3)
     .option('--json', 'output raw JSON')
     .action(
       async (opts: {
@@ -59,7 +62,6 @@ export function registerRun(program: Command): void {
         metadata: Record<string, string>
         source: string
         watch?: boolean
-        interval: number
         json?: boolean
       }) => {
         await runAction(async () => {
@@ -89,7 +91,7 @@ export function registerRun(program: Command): void {
               console.log(`✓ started run ${run.id}`)
               await printRunUrl(api, run.id)
             }
-            await watchRunStreaming(api, run.id, opts.interval, opts.json)
+            await watchRunStreaming(api, run.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
             return
           }
 
@@ -160,15 +162,14 @@ export function registerRun(program: Command): void {
   run
     .command('get <runId>')
     .description('Get a single agent run (GET /v1/agents/runs/{id})')
-    .option('-w, --watch', 'poll until the run reaches a terminal status')
-    .option('-i, --interval <seconds>', 'poll interval for --watch', toInt, 3)
+    .option('-w, --watch', 'stream the run live until it reaches a terminal status')
     .option('--json', 'output raw JSON')
-    .action(async (runId: string, opts: { watch?: boolean; interval: number; json?: boolean }) => {
+    .action(async (runId: string, opts: { watch?: boolean; json?: boolean }) => {
       await runAction(async () => {
         const api = new ApiClient()
         if (opts.watch) {
           if (!opts.json) await printRunUrl(api, runId)
-          await watchRunStreaming(api, runId, opts.interval, opts.json)
+          await watchRunStreaming(api, runId, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
           return
         }
         if (opts.json) {

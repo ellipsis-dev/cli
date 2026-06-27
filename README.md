@@ -43,9 +43,9 @@ the public `/v1` REST API; point it elsewhere with `ELLIPSIS_API_BASE_URL`
 (or the legacy `ELLIPSIS_API_BASE`).
 
 `--watch` (on both `run start` and `run get`) streams the run's output live over
-WebSocket until it reaches a terminal status, falling back to status polling
-every `--interval` seconds when streaming is unavailable. Either way it first
-prints a clickable dashboard link. The stream protocol is specified in
+WebSocket until it reaches a terminal status, falling back to periodic status
+polling if the live stream is unavailable. Either way it first prints a
+clickable dashboard link. The stream protocol is specified in
 [`docs/RUN_STREAMING_SPEC.md`](docs/RUN_STREAMING_SPEC.md).
 
 ### Auth
