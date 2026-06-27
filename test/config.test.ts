@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DEFAULT_API_BASE } from '../src/lib/constants'
-import { resolveApiBase, resolveToken, requireToken } from '../src/lib/config'
+import { resolveApiBase, resolveAppBase, resolveToken, requireToken } from '../src/lib/config'
 
 // Each test gets a throwaway ELLIPSIS_CONFIG_DIR so resolveToken/resolveApiBase
 // read a known config file (or none) without touching the real ~/.config.
@@ -17,6 +17,7 @@ const ENV_KEYS = [
   'ELLIPSIS_API_TOKEN',
   'ELLIPSIS_API_BASE_URL',
   'ELLIPSIS_API_BASE',
+  'ELLIPSIS_APP_BASE',
 ] as const
 
 beforeEach(() => {
@@ -102,5 +103,33 @@ describe('resolveApiBase precedence', () => {
 
   it('uses the default base when nothing is configured', () => {
     expect(resolveApiBase()).toBe(DEFAULT_API_BASE)
+  })
+})
+
+describe('resolveAppBase', () => {
+  it('derives the prod app base from the prod api base', () => {
+    expect(resolveAppBase('https://api.ellipsis.dev')).toBe('https://app.ellipsis.dev')
+  })
+
+  it('derives the beta app base from the beta api base', () => {
+    expect(resolveAppBase('https://beta-api.ellipsis.dev')).toBe('https://beta-app.ellipsis.dev')
+  })
+
+  it('strips a trailing slash', () => {
+    expect(resolveAppBase('https://api.ellipsis.dev/')).toBe('https://app.ellipsis.dev')
+  })
+
+  it('ELLIPSIS_APP_BASE overrides derivation', () => {
+    process.env.ELLIPSIS_APP_BASE = 'http://localhost:3000/'
+    expect(resolveAppBase('https://api.ellipsis.dev')).toBe('http://localhost:3000')
+  })
+
+  it('returns an unrecognized base unchanged', () => {
+    expect(resolveAppBase('http://localhost:5000')).toBe('http://localhost:5000')
+  })
+
+  it('falls back to the resolved api base when no arg is given', () => {
+    process.env.ELLIPSIS_API_BASE_URL = 'https://beta-api.ellipsis.dev'
+    expect(resolveAppBase()).toBe('https://beta-app.ellipsis.dev')
   })
 })

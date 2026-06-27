@@ -119,6 +119,7 @@ export type AgentConfig = Record<string, unknown>
 export interface StartAgentRunRequest {
   config_id?: string
   config?: AgentConfig
+  template_id?: string
   source?: AgentRunSource
   metadata?: Record<string, string>
   budget_usd?: number

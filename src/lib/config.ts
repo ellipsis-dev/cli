@@ -56,6 +56,19 @@ export function resolveApiBase(explicit?: string): string {
   return explicit ?? envApiBase() ?? loadConfig().apiBase ?? DEFAULT_API_BASE
 }
 
+// Resolve the dashboard (web app) base URL for building clickable links.
+// ELLIPSIS_APP_BASE wins; otherwise derive it from the API base by swapping the
+// `api` host label for `app` (api.ellipsis.dev -> app.ellipsis.dev,
+// beta-api.ellipsis.dev -> beta-app.ellipsis.dev), so a beta API base yields a
+// beta dashboard link. An unrecognized base (e.g. a custom host without `api`)
+// is returned unchanged — set ELLIPSIS_APP_BASE for those.
+export function resolveAppBase(apiBase?: string): string {
+  const explicit = process.env.ELLIPSIS_APP_BASE
+  if (explicit) return explicit.replace(/\/+$/, '')
+  const base = (apiBase ?? resolveApiBase()).replace(/\/+$/, '')
+  return base.replace('://api.', '://app.').replace('-api.', '-app.')
+}
+
 export function requireToken(): string {
   const token = resolveToken()
   if (!token) {

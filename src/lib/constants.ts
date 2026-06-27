@@ -6,4 +6,3 @@ export const DEFAULT_API_BASE = 'https://api.ellipsis.dev'
 // The bare default. Env (ELLIPSIS_WS_BASE) and derivation from the API base are
 // layered in resolveWsBase() (ws.ts).
 export const DEFAULT_WS_BASE = 'wss://api.ellipsis.dev'
-export const APP_BASE = process.env.ELLIPSIS_APP_BASE ?? 'https://app.ellipsis.dev'

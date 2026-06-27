@@ -1,9 +1,10 @@
 import type { Command } from 'commander'
 import { readFileSync } from 'node:fs'
 import { ApiClient } from '../lib/api'
-import { requireToken, resolveApiBase } from '../lib/config'
+import { requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
 import { formatTs, printJson, printTable, runAction, usdFromMillicents } from '../lib/output'
 import { collect, collectKeyValue, toInt } from '../lib/args'
+import { runUrl } from '../lib/urls'
 import {
   resolveWsBase,
   streamRun,
@@ -18,9 +19,9 @@ import type {
   StartAgentRunRequest,
 } from '../lib/types'
 
-// Poll interval (seconds) for the REST status-polling fallback used when live
-// streaming is unavailable. Not user-configurable — streaming is the norm.
-const WATCH_POLL_INTERVAL_SECONDS = 3
+// Poll cadence for the `--watch` REST fallback (used only when live WebSocket
+// streaming is unavailable). Not user-configurable — the fallback is rare.
+const FALLBACK_POLL_INTERVAL_SECONDS = 2
 
 // Statuses past which a run no longer changes — `--watch` stops here.
 const TERMINAL_STATUSES: ReadonlySet<AgentRunStatus> = new Set<AgentRunStatus>([
@@ -38,6 +39,10 @@ export function registerRun(program: Command): void {
     .description('Start a new agent run (POST /v1/agents/runs)')
     .option('-c, --config <id>', 'start from a saved agent config id')
     .option('-f, --config-file <path>', 'start from an inline agent config (JSON file)')
+    .option(
+      '-t, --template <slug>',
+      'start from a maintained run template (e.g. welcome-to-ellipsis)',
+    )
     .option('-b, --budget <usd>', 'per-run budget override in USD', parseFloat)
     .option(
       '-m, --metadata <key=value>',
@@ -46,22 +51,28 @@ export function registerRun(program: Command): void {
       {} as Record<string, string>,
     )
     .option('-s, --source <source>', 'run source', 'cli')
+    .option('-w, --watch', 'stream the run live until it reaches a terminal status')
     .option('--json', 'output raw JSON')
     .action(
       async (opts: {
         config?: string
         configFile?: string
+        template?: string
         budget?: number
         metadata: Record<string, string>
         source: string
+        watch?: boolean
         json?: boolean
       }) => {
         await runAction(async () => {
-          if (!opts.config && !opts.configFile) {
-            throw new Error('provide --config <id> or --config-file <path>')
+          // The server enforces "exactly one of config / config_id / template_id";
+          // pre-check locally for a clearer error than a bare 400.
+          const sources = [opts.config, opts.configFile, opts.template].filter(Boolean)
+          if (sources.length === 0) {
+            throw new Error('provide one of --config <id>, --config-file <path>, or --template <slug>')
           }
-          if (opts.config && opts.configFile) {
-            throw new Error('provide only one of --config / --config-file')
+          if (sources.length > 1) {
+            throw new Error('provide only one of --config / --config-file / --template')
           }
           const req: StartAgentRunRequest = {
             source: opts.source as AgentRunSource,
@@ -69,14 +80,27 @@ export function registerRun(program: Command): void {
           }
           if (opts.config) req.config_id = opts.config
           if (opts.configFile) req.config = readJsonFile(opts.configFile)
+          if (opts.template) req.template_id = opts.template
           if (opts.budget !== undefined) req.budget_usd = opts.budget
 
-          const run = await new ApiClient().startAgentRun(req)
+          const api = new ApiClient()
+          const run = await api.startAgentRun(req)
+
+          if (opts.watch) {
+            if (!opts.json) {
+              console.log(`✓ started run ${run.id}`)
+              await printRunUrl(api, run.id)
+            }
+            await watchRunStreaming(api, run.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+            return
+          }
+
           if (opts.json) {
             printJson(run)
             return
           }
           console.log(`✓ started run ${run.id} (${run.status})`)
+          await printRunUrl(api, run.id)
           console.log(`  follow with: agent run get ${run.id} --watch`)
         })
       },
@@ -138,21 +162,24 @@ export function registerRun(program: Command): void {
   run
     .command('get <runId>')
     .description('Get a single agent run (GET /v1/agents/runs/{id})')
-    .option('-w, --watch', 'poll until the run reaches a terminal status')
+    .option('-w, --watch', 'stream the run live until it reaches a terminal status')
     .option('--json', 'output raw JSON')
     .action(async (runId: string, opts: { watch?: boolean; json?: boolean }) => {
       await runAction(async () => {
         const api = new ApiClient()
         if (opts.watch) {
-          await watchRunStreaming(api, runId, WATCH_POLL_INTERVAL_SECONDS, opts.json)
+          if (!opts.json) await printRunUrl(api, runId)
+          await watchRunStreaming(api, runId, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
           return
         }
-        const r = await api.getAgentRun(runId)
         if (opts.json) {
-          printJson(r)
+          printJson(await api.getAgentRun(runId))
           return
         }
+        // Fetch the run and the login (for the link) together — no added latency.
+        const [r, me] = await Promise.all([api.getAgentRun(runId), api.whoami()])
         printRunSummary(r)
+        console.log(`url:       ${runUrl(resolveAppBase(), me.customer_login, runId)}`)
       })
     })
 
@@ -305,6 +332,13 @@ function printRunSummary(r: AgentRun): void {
     console.log('metadata:')
     for (const k of keys) console.log(`  ${k}=${r.metadata[k]}`)
   }
+}
+
+// Print a clickable dashboard link for a run. The route is scoped by account
+// login, which isn't on the run object, so resolve it from /v1/me.
+async function printRunUrl(api: ApiClient, runId: string): Promise<void> {
+  const me = await api.whoami()
+  console.log(`  ${runUrl(resolveAppBase(), me.customer_login, runId)}`)
 }
 
 function readJsonFile(path: string): Record<string, unknown> {
