@@ -1,5 +1,43 @@
 import { describe, expect, it } from 'vitest'
-import { parseEnvFile } from '../src/commands/sandbox'
+import { collectInputs, parseAssignment, parseEnvFile } from '../src/commands/sandbox'
+
+describe('parseAssignment', () => {
+  it('parses KEY=VALUE', () => {
+    expect(parseAssignment('A=1')).toEqual({ name: 'A', value: '1' })
+  })
+
+  it('splits on the first = so values may contain =', () => {
+    expect(parseAssignment('URL=https://x.test/?a=b')).toEqual({
+      name: 'URL',
+      value: 'https://x.test/?a=b',
+    })
+  })
+
+  it('strips a leading `export ` and surrounding quotes', () => {
+    expect(parseAssignment('export TOKEN="abc"')).toEqual({ name: 'TOKEN', value: 'abc' })
+  })
+
+  it('returns null when there is no =', () => {
+    expect(parseAssignment('NOEQUALS')).toBeNull()
+  })
+})
+
+describe('collectInputs', () => {
+  it('collects multiple inline assignments', () => {
+    expect(collectInputs(['A=1', 'B=2'], undefined)).toEqual([
+      { name: 'A', value: '1' },
+      { name: 'B', value: '2' },
+    ])
+  })
+
+  it('throws on an inline arg with no =', () => {
+    expect(() => collectInputs(['A=1', 'BAD'], undefined)).toThrow(/invalid assignment 'BAD'/)
+  })
+
+  it('throws when given nothing', () => {
+    expect(() => collectInputs([], undefined)).toThrow(/provide KEY=VALUE/)
+  })
+})
 
 describe('parseEnvFile', () => {
   it('parses KEY=VALUE pairs', () => {
