@@ -1,5 +1,8 @@
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { watchRun } from '../src/commands/run'
+import { readConfigFile, watchRun } from '../src/commands/run'
 import type { ApiClient } from '../src/lib/api'
 import type { AgentRun, AgentRunStatus } from '../src/lib/types'
 
@@ -63,5 +66,48 @@ describe('watchRun', () => {
       await watchRun(api, 'run_1', 5, true)
       expect(get).toHaveBeenCalledTimes(1)
     }
+  })
+})
+
+describe('readConfigFile', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-cfg-'))
+  const write = (name: string, body: string): string => {
+    const path = join(dir, name)
+    writeFileSync(path, body)
+    return path
+  }
+
+  it('parses a .yaml file', () => {
+    const path = write('cfg.yaml', 'name: demo\nlimits:\n  run: 5\n')
+    expect(readConfigFile(path)).toEqual({ name: 'demo', limits: { run: 5 } })
+  })
+
+  it('parses a .yml file', () => {
+    const path = write('cfg.yml', 'name: demo\n')
+    expect(readConfigFile(path)).toEqual({ name: 'demo' })
+  })
+
+  it('parses a .json file', () => {
+    const path = write('cfg.json', '{"name":"demo","limits":{"run":5}}')
+    expect(readConfigFile(path)).toEqual({ name: 'demo', limits: { run: 5 } })
+  })
+
+  it('falls back to YAML for unknown extensions (JSON is valid YAML)', () => {
+    const path = write('cfg.txt', '{"name":"demo"}')
+    expect(readConfigFile(path)).toEqual({ name: 'demo' })
+  })
+
+  it('rejects a JSON file containing invalid JSON', () => {
+    const path = write('bad.json', 'name: demo')
+    expect(() => readConfigFile(path)).toThrow(/could not parse JSON config file/)
+  })
+
+  it('rejects a non-mapping top-level value', () => {
+    const path = write('list.yaml', '- a\n- b\n')
+    expect(() => readConfigFile(path)).toThrow(/could not parse YAML config file/)
+  })
+
+  it('errors clearly when the file is missing', () => {
+    expect(() => readConfigFile(join(dir, 'nope.yaml'))).toThrow(/could not read config file/)
   })
 })
