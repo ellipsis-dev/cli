@@ -1,5 +1,7 @@
 import type { Command } from 'commander'
 import { readFileSync } from 'node:fs'
+import { extname } from 'node:path'
+import { parse as parseYaml } from 'yaml'
 import { ApiClient } from '../lib/api'
 import { requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
 import { formatTs, printJson, printTable, runAction, usdFromMillicents } from '../lib/output'
@@ -38,7 +40,10 @@ export function registerRun(program: Command): void {
     .command('start')
     .description('Start a new agent run (POST /v1/agents/runs)')
     .option('-c, --config <id>', 'start from a saved agent config id')
-    .option('-f, --config-file <path>', 'start from an inline agent config (JSON file)')
+    .option(
+      '-f, --config-file <path>',
+      'start from an inline agent config (.yaml/.yml or .json file)',
+    )
     .option(
       '-t, --template <slug>',
       'start from a maintained run template (e.g. welcome-to-ellipsis)',
@@ -82,7 +87,7 @@ export function registerRun(program: Command): void {
             metadata: opts.metadata,
           }
           if (opts.config) req.config_id = opts.config
-          if (opts.configFile) req.config = readJsonFile(opts.configFile)
+          if (opts.configFile) req.config = readConfigFile(opts.configFile)
           if (opts.template) req.template_id = opts.template
           // Merged onto the chosen config and re-validated server-side; set
           // limits.run here to override this run's budget.
@@ -346,11 +351,26 @@ async function printRunUrl(api: ApiClient, runId: string): Promise<void> {
   console.log(`  ${runUrl(resolveAppBase(), me.customer_login, runId)}`)
 }
 
-function readJsonFile(path: string): Record<string, unknown> {
+// Parse an inline agent config from disk, choosing the parser by file
+// extension: .yaml/.yml as YAML, .json as JSON. (YAML is a JSON superset, so
+// unknown extensions fall back to YAML, which still accepts JSON input.)
+export function readConfigFile(path: string): Record<string, unknown> {
+  let text: string
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    text = readFileSync(path, 'utf8')
   } catch (err) {
     throw new Error(`could not read config file ${path}: ${(err as Error).message}`)
+  }
+  const ext = extname(path).toLowerCase()
+  try {
+    const parsed = ext === '.json' ? JSON.parse(text) : parseYaml(text)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('config must be a mapping of fields')
+    }
+    return parsed as Record<string, unknown>
+  } catch (err) {
+    const kind = ext === '.json' ? 'JSON' : 'YAML'
+    throw new Error(`could not parse ${kind} config file ${path}: ${(err as Error).message}`)
   }
 }
 
