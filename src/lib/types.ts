@@ -136,6 +136,10 @@ export interface StartAgentRunRequest {
   // server-side, e.g. "limits:\n  run: 5.0" to set just this run's budget. Only
   // meaningful with config_id/template_id.
   config_override_yaml?: string
+  // Per-run instructions appended to the initial user query at build time, after
+  // the config's shared `claude.system` system prompt. Distinct from the system
+  // prompt, which is identical for every run of a config.
+  prompt?: string
 }
 
 export interface ListAgentRunsResponse {

@@ -53,6 +53,10 @@ export function registerRun(program: Command): void {
       'partial agent config (YAML) merged onto the chosen config for this run, e.g. "limits:\\n  run: 5"',
     )
     .option(
+      '-p, --prompt <text>',
+      'per-run instructions appended to the initial user query for this run',
+    )
+    .option(
       '-m, --metadata <key=value>',
       'attach metadata (repeatable)',
       collectKeyValue,
@@ -67,6 +71,7 @@ export function registerRun(program: Command): void {
         configFile?: string
         template?: string
         configOverride?: string
+        prompt?: string
         metadata: Record<string, string>
         source: string
         watch?: boolean
@@ -92,6 +97,9 @@ export function registerRun(program: Command): void {
           // Merged onto the chosen config and re-validated server-side; set
           // limits.run here to override this run's budget.
           if (opts.configOverride) req.config_override_yaml = opts.configOverride
+          // Appended to the initial user query at build time; gives this run
+          // instructions on top of the config's shared system prompt.
+          if (opts.prompt) req.prompt = opts.prompt
 
           const api = new ApiClient()
           const run = await api.startAgentRun(req)
