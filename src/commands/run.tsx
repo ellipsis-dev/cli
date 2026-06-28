@@ -43,7 +43,11 @@ export function registerRun(program: Command): void {
       '-t, --template <slug>',
       'start from a maintained run template (e.g. welcome-to-ellipsis)',
     )
-    .option('-b, --budget <usd>', 'per-run budget override in USD', parseFloat)
+    .option(
+      '-b, --budget <usd>',
+      "per-run budget override in USD (sets the config's limits.run for this run)",
+      parseFloat,
+    )
     .option(
       '-m, --metadata <key=value>',
       'attach metadata (repeatable)',
@@ -81,7 +85,11 @@ export function registerRun(program: Command): void {
           if (opts.config) req.config_id = opts.config
           if (opts.configFile) req.config = readJsonFile(opts.configFile)
           if (opts.template) req.template_id = opts.template
-          if (opts.budget !== undefined) req.budget_usd = opts.budget
+          // A budget is expressed as a config override of limits.run (the server
+          // merges it onto the chosen config and re-validates).
+          if (opts.budget !== undefined) {
+            req.config_override_yaml = `limits:\n  run: ${opts.budget}`
+          }
 
           const api = new ApiClient()
           const run = await api.startAgentRun(req)

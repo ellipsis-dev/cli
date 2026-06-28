@@ -132,7 +132,10 @@ export interface StartAgentRunRequest {
   template_id?: string
   source?: AgentRunSource
   metadata?: Record<string, string>
-  budget_usd?: number
+  // A partial agent config (YAML) merged onto the chosen config and re-validated
+  // server-side, e.g. "limits:\n  run: 5.0" to set just this run's budget. Only
+  // meaningful with config_id/template_id.
+  config_override_yaml?: string
 }
 
 export interface ListAgentRunsResponse {
