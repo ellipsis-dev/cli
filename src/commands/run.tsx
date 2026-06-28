@@ -44,9 +44,8 @@ export function registerRun(program: Command): void {
       'start from a maintained run template (e.g. welcome-to-ellipsis)',
     )
     .option(
-      '-b, --budget <usd>',
-      "per-run budget override in USD (sets the config's limits.run for this run)",
-      parseFloat,
+      '-o, --config-override <yaml>',
+      'partial agent config (YAML) merged onto the chosen config for this run, e.g. "limits:\\n  run: 5"',
     )
     .option(
       '-m, --metadata <key=value>',
@@ -62,7 +61,7 @@ export function registerRun(program: Command): void {
         config?: string
         configFile?: string
         template?: string
-        budget?: number
+        configOverride?: string
         metadata: Record<string, string>
         source: string
         watch?: boolean
@@ -85,11 +84,9 @@ export function registerRun(program: Command): void {
           if (opts.config) req.config_id = opts.config
           if (opts.configFile) req.config = readJsonFile(opts.configFile)
           if (opts.template) req.template_id = opts.template
-          // A budget is expressed as a config override of limits.run (the server
-          // merges it onto the chosen config and re-validates).
-          if (opts.budget !== undefined) {
-            req.config_override_yaml = `limits:\n  run: ${opts.budget}`
-          }
+          // Merged onto the chosen config and re-validated server-side; set
+          // limits.run here to override this run's budget.
+          if (opts.configOverride) req.config_override_yaml = opts.configOverride
 
           const api = new ApiClient()
           const run = await api.startAgentRun(req)

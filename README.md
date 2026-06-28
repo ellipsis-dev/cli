@@ -24,6 +24,7 @@ agent me                          # show the current credential's identity
 agent run start --config <id>     # start a run from a saved config
 agent run start --config-file f.json   # ...or from an inline config
 agent run start --template welcome-to-ellipsis   # ...or from a maintained template
+agent run start --config <id> --config-override "limits:\n  run: 5"  # override config fields for this run
 agent run start --config <id> --watch  # start and immediately stream it
 agent run list --limit 20         # list recent runs (filter by --source, --days, …)
 agent run get <run-id>            # inspect one run (prints a dashboard link)
