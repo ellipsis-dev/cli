@@ -1,6 +1,6 @@
 import WebSocket from 'ws'
 import { resolveApiBase } from './config'
-import { DEFAULT_WS_BASE } from './constants'
+import { DEFAULT_WS_BASE, USER_AGENT } from './constants'
 
 // The frame protocol spoken over the run WebSocket (server -> client). One JSON
 // object per message. Mirrors run_stream.py in the backend.
@@ -74,7 +74,9 @@ const HEARTBEAT_TIMEOUT_MS = 45_000
 const DEFAULT_MAX_RECONNECTS = 5
 
 const defaultFactory: SocketFactory = (url, token) => {
-  const ws = new WebSocket(url, { headers: { authorization: `Bearer ${token}` } })
+  const ws = new WebSocket(url, {
+    headers: { authorization: `Bearer ${token}`, 'user-agent': USER_AGENT },
+  })
   return {
     onOpen: (cb) => ws.on('open', cb),
     onMessage: (cb) => ws.on('message', (raw: WebSocket.RawData) => cb(raw.toString())),

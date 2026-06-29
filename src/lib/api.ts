@@ -1,4 +1,5 @@
 import { resolveApiBase, resolveToken } from './config'
+import { USER_AGENT } from './constants'
 import type {
   AgentRun,
   AgentTemplate,
@@ -12,6 +13,7 @@ import type {
   ListAgentRunsQuery,
   ListAgentRunsResponse,
   ListAgentTemplatesResponse,
+  ReplayAgentRunRequest,
   SandboxVariableInput,
   SandboxVariableSummary,
   SavedAgentConfig,
@@ -59,6 +61,7 @@ export class ApiClient {
       method,
       headers: {
         'content-type': 'application/json',
+        'user-agent': USER_AGENT,
         ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -105,6 +108,14 @@ export class ApiClient {
 
   getAgentRun(runId: string): Promise<AgentRun> {
     return this.request('GET', `/v1/agents/runs/${encodeURIComponent(runId)}`)
+  }
+
+  replayAgentRun(runId: string, req: ReplayAgentRunRequest): Promise<AgentRun> {
+    return this.request(
+      'POST',
+      `/v1/agents/runs/${encodeURIComponent(runId)}/replay`,
+      req,
+    )
   }
 
   // ----------------------------- agent configs ----------------------------
