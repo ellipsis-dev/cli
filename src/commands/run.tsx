@@ -18,6 +18,7 @@ import type {
   AgentRun,
   AgentRunSource,
   AgentRunStatus,
+  ReplayAgentRunRequest,
   StartAgentRunRequest,
 } from '../lib/types'
 
@@ -50,7 +51,11 @@ export function registerRun(program: Command): void {
     )
     .option(
       '-o, --config-override <yaml>',
-      'partial agent config (YAML) merged onto the chosen config for this run, e.g. "limits:\\n  run: 5"',
+      'partial agent config (YAML/JSON) merged onto the chosen config for this run, e.g. "limits:\\n  run: 5"',
+    )
+    .option(
+      '--config-override-file <path>',
+      'read the partial config override from a file (.yaml/.yml or .json) instead of inline',
     )
     .option(
       '-p, --prompt <text>',
@@ -62,7 +67,6 @@ export function registerRun(program: Command): void {
       collectKeyValue,
       {} as Record<string, string>,
     )
-    .option('-s, --source <source>', 'run source', 'cli')
     .option('-w, --watch', 'stream the run live until it reaches a terminal status')
     .option('--json', 'output raw JSON')
     .action(
@@ -71,9 +75,9 @@ export function registerRun(program: Command): void {
         configFile?: string
         template?: string
         configOverride?: string
+        configOverrideFile?: string
         prompt?: string
         metadata: Record<string, string>
-        source: string
         watch?: boolean
         json?: boolean
       }) => {
@@ -88,7 +92,6 @@ export function registerRun(program: Command): void {
             throw new Error('provide only one of --config / --config-file / --template')
           }
           const req: StartAgentRunRequest = {
-            source: opts.source as AgentRunSource,
             metadata: opts.metadata,
           }
           if (opts.config) req.config_id = opts.config
@@ -96,7 +99,7 @@ export function registerRun(program: Command): void {
           if (opts.template) req.template_id = opts.template
           // Merged onto the chosen config and re-validated server-side; set
           // limits.run here to override this run's budget.
-          if (opts.configOverride) req.config_override_yaml = opts.configOverride
+          applyConfigOverride(req, opts)
           // Appended to the initial user query at build time; gives this run
           // instructions on top of the config's shared system prompt.
           if (opts.prompt) req.prompt = opts.prompt
@@ -200,6 +203,69 @@ export function registerRun(program: Command): void {
         console.log(`url:       ${runUrl(resolveAppBase(), me.customer_login, runId)}`)
       })
     })
+
+  run
+    .command('replay <runId>')
+    .description("Re-run an existing run's trigger input (POST /v1/agents/runs/{id}/replay)")
+    .option(
+      '-c, --config-id <id>',
+      "run against a different saved config instead of the original run's snapshot",
+    )
+    .option(
+      '-o, --config-override <yaml>',
+      'partial agent config (YAML/JSON) merged onto the config for this replay, e.g. "claude:\\n  model: claude-opus-4-8"',
+    )
+    .option(
+      '--config-override-file <path>',
+      'read the partial config override from a file (.yaml/.yml or .json) instead of inline',
+    )
+    .option(
+      '-p, --prompt <text>',
+      "per-run instructions; omit to inherit the original run's prompt, pass '' to clear it",
+    )
+    .option('-w, --watch', 'stream the run live until it reaches a terminal status')
+    .option('--json', 'output raw JSON')
+    .action(
+      async (
+        runId: string,
+        opts: {
+          configId?: string
+          configOverride?: string
+          configOverrideFile?: string
+          prompt?: string
+          watch?: boolean
+          json?: boolean
+        },
+      ) => {
+        await runAction(async () => {
+          const req: ReplayAgentRunRequest = {}
+          if (opts.configId) req.config_id = opts.configId
+          applyConfigOverride(req, opts)
+          // Distinguish "flag omitted" (inherit the original prompt) from
+          // `--prompt ''` (clear it): only set the field when the flag was passed.
+          if (opts.prompt !== undefined) req.prompt = opts.prompt
+
+          const api = new ApiClient()
+          const run = await api.replayAgentRun(runId, req)
+
+          if (opts.watch) {
+            if (!opts.json) {
+              console.log(`✓ started replay ${run.id} (from ${runId})`)
+              await printRunUrl(api, run.id)
+            }
+            await watchRunStreaming(api, run.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+            return
+          }
+          if (opts.json) {
+            printJson(run)
+            return
+          }
+          console.log(`✓ started replay ${run.id} (${run.status}, from ${runId})`)
+          await printRunUrl(api, run.id)
+          console.log(`  follow with: agent run get ${run.id} --watch`)
+        })
+      },
+    )
 
   run
     .command('stop <runId>')
@@ -359,26 +425,49 @@ async function printRunUrl(api: ApiClient, runId: string): Promise<void> {
   console.log(`  ${runUrl(resolveAppBase(), me.customer_login, runId)}`)
 }
 
+// Apply the mutually-exclusive config-override flags onto a run request.
+// `--config-override` is an inline YAML/JSON string passed straight through as
+// config_override_yaml; `--config-override-file` is read and parsed to a mapping
+// and sent as the structured config_override. Both merge identically server-side.
+export function applyConfigOverride(
+  req: { config_override?: Record<string, unknown>; config_override_yaml?: string },
+  opts: { configOverride?: string; configOverrideFile?: string },
+): void {
+  if (opts.configOverride && opts.configOverrideFile) {
+    throw new Error('provide only one of --config-override / --config-override-file')
+  }
+  if (opts.configOverride) req.config_override_yaml = opts.configOverride
+  if (opts.configOverrideFile) {
+    req.config_override = readMappingFile(opts.configOverrideFile, 'config override')
+  }
+}
+
 // Parse an inline agent config from disk, choosing the parser by file
 // extension: .yaml/.yml as YAML, .json as JSON. (YAML is a JSON superset, so
 // unknown extensions fall back to YAML, which still accepts JSON input.)
 export function readConfigFile(path: string): Record<string, unknown> {
+  return readMappingFile(path, 'config')
+}
+
+// Read a YAML/JSON file from disk and parse it to a mapping, choosing the parser
+// by extension. `label` (e.g. "config", "config override") tailors the error.
+function readMappingFile(path: string, label: string): Record<string, unknown> {
   let text: string
   try {
     text = readFileSync(path, 'utf8')
   } catch (err) {
-    throw new Error(`could not read config file ${path}: ${(err as Error).message}`)
+    throw new Error(`could not read ${label} file ${path}: ${(err as Error).message}`)
   }
   const ext = extname(path).toLowerCase()
   try {
     const parsed = ext === '.json' ? JSON.parse(text) : parseYaml(text)
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error('config must be a mapping of fields')
+      throw new Error(`${label} must be a mapping of fields`)
     }
     return parsed as Record<string, unknown>
   } catch (err) {
     const kind = ext === '.json' ? 'JSON' : 'YAML'
-    throw new Error(`could not parse ${kind} config file ${path}: ${(err as Error).message}`)
+    throw new Error(`could not parse ${kind} ${label} file ${path}: ${(err as Error).message}`)
   }
 }
 

@@ -130,15 +130,30 @@ export interface StartAgentRunRequest {
   config_id?: string
   config?: AgentConfig
   template_id?: string
-  source?: AgentRunSource
+  // No `source`: the server derives a run's provenance from the credential (a
+  // user token => `cli`), so it can't be spoofed by the request body.
   metadata?: Record<string, string>
-  // A partial agent config (YAML) merged onto the chosen config and re-validated
-  // server-side, e.g. "limits:\n  run: 5.0" to set just this run's budget. Only
-  // meaningful with config_id/template_id.
+  // A partial agent config merged onto the chosen config and re-validated
+  // server-side, e.g. raise just this run's budget. Supply it as a structured
+  // mapping (config_override) or a YAML/JSON string (config_override_yaml) — not
+  // both. Only meaningful with config_id/template_id.
+  config_override?: Record<string, unknown>
   config_override_yaml?: string
   // Per-run instructions appended to the initial user query at build time, after
   // the config's shared `claude.system` system prompt. Distinct from the system
   // prompt, which is identical for every run of a config.
+  prompt?: string
+}
+
+// Replay payload for POST /v1/agents/runs/{id}/replay. Re-runs an existing run's
+// trigger input. Reuses the original run's frozen config snapshot unless
+// config_id is given. The override fields behave exactly as on
+// StartAgentRunRequest (mapping or string, not both). `prompt` is omitted to
+// inherit the original run's prompt, set to "" to clear it.
+export interface ReplayAgentRunRequest {
+  config_id?: string
+  config_override?: Record<string, unknown>
+  config_override_yaml?: string
   prompt?: string
 }
 

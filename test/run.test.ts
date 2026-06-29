@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { readConfigFile, watchRun } from '../src/commands/run'
+import { applyConfigOverride, readConfigFile, watchRun } from '../src/commands/run'
 import type { ApiClient } from '../src/lib/api'
 import type { AgentRun, AgentRunStatus } from '../src/lib/types'
 
@@ -109,5 +109,53 @@ describe('readConfigFile', () => {
 
   it('errors clearly when the file is missing', () => {
     expect(() => readConfigFile(join(dir, 'nope.yaml'))).toThrow(/could not read config file/)
+  })
+})
+
+describe('applyConfigOverride', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-override-'))
+  const write = (name: string, body: string): string => {
+    const path = join(dir, name)
+    writeFileSync(path, body)
+    return path
+  }
+
+  it('passes an inline override through as the YAML/JSON string', () => {
+    const req: { config_override?: Record<string, unknown>; config_override_yaml?: string } = {}
+    applyConfigOverride(req, { configOverride: 'claude:\n  model: claude-opus-4-8' })
+    expect(req).toEqual({ config_override_yaml: 'claude:\n  model: claude-opus-4-8' })
+  })
+
+  it('reads and parses a file override into the structured mapping', () => {
+    const path = write('override.yaml', 'limits:\n  run: 5\n')
+    const req: { config_override?: Record<string, unknown>; config_override_yaml?: string } = {}
+    applyConfigOverride(req, { configOverrideFile: path })
+    expect(req).toEqual({ config_override: { limits: { run: 5 } } })
+  })
+
+  it('rejects passing both inline and file forms', () => {
+    const path = write('both.yaml', 'enabled: false\n')
+    expect(() =>
+      applyConfigOverride({}, { configOverride: 'enabled: false', configOverrideFile: path }),
+    ).toThrow(/only one of --config-override \/ --config-override-file/)
+  })
+
+  it('is a no-op when neither form is given', () => {
+    const req: { config_override?: Record<string, unknown>; config_override_yaml?: string } = {}
+    applyConfigOverride(req, {})
+    expect(req).toEqual({})
+  })
+
+  it('surfaces an override-specific error when the file is missing', () => {
+    expect(() => applyConfigOverride({}, { configOverrideFile: join(dir, 'nope.yaml') })).toThrow(
+      /could not read config override file/,
+    )
+  })
+
+  it('surfaces an override-specific error for a non-mapping file', () => {
+    const path = write('list.yaml', '- a\n- b\n')
+    expect(() => applyConfigOverride({}, { configOverrideFile: path })).toThrow(
+      /could not parse YAML config override file/,
+    )
   })
 })

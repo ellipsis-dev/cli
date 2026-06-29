@@ -139,6 +139,28 @@ describe('ApiClient sandbox variables', () => {
   })
 })
 
+describe('replayAgentRun', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('POSTs to the run-scoped replay path (encoded) with the body', async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ id: 'run_2' }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await new ApiClient('http://api.test', 't').replayAgentRun('run/1', {
+      config_override: { claude: { model: 'claude-opus-4-8' } },
+    })
+    expect(out.id).toBe('run_2')
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('http://api.test/v1/agents/runs/run%2F1/replay')
+    expect((init as RequestInit).method).toBe('POST')
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      config_override: { claude: { model: 'claude-opus-4-8' } },
+    })
+  })
+})
+
 describe('agent templates', () => {
   afterEach(() => vi.unstubAllGlobals())
 
