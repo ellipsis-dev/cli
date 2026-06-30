@@ -1,6 +1,6 @@
 {
   "name": "@ellipsis/cli",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Ellipsis agent CLI — drive the Ellipsis cloud from your terminal",
   "license": "MIT",
   "type": "module",

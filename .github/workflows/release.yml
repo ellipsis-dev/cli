@@ -33,9 +33,10 @@ jobs:
           fi
 
       - name: Stamp version into the binary
-        run: |
-          V="${{ steps.version.outputs.version }}"
-          sed -i "s/export const VERSION = '.*'/export const VERSION = '$V'/" src/lib/constants.ts
+        # package.json is the single source of truth — src/lib/constants.ts reads
+        # pkg.version, which tsup/bun inline at build time. This MUST match the tag
+        # because the Homebrew `test do` block asserts `agent --version` == version.
+        run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version --allow-same-version
 
       - name: Install dependencies
         run: bun install
