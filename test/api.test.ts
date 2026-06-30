@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiClient, ApiError, buildQuery, errorDetail } from '../src/lib/api'
+import { ApiClient, ApiError, buildQuery, parseErrorResponse } from '../src/lib/api'
 
 describe('buildQuery', () => {
   it('returns empty string for no/empty query', () => {
@@ -22,24 +22,55 @@ describe('buildQuery', () => {
   })
 })
 
-describe('errorDetail', () => {
+describe('parseErrorResponse', () => {
   it('extracts a string detail', async () => {
     const res = new Response(JSON.stringify({ detail: 'Invalid credentials' }), {
       status: 401,
     })
-    expect(await errorDetail(res)).toBe('Invalid credentials')
+    expect((await parseErrorResponse(res)).detail).toBe('Invalid credentials')
   })
 
   it('stringifies a structured detail (FastAPI 422)', async () => {
     const res = new Response(JSON.stringify({ detail: [{ loc: ['query', 'limit'] }] }), {
       status: 422,
     })
-    expect(await errorDetail(res)).toContain('limit')
+    expect((await parseErrorResponse(res)).detail).toContain('limit')
   })
 
   it('falls back to status text for non-JSON bodies', async () => {
     const res = new Response('<html>oops</html>', { status: 502, statusText: 'Bad Gateway' })
-    expect(await errorDetail(res)).toBe('Bad Gateway')
+    expect((await parseErrorResponse(res)).detail).toBe('Bad Gateway')
+  })
+
+  it('reads the request id from the X-Request-ID header', async () => {
+    const res = new Response(JSON.stringify({ detail: 'boom' }), {
+      status: 500,
+      headers: { 'x-request-id': 'request_abc123' },
+    })
+    expect(await parseErrorResponse(res)).toEqual({
+      detail: 'boom',
+      requestId: 'request_abc123',
+    })
+  })
+
+  it('falls back to the body request_id when the header is absent', async () => {
+    const res = new Response(
+      JSON.stringify({ detail: 'Internal Server Error', request_id: 'request_xyz' }),
+      { status: 500 },
+    )
+    expect((await parseErrorResponse(res)).requestId).toBe('request_xyz')
+  })
+
+  it('still parses a non-JSON body that carries the header', async () => {
+    const res = new Response('<html>oops</html>', {
+      status: 502,
+      statusText: 'Bad Gateway',
+      headers: { 'x-request-id': 'request_gw' },
+    })
+    expect(await parseErrorResponse(res)).toEqual({
+      detail: 'Bad Gateway',
+      requestId: 'request_gw',
+    })
   })
 })
 
@@ -78,6 +109,26 @@ describe('ApiClient.request', () => {
       status: 403,
     })
     await expect(api.whoami()).rejects.toThrow(/403 nope/)
+  })
+
+  it('surfaces the request id from the response on non-2xx', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ detail: 'Internal Server Error' }), {
+            status: 500,
+            headers: { 'x-request-id': 'request_deadbeef' },
+          }),
+      ),
+    )
+    const api = new ApiClient('http://api.test', 't')
+    await expect(api.whoami()).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 500,
+      requestId: 'request_deadbeef',
+    })
+    await expect(api.whoami()).rejects.toThrow(/request id: request_deadbeef/)
   })
 
   it('tolerates empty response bodies', async () => {

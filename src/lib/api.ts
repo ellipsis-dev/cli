@@ -33,8 +33,14 @@ export class ApiError extends Error {
     readonly method: string,
     readonly path: string,
     readonly detail: string,
+    // Per-request id the server stamps on every response; quote it to us so a
+    // failure maps to an exact log line. Absent only for pre-request failures.
+    readonly requestId?: string,
   ) {
-    super(`${method} ${path} failed: ${status} ${detail}`)
+    super(
+      `${method} ${path} failed: ${status} ${detail}` +
+        (requestId ? ` (request id: ${requestId})` : ''),
+    )
     this.name = 'ApiError'
   }
 }
@@ -67,7 +73,8 @@ export class ApiClient {
       body: body === undefined ? undefined : JSON.stringify(body),
     })
     if (!res.ok) {
-      throw new ApiError(res.status, method, path, await errorDetail(res))
+      const { detail, requestId } = await parseErrorResponse(res)
+      throw new ApiError(res.status, method, path, detail, requestId)
     }
     // Some endpoints (DELETEs, acks) return empty bodies; tolerate that.
     const text = await res.text()
@@ -211,15 +218,25 @@ export function buildQuery(query?: Record<string, unknown>): string {
   return qs ? `?${qs}` : ''
 }
 
-// Surface the server's `{"detail": ...}` message when present; fall back to the
-// status text. Keeps `agent` error output actionable instead of bare codes.
-export async function errorDetail(res: Response): Promise<string> {
+// Pull the server's `{"detail": ...}` message and request id off a non-2xx
+// response. The detail keeps `agent` error output actionable instead of bare
+// codes; the id comes from the `X-Request-ID` header (set on every API response)
+// and falls back to the `request_id` field the server's 500 handler includes in
+// its body, so an error carries something we can grep our logs for.
+export async function parseErrorResponse(
+  res: Response,
+): Promise<{ detail: string; requestId?: string }> {
+  const headerRequestId = res.headers.get('x-request-id') ?? undefined
   try {
-    const body = (await res.json()) as { detail?: unknown }
-    if (typeof body.detail === 'string') return body.detail
-    if (body.detail) return JSON.stringify(body.detail)
+    const body = (await res.json()) as { detail?: unknown; request_id?: unknown }
+    const requestId =
+      headerRequestId ??
+      (typeof body.request_id === 'string' ? body.request_id : undefined)
+    if (typeof body.detail === 'string') return { detail: body.detail, requestId }
+    if (body.detail) return { detail: JSON.stringify(body.detail), requestId }
+    return { detail: res.statusText, requestId }
   } catch {
     // not JSON
+    return { detail: res.statusText, requestId: headerRequestId }
   }
-  return res.statusText
 }
