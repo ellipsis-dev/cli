@@ -136,10 +136,23 @@ export type AgentConfig = Record<string, unknown>
 
 // --------------------------- request / response -------------------------
 
+// Laptop -> cloud handoff params: start a fresh session on the built-in
+// handoff config, chained to the handed-off session (parent_kind=handoff).
+// Mutually exclusive with config_id / config / template_id.
+export interface HandoffAgentSessionParams {
+  parent_session_id: string
+  repo: string
+  // The WIP commit pushed to refs/ellipsis/handoff/<short> — the sandbox
+  // checkout target.
+  sha: string
+  ref?: string
+}
+
 export interface StartAgentSessionRequest {
   config_id?: string
   config?: AgentConfig
   template_id?: string
+  handoff?: HandoffAgentSessionParams
   // No `source`: the server derives a session's provenance from the credential
   // (a user token => `cli`), so it can't be spoofed by the request body.
   metadata?: Record<string, string>

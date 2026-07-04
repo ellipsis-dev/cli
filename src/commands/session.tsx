@@ -25,9 +25,11 @@ import type {
 } from '../lib/types'
 import {
   branchFromCwd,
+  createWipCommit,
   dropSpooledSync,
   enrolledRepos,
   listSpooledSyncs,
+  pushHandoffRef,
   redactLine,
   repoFromCwd,
   spoolSync,
@@ -274,6 +276,56 @@ export function registerSession(program: Command): void {
             return
           }
           console.log(`✓ started replay ${session.id} (${session.status}, from ${sessionId})`)
+          await printSessionUrl(api, session.id)
+          console.log(`  follow with: agent session get ${session.id} --watch`)
+        })
+      },
+    )
+
+  // Laptop → cloud handoff (design: LOCAL_CLAUDE_CODE.md §7.2): snapshot the
+  // dirty working tree as a commit (without disturbing it), push it to
+  // refs/ellipsis/handoff/<short>, and start a fresh cloud session on the
+  // built-in handoff config with the instructions as its prompt — never a
+  // literal `claude --resume` of the local session.
+  session
+    .command('handoff <instructions>')
+    .description('Hand the current repo + a synced session off to a cloud agent')
+    .requiredOption(
+      '-p, --parent <sessionId>',
+      'the synced laptop session to chain from (see `agent session list --source laptop`)',
+    )
+    .option('--cwd <path>', 'repository to hand off (default: current directory)')
+    .option('--json', 'output raw JSON')
+    .action(
+      async (
+        instructions: string,
+        opts: { parent: string; cwd?: string; json?: boolean },
+      ) => {
+        await runAction(async () => {
+          const cwd = opts.cwd ?? process.cwd()
+          const repo = repoFromCwd(cwd)
+          if (!repo) {
+            throw new Error('not inside a git repository with an origin remote')
+          }
+          const { sha, dirty } = createWipCommit(cwd)
+          const ref = pushHandoffRef(cwd, sha)
+          if (!opts.json) {
+            console.log(
+              dirty
+                ? `✓ pushed working-tree snapshot ${sha.slice(0, 12)} to ${ref}`
+                : `✓ working tree clean — handing off HEAD ${sha.slice(0, 12)} via ${ref}`,
+            )
+          }
+          const api = new ApiClient()
+          const session = await api.startAgentSession({
+            handoff: { parent_session_id: opts.parent, repo, sha, ref },
+            prompt: instructions,
+          })
+          if (opts.json) {
+            printJson(session)
+            return
+          }
+          console.log(`✓ started handoff session ${session.id} (${session.status})`)
           await printSessionUrl(api, session.id)
           console.log(`  follow with: agent session get ${session.id} --watch`)
         })

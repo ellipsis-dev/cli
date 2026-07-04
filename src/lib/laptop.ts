@@ -265,3 +265,32 @@ export function dropSpooledSync(file: string): void {
     // Already gone (a concurrent hook flushed it) — fine.
   }
 }
+
+// ---------------------------------------------------------------------------
+// Handoff (design §7.2): snapshot the dirty working tree WITHOUT disturbing it
+// and push it somewhere the cloud sandbox can fetch.
+// ---------------------------------------------------------------------------
+
+function gitOrThrow(cwd: string, ...args: string[]): string {
+  return execFileSync('git', ['-C', cwd, ...args], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim()
+}
+
+// The WIP commit: `git stash create` builds a commit of the dirty tree without
+// touching the index or working copy; a clean tree hands off HEAD itself.
+export function createWipCommit(cwd: string): { sha: string; dirty: boolean } {
+  const stashSha = gitOrThrow(cwd, 'stash', 'create', 'ellipsis handoff')
+  if (stashSha) return { sha: stashSha, dirty: true }
+  return { sha: gitOrThrow(cwd, 'rev-parse', 'HEAD'), dirty: false }
+}
+
+// Push the WIP commit to a hidden ref (never a branch — it must not appear in
+// branch UIs). Requires push permission on the repo; the caller surfaces the
+// git error verbatim when it fails.
+export function pushHandoffRef(cwd: string, sha: string): string {
+  const ref = `refs/ellipsis/handoff/${sha.slice(0, 12)}`
+  gitOrThrow(cwd, 'push', 'origin', `${sha}:${ref}`)
+  return ref
+}
