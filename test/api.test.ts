@@ -91,11 +91,13 @@ describe('ApiClient.request', () => {
   })
 
   it('appends the query string', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ runs: [] }), { status: 200 }))
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ sessions: [] }), { status: 200 }),
+    )
     vi.stubGlobal('fetch', fetchMock)
 
-    await new ApiClient('http://api.test', 't').listAgentRuns({ limit: 5, source: ['cli'] })
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/agents/runs?limit=5&source=cli')
+    await new ApiClient('http://api.test', 't').listAgentSessions({ limit: 5, source: ['cli'] })
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/sessions?limit=5&source=cli')
   })
 
   it('throws ApiError carrying status + server detail on non-2xx', async () => {
@@ -190,25 +192,42 @@ describe('ApiClient sandbox variables', () => {
   })
 })
 
-describe('replayAgentRun', () => {
+describe('replayAgentSession', () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it('POSTs to the run-scoped replay path (encoded) with the body', async () => {
+  it('POSTs to the session-scoped replay path (encoded) with the body', async () => {
     const fetchMock = vi.fn(
-      async () => new Response(JSON.stringify({ id: 'run_2' }), { status: 200 }),
+      async () => new Response(JSON.stringify({ id: 'session_2' }), { status: 200 }),
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const out = await new ApiClient('http://api.test', 't').replayAgentRun('run/1', {
+    const out = await new ApiClient('http://api.test', 't').replayAgentSession('session/1', {
       config_override: { claude: { model: 'claude-opus-4-8' } },
     })
-    expect(out.id).toBe('run_2')
+    expect(out.id).toBe('session_2')
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/v1/agents/runs/run%2F1/replay')
+    expect(url).toBe('http://api.test/v1/sessions/session%2F1/replay')
     expect((init as RequestInit).method).toBe('POST')
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({
       config_override: { claude: { model: 'claude-opus-4-8' } },
     })
+  })
+})
+
+describe('stopAgentSession', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('POSTs to the session-scoped stop path (encoded) and returns the session', async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ id: 'session_1', status: 'stopped' }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await new ApiClient('http://api.test', 't').stopAgentSession('session/1')
+    expect(out).toEqual({ id: 'session_1', status: 'stopped' })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('http://api.test/v1/sessions/session%2F1/stop')
+    expect((init as RequestInit).method).toBe('POST')
   })
 })
 
@@ -226,7 +245,7 @@ describe('agent templates', () => {
 
     const out = await new ApiClient('http://api.test', 't').listAgentTemplates()
     expect(out.map((t) => t.slug)).toEqual(['a', 'b'])
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/agents/templates')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/templates')
   })
 
   it('fetches a single template by slug (encoded)', async () => {
@@ -238,9 +257,7 @@ describe('agent templates', () => {
 
     const out = await new ApiClient('http://api.test', 't').getAgentTemplate('ci-failure-triager')
     expect(out.yaml).toBe('x')
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      'http://api.test/v1/agents/templates/ci-failure-triager',
-    )
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/templates/ci-failure-triager')
   })
 })
 
@@ -267,7 +284,7 @@ describe('createAgentConfig', () => {
     })
     expect(out.pull_request_url).toBe('https://github.com/octocat/api/pull/7')
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/v1/agents/configs')
+    expect(url).toBe('http://api.test/v1/configs')
     expect((init as RequestInit).method).toBe('POST')
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({
       template_id: 'ci-failure-triager',

@@ -74,29 +74,30 @@ export interface UsageDashboard {
   by_model: ModelUsageBreakdown[]
 }
 
-// ------------------------------ agent runs ------------------------------
+// ----------------------------- agent sessions ----------------------------
 
-export type AgentRunSource = 'react' | 'manual' | 'api' | 'cli' | 'mention' | 'cron'
+export type AgentSessionSource = 'react' | 'manual' | 'api' | 'cli' | 'mention' | 'cron'
 
-export type AgentRunStatus =
+export type AgentSessionStatus =
   | 'scheduled'
   | 'creating_sandbox'
   | 'running'
+  | 'retrying'
   | 'completed'
   | 'error'
   | 'cancelled'
   | 'stopped'
 
 // Loosely typed: the CLI reads a handful of summary fields and otherwise treats
-// the run as opaque JSON. See AgentRun in the backend for the full shape.
-export interface AgentRun {
+// the session as opaque JSON. See AgentSession in the backend for the full shape.
+export interface AgentSession {
   id: string
   customer_id: string
   created_at: string
   updated_at: string
-  status: AgentRunStatus
+  status: AgentSessionStatus
   status_reason: string | null
-  source?: AgentRunSource
+  source?: AgentSessionSource
   agent_config_id: string | null
   cost_tokens: number
   cost_sandbox_cpu: number
@@ -113,61 +114,62 @@ export interface SavedAgentConfig {
   created_at: string
   updated_at: string
   deleted: boolean
-  last_job_run_id: string | null
+  last_agent_session_id: string | null
+  last_agent_session_created_at: string | null
   last_synced_commit_sha: string | null
   last_sync_error: string | null
   agent_config: Record<string, unknown>
   [key: string]: unknown
 }
 
-// Inline agent config payload accepted by POST /v1/agents/runs. Opaque to the
+// Inline agent config payload accepted by POST /v1/sessions. Opaque to the
 // CLI — passed straight through from a user-supplied JSON file.
 export type AgentConfig = Record<string, unknown>
 
 // --------------------------- request / response -------------------------
 
-export interface StartAgentRunRequest {
+export interface StartAgentSessionRequest {
   config_id?: string
   config?: AgentConfig
   template_id?: string
-  // No `source`: the server derives a run's provenance from the credential (a
-  // user token => `cli`), so it can't be spoofed by the request body.
+  // No `source`: the server derives a session's provenance from the credential
+  // (a user token => `cli`), so it can't be spoofed by the request body.
   metadata?: Record<string, string>
   // A partial agent config merged onto the chosen config and re-validated
-  // server-side, e.g. raise just this run's budget. Supply it as a structured
-  // mapping (config_override) or a YAML/JSON string (config_override_yaml) — not
-  // both. Only meaningful with config_id/template_id.
+  // server-side, e.g. raise just this session's budget. Supply it as a
+  // structured mapping (config_override) or a YAML/JSON string
+  // (config_override_yaml) — not both. Only meaningful with config_id/template_id.
   config_override?: Record<string, unknown>
   config_override_yaml?: string
-  // Per-run instructions appended to the initial user query at build time, after
-  // the config's shared `claude.system` system prompt. Distinct from the system
-  // prompt, which is identical for every run of a config.
+  // Per-session instructions appended to the initial user query at build time,
+  // after the config's shared `claude.system` system prompt. Distinct from the
+  // system prompt, which is identical for every session of a config.
   prompt?: string
 }
 
-// Replay payload for POST /v1/agents/runs/{id}/replay. Re-runs an existing run's
-// trigger input. Reuses the original run's frozen config snapshot unless
-// config_id is given. The override fields behave exactly as on
-// StartAgentRunRequest (mapping or string, not both). `prompt` is omitted to
-// inherit the original run's prompt, set to "" to clear it.
-export interface ReplayAgentRunRequest {
+// Replay payload for POST /v1/sessions/{id}/replay. Re-runs an existing
+// session's trigger input. Reuses the original session's frozen config
+// snapshot unless config_id is given. The override fields behave exactly as on
+// StartAgentSessionRequest (mapping or string, not both). `prompt` is omitted
+// to inherit the original session's prompt, set to "" to clear it.
+export interface ReplayAgentSessionRequest {
   config_id?: string
   config_override?: Record<string, unknown>
   config_override_yaml?: string
   prompt?: string
 }
 
-export interface ListAgentRunsResponse {
-  runs: AgentRun[]
+export interface ListAgentSessionsResponse {
+  sessions: AgentSession[]
 }
 
 export interface ListAgentConfigsResponse {
   configs: SavedAgentConfig[]
 }
 
-// Create-config payload for POST /v1/agents/configs. Exactly one of `config`
-// (inline) or `template_id` (a gallery template slug). `repository` is a bare
-// repo name in the caller's account — the owner is always the account.
+// Create-config payload for POST /v1/configs. Exactly one of `config` (inline)
+// or `template_id` (a gallery template slug). `repository` is a bare repo name
+// in the caller's account — the owner is always the account.
 export interface CreateAgentConfigRequest {
   config?: AgentConfig
   template_id?: string
@@ -186,7 +188,7 @@ export interface CreatedAgentConfig {
   pull_request_url: string
 }
 
-// A built-in starter template served by GET /v1/agents/templates. `yaml` is the
+// A built-in starter template served by GET /v1/templates. `yaml` is the
 // schema-valid agent config the CLI writes to disk; the rest is display copy.
 export interface AgentTemplate {
   slug: string
@@ -202,9 +204,9 @@ export interface ListAgentTemplatesResponse {
   templates: AgentTemplate[]
 }
 
-export interface ListAgentRunsQuery {
+export interface ListAgentSessionsQuery {
   config_id?: string
-  source?: AgentRunSource[]
+  source?: AgentSessionSource[]
   days?: number
   start?: string
   end?: string

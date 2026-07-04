@@ -6,40 +6,40 @@ import { ApiClient } from '../lib/api'
 import { requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
 import { formatTs, printJson, printTable, runAction, usdFromMillicents } from '../lib/output'
 import { collect, collectKeyValue, toInt } from '../lib/args'
-import { runUrl } from '../lib/urls'
+import { sessionUrl } from '../lib/urls'
 import {
   resolveWsBase,
-  streamRun,
+  streamSession,
   StreamUnavailableError,
   type StreamFrame,
   type StreamOutcome,
 } from '../lib/ws'
 import type {
-  AgentRun,
-  AgentRunSource,
-  AgentRunStatus,
-  ReplayAgentRunRequest,
-  StartAgentRunRequest,
+  AgentSession,
+  AgentSessionSource,
+  AgentSessionStatus,
+  ReplayAgentSessionRequest,
+  StartAgentSessionRequest,
 } from '../lib/types'
 
 // Poll cadence for the `--watch` REST fallback (used only when live WebSocket
 // streaming is unavailable). Not user-configurable — the fallback is rare.
 const FALLBACK_POLL_INTERVAL_SECONDS = 2
 
-// Statuses past which a run no longer changes — `--watch` stops here.
-const TERMINAL_STATUSES: ReadonlySet<AgentRunStatus> = new Set<AgentRunStatus>([
+// Statuses past which a session no longer changes — `--watch` stops here.
+const TERMINAL_STATUSES: ReadonlySet<AgentSessionStatus> = new Set<AgentSessionStatus>([
   'completed',
   'error',
   'cancelled',
   'stopped',
 ])
 
-export function registerRun(program: Command): void {
-  const run = program.command('run').description('Start and inspect agent runs')
+export function registerSession(program: Command): void {
+  const session = program.command('session').description('Start and inspect agent sessions')
 
-  run
+  session
     .command('start')
-    .description('Start a new agent run (POST /v1/agents/runs)')
+    .description('Start a new agent session (POST /v1/sessions)')
     .option('-c, --config <id>', 'start from a saved agent config id')
     .option(
       '-f, --config-file <path>',
@@ -47,11 +47,11 @@ export function registerRun(program: Command): void {
     )
     .option(
       '-t, --template <slug>',
-      'start from a maintained run template (e.g. welcome-to-ellipsis)',
+      'start from a maintained session template (e.g. welcome-to-ellipsis)',
     )
     .option(
       '-o, --config-override <yaml>',
-      'partial agent config (YAML/JSON) merged onto the chosen config for this run, e.g. "limits:\\n  run: 5"',
+      'partial agent config (YAML/JSON) merged onto the chosen config for this session, e.g. "limits:\\n  run: 5"',
     )
     .option(
       '--config-override-file <path>',
@@ -59,7 +59,7 @@ export function registerRun(program: Command): void {
     )
     .option(
       '-p, --prompt <text>',
-      'per-run instructions appended to the initial user query for this run',
+      'per-session instructions appended to the initial user query for this session',
     )
     .option(
       '-m, --metadata <key=value>',
@@ -67,7 +67,7 @@ export function registerRun(program: Command): void {
       collectKeyValue,
       {} as Record<string, string>,
     )
-    .option('-w, --watch', 'stream the run live until it reaches a terminal status')
+    .option('-w, --watch', 'stream the session live until it reaches a terminal status')
     .option('--json', 'output raw JSON')
     .action(
       async (opts: {
@@ -91,51 +91,51 @@ export function registerRun(program: Command): void {
           if (sources.length > 1) {
             throw new Error('provide only one of --config / --config-file / --template')
           }
-          const req: StartAgentRunRequest = {
+          const req: StartAgentSessionRequest = {
             metadata: opts.metadata,
           }
           if (opts.config) req.config_id = opts.config
           if (opts.configFile) req.config = readConfigFile(opts.configFile)
           if (opts.template) req.template_id = opts.template
           // Merged onto the chosen config and re-validated server-side; set
-          // limits.run here to override this run's budget.
+          // limits.run here to override this session's budget.
           applyConfigOverride(req, opts)
-          // Appended to the initial user query at build time; gives this run
-          // instructions on top of the config's shared system prompt.
+          // Appended to the initial user query at build time; gives this
+          // session instructions on top of the config's shared system prompt.
           if (opts.prompt) req.prompt = opts.prompt
 
           const api = new ApiClient()
-          const run = await api.startAgentRun(req)
+          const session = await api.startAgentSession(req)
 
           if (opts.watch) {
             if (!opts.json) {
-              console.log(`✓ started run ${run.id}`)
-              await printRunUrl(api, run.id)
+              console.log(`✓ started session ${session.id}`)
+              await printSessionUrl(api, session.id)
             }
-            await watchRunStreaming(api, run.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+            await watchSessionStreaming(api, session.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
             return
           }
 
           if (opts.json) {
-            printJson(run)
+            printJson(session)
             return
           }
-          console.log(`✓ started run ${run.id} (${run.status})`)
-          await printRunUrl(api, run.id)
-          console.log(`  follow with: agent run get ${run.id} --watch`)
+          console.log(`✓ started session ${session.id} (${session.status})`)
+          await printSessionUrl(api, session.id)
+          console.log(`  follow with: agent session get ${session.id} --watch`)
         })
       },
     )
 
-  run
+  session
     .command('list')
-    .description('List recent agent runs (GET /v1/agents/runs)')
+    .description('List recent agent sessions (GET /v1/sessions)')
     .option('-c, --config-id <id>', 'filter by config id')
     .option('-s, --source <source>', 'filter by source (repeatable)', collect, [] as string[])
     .option('-d, --days <n>', 'look back N days', toInt)
     .option('--start <iso>', 'start of the time window (ISO 8601)')
     .option('--end <iso>', 'end of the time window (ISO 8601)')
-    .option('-l, --limit <n>', 'max runs to return', toInt, 50)
+    .option('-l, --limit <n>', 'max sessions to return', toInt, 50)
     .option('--json', 'output raw JSON')
     .action(
       async (opts: {
@@ -148,31 +148,31 @@ export function registerRun(program: Command): void {
         json?: boolean
       }) => {
         await runAction(async () => {
-          const runs = await new ApiClient().listAgentRuns({
+          const sessions = await new ApiClient().listAgentSessions({
             config_id: opts.configId,
-            source: opts.source.length ? (opts.source as AgentRunSource[]) : undefined,
+            source: opts.source.length ? (opts.source as AgentSessionSource[]) : undefined,
             days: opts.days,
             start: opts.start,
             end: opts.end,
             limit: opts.limit,
           })
           if (opts.json) {
-            printJson(runs)
+            printJson(sessions)
             return
           }
-          if (runs.length === 0) {
-            console.log('No runs found.')
+          if (sessions.length === 0) {
+            console.log('No sessions found.')
             return
           }
           printTable(
             ['ID', 'STATUS', 'SOURCE', 'CREATED', 'COST'],
-            runs.map((r) => [
-              r.id,
-              r.status,
-              r.source ?? '—',
-              formatTs(r.created_at),
+            sessions.map((s) => [
+              s.id,
+              s.status,
+              s.source ?? '—',
+              formatTs(s.created_at),
               usdFromMillicents(
-                r.cost_tokens + r.cost_sandbox_cpu + r.cost_sandbox_memory + r.cost_fee,
+                s.cost_tokens + s.cost_sandbox_cpu + s.cost_sandbox_memory + s.cost_fee,
               ),
             ]),
           )
@@ -180,36 +180,36 @@ export function registerRun(program: Command): void {
       },
     )
 
-  run
-    .command('get <runId>')
-    .description('Get a single agent run (GET /v1/agents/runs/{id})')
-    .option('-w, --watch', 'stream the run live until it reaches a terminal status')
+  session
+    .command('get <sessionId>')
+    .description('Get a single agent session (GET /v1/sessions/{id})')
+    .option('-w, --watch', 'stream the session live until it reaches a terminal status')
     .option('--json', 'output raw JSON')
-    .action(async (runId: string, opts: { watch?: boolean; json?: boolean }) => {
+    .action(async (sessionId: string, opts: { watch?: boolean; json?: boolean }) => {
       await runAction(async () => {
         const api = new ApiClient()
         if (opts.watch) {
-          if (!opts.json) await printRunUrl(api, runId)
-          await watchRunStreaming(api, runId, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+          if (!opts.json) await printSessionUrl(api, sessionId)
+          await watchSessionStreaming(api, sessionId, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
           return
         }
         if (opts.json) {
-          printJson(await api.getAgentRun(runId))
+          printJson(await api.getAgentSession(sessionId))
           return
         }
-        // Fetch the run and the login (for the link) together — no added latency.
-        const [r, me] = await Promise.all([api.getAgentRun(runId), api.whoami()])
-        printRunSummary(r)
-        console.log(`url:       ${runUrl(resolveAppBase(), me.customer_login, runId)}`)
+        // Fetch the session and the login (for the link) together — no added latency.
+        const [s, me] = await Promise.all([api.getAgentSession(sessionId), api.whoami()])
+        printSessionSummary(s)
+        console.log(`url:       ${sessionUrl(resolveAppBase(), me.customer_login, sessionId)}`)
       })
     })
 
-  run
-    .command('replay <runId>')
-    .description("Re-run an existing run's trigger input (POST /v1/agents/runs/{id}/replay)")
+  session
+    .command('replay <sessionId>')
+    .description("Re-run an existing session's trigger input (POST /v1/sessions/{id}/replay)")
     .option(
       '-c, --config-id <id>',
-      "run against a different saved config instead of the original run's snapshot",
+      "run against a different saved config instead of the original session's snapshot",
     )
     .option(
       '-o, --config-override <yaml>',
@@ -221,13 +221,13 @@ export function registerRun(program: Command): void {
     )
     .option(
       '-p, --prompt <text>',
-      "per-run instructions; omit to inherit the original run's prompt, pass '' to clear it",
+      "per-session instructions; omit to inherit the original session's prompt, pass '' to clear it",
     )
-    .option('-w, --watch', 'stream the run live until it reaches a terminal status')
+    .option('-w, --watch', 'stream the session live until it reaches a terminal status')
     .option('--json', 'output raw JSON')
     .action(
       async (
-        runId: string,
+        sessionId: string,
         opts: {
           configId?: string
           configOverride?: string
@@ -238,7 +238,7 @@ export function registerRun(program: Command): void {
         },
       ) => {
         await runAction(async () => {
-          const req: ReplayAgentRunRequest = {}
+          const req: ReplayAgentSessionRequest = {}
           if (opts.configId) req.config_id = opts.configId
           applyConfigOverride(req, opts)
           // Distinguish "flag omitted" (inherit the original prompt) from
@@ -246,46 +246,51 @@ export function registerRun(program: Command): void {
           if (opts.prompt !== undefined) req.prompt = opts.prompt
 
           const api = new ApiClient()
-          const run = await api.replayAgentRun(runId, req)
+          const session = await api.replayAgentSession(sessionId, req)
 
           if (opts.watch) {
             if (!opts.json) {
-              console.log(`✓ started replay ${run.id} (from ${runId})`)
-              await printRunUrl(api, run.id)
+              console.log(`✓ started replay ${session.id} (from ${sessionId})`)
+              await printSessionUrl(api, session.id)
             }
-            await watchRunStreaming(api, run.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+            await watchSessionStreaming(api, session.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
             return
           }
           if (opts.json) {
-            printJson(run)
+            printJson(session)
             return
           }
-          console.log(`✓ started replay ${run.id} (${run.status}, from ${runId})`)
-          await printRunUrl(api, run.id)
-          console.log(`  follow with: agent run get ${run.id} --watch`)
+          console.log(`✓ started replay ${session.id} (${session.status}, from ${sessionId})`)
+          await printSessionUrl(api, session.id)
+          console.log(`  follow with: agent session get ${session.id} --watch`)
         })
       },
     )
 
-  run
-    .command('stop <runId>')
-    .description('Stop an in-flight run')
-    .action((runId: string) => {
-      // No /v1 endpoint exists yet (deferred). Fail loudly rather than pretend.
-      console.error(
-        `stopping runs is not available in the /v1 API yet (run ${runId}). ` +
-          'Stop it from the dashboard for now.',
-      )
-      process.exitCode = 1
+  session
+    .command('stop <sessionId>')
+    .description('Stop an in-flight session (POST /v1/sessions/{id}/stop)')
+    .option('--json', 'output raw JSON')
+    .action(async (sessionId: string, opts: { json?: boolean }) => {
+      await runAction(async () => {
+        const api = new ApiClient()
+        const s = await api.stopAgentSession(sessionId)
+        if (opts.json) {
+          printJson(s)
+          return
+        }
+        console.log(`✓ stopped session ${sessionId} (${s.status})`)
+      })
     })
 }
 
-// `--watch` entry point: stream the run's output live over WebSocket, and fall
-// back to REST status polling if streaming is unavailable (e.g. a backend
-// without the endpoint). Identical UX either way — the same flag covers both.
-export async function watchRunStreaming(
+// `--watch` entry point: stream the session's output live over WebSocket, and
+// fall back to REST status polling if streaming is unavailable (e.g. a
+// backend without the endpoint). Identical UX either way — the same flag
+// covers both.
+export async function watchSessionStreaming(
   api: ApiClient,
-  runId: string,
+  sessionId: string,
   intervalSeconds: number,
   json?: boolean,
 ): Promise<void> {
@@ -309,7 +314,7 @@ export async function watchRunStreaming(
 
   let outcome: StreamOutcome
   try {
-    outcome = await streamRun({ token, runId, wsBase, onFrame })
+    outcome = await streamSession({ token, sessionId, wsBase, onFrame })
   } catch (err) {
     if (err instanceof StreamUnavailableError) {
       if (!json) {
@@ -317,7 +322,7 @@ export async function watchRunStreaming(
           `live stream unavailable (${err.message}); falling back to status polling`,
         )
       }
-      await watchRun(api, runId, intervalSeconds, json)
+      await watchSession(api, sessionId, intervalSeconds, json)
       return
     }
     throw err // StreamAuthError and anything unexpected: surfaced by runAction.
@@ -331,7 +336,7 @@ export async function watchRunStreaming(
   // Terminal `done` frame. Output already streamed live; print a one-line cap.
   if (!json) {
     const mark = outcome.status === 'completed' ? '✓' : '✗'
-    console.log(`\n${mark} run ${runId} ${outcome.status}`)
+    console.log(`\n${mark} session ${sessionId} ${outcome.status}`)
   }
   if (exitCodeForStatus(outcome.status) !== 0) process.exitCode = 1
 }
@@ -365,32 +370,32 @@ export function exitCodeForStatus(status: string): number {
   return status === 'completed' ? 0 : 1
 }
 
-// Poll a run until it reaches a terminal status, printing each status
+// Poll a session until it reaches a terminal status, printing each status
 // transition. This is the status-level fallback used when live streaming isn't
-// available: the /v1 REST API exposes run state, not the step-by-step stream.
-export async function watchRun(
+// available: the /v1 REST API exposes session state, not the step-by-step stream.
+export async function watchSession(
   api: ApiClient,
-  runId: string,
+  sessionId: string,
   intervalSeconds: number,
   json?: boolean,
 ): Promise<void> {
   const intervalMs = Math.max(1, intervalSeconds) * 1000
-  let last: AgentRunStatus | undefined
+  let last: AgentSessionStatus | undefined
   for (;;) {
-    const r = await api.getAgentRun(runId)
-    if (r.status !== last) {
+    const s = await api.getAgentSession(sessionId)
+    if (s.status !== last) {
       if (!json) {
-        const reason = r.status_reason ? ` — ${r.status_reason}` : ''
-        console.log(`${nowClock()}  ${r.status}${reason}`)
+        const reason = s.status_reason ? ` — ${s.status_reason}` : ''
+        console.log(`${nowClock()}  ${s.status}${reason}`)
       }
-      last = r.status
+      last = s.status
     }
-    if (TERMINAL_STATUSES.has(r.status)) {
+    if (TERMINAL_STATUSES.has(s.status)) {
       if (json) {
-        printJson(r)
+        printJson(s)
       } else {
         console.log('')
-        printRunSummary(r)
+        printSessionSummary(s)
       }
       return
     }
@@ -398,34 +403,34 @@ export async function watchRun(
   }
 }
 
-function printRunSummary(r: AgentRun): void {
-  console.log(`id:        ${r.id}`)
-  console.log(`status:    ${r.status}${r.status_reason ? ` (${r.status_reason})` : ''}`)
-  if (r.source) console.log(`source:    ${r.source}`)
-  if (r.agent_config_id) console.log(`config:    ${r.agent_config_id}`)
-  console.log(`created:   ${r.created_at}`)
-  console.log(`updated:   ${r.updated_at}`)
-  console.log(`tokens:    ${r.tokens_total.toLocaleString()}`)
+function printSessionSummary(s: AgentSession): void {
+  console.log(`id:        ${s.id}`)
+  console.log(`status:    ${s.status}${s.status_reason ? ` (${s.status_reason})` : ''}`)
+  if (s.source) console.log(`source:    ${s.source}`)
+  if (s.agent_config_id) console.log(`config:    ${s.agent_config_id}`)
+  console.log(`created:   ${s.created_at}`)
+  console.log(`updated:   ${s.updated_at}`)
+  console.log(`tokens:    ${s.tokens_total.toLocaleString()}`)
   console.log(
     `cost:      ${usdFromMillicents(
-      r.cost_tokens + r.cost_sandbox_cpu + r.cost_sandbox_memory + r.cost_fee,
+      s.cost_tokens + s.cost_sandbox_cpu + s.cost_sandbox_memory + s.cost_fee,
     )}`,
   )
-  const keys = Object.keys(r.metadata ?? {})
+  const keys = Object.keys(s.metadata ?? {})
   if (keys.length) {
     console.log('metadata:')
-    for (const k of keys) console.log(`  ${k}=${r.metadata[k]}`)
+    for (const k of keys) console.log(`  ${k}=${s.metadata[k]}`)
   }
 }
 
-// Print a clickable dashboard link for a run. The route is scoped by account
-// login, which isn't on the run object, so resolve it from /v1/me.
-async function printRunUrl(api: ApiClient, runId: string): Promise<void> {
+// Print a clickable dashboard link for a session. The route is scoped by
+// account login, which isn't on the session object, so resolve it from /v1/me.
+async function printSessionUrl(api: ApiClient, sessionId: string): Promise<void> {
   const me = await api.whoami()
-  console.log(`  ${runUrl(resolveAppBase(), me.customer_login, runId)}`)
+  console.log(`  ${sessionUrl(resolveAppBase(), me.customer_login, sessionId)}`)
 }
 
-// Apply the mutually-exclusive config-override flags onto a run request.
+// Apply the mutually-exclusive config-override flags onto a session request.
 // `--config-override` is an inline YAML/JSON string passed straight through as
 // config_override_yaml; `--config-override-file` is read and parsed to a mapping
 // and sent as the structured config_override. Both merge identically server-side.
