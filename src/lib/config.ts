@@ -17,6 +17,10 @@ function configFile(): string {
 export interface CliConfig {
   token?: string
   apiBase?: string
+  // Repositories ("owner/name") enrolled for laptop transcript sync — the
+  // per-repo opt-in consent gate for `agent session sync`. A sync whose cwd
+  // resolves to a repo outside this set is a silent no-op.
+  enrolledRepos?: string[]
 }
 
 export function loadConfig(): CliConfig {

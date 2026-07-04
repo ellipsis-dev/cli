@@ -76,7 +76,15 @@ export interface UsageDashboard {
 
 // ----------------------------- agent sessions ----------------------------
 
-export type AgentSessionSource = 'react' | 'manual' | 'api' | 'cli' | 'mention' | 'cron'
+export type AgentSessionSource =
+  | 'react'
+  | 'manual'
+  | 'api'
+  | 'cli'
+  | 'mention'
+  | 'cron'
+  // A Claude Code session ingested from a developer laptop via `agent session sync`.
+  | 'laptop'
 
 export type AgentSessionStatus =
   | 'scheduled'
@@ -157,6 +165,30 @@ export interface ReplayAgentSessionRequest {
   config_override?: Record<string, unknown>
   config_override_yaml?: string
   prompt?: string
+}
+
+// One hook-driven transcript sync from this laptop (POST /v1/sessions/sync).
+// The transcript is redacted client-side, gzipped, then base64-encoded.
+export interface SyncAgentSessionRequest {
+  cc_session_id: string
+  transcript_gzip_b64: string
+  // Which Claude Code hook fired the sync: Stop (mid-session, once per turn)
+  // or SessionEnd (the process terminated).
+  reason: 'stop' | 'session_end'
+  // The enrolled repository ("owner/name", from the cwd's git remote), the
+  // cwd, and the checked-out branch — laptop-side context for the session row.
+  repo?: string
+  cwd?: string
+  git_branch?: string
+}
+
+export interface SyncAgentSessionResponse {
+  session_id: string
+  process_id: string
+  event_count: number
+  // False when the server already stored a snapshot at least this long
+  // (longest-snapshot-wins) — acknowledged, nothing written. Still success.
+  accepted: boolean
 }
 
 export interface ListAgentSessionsResponse {
