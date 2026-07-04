@@ -38,10 +38,27 @@ agent sandbox variable list       # list sandbox env variable names (values are 
 agent sandbox variable set A=1 B=2     # create/update variables (or --from-file .env/.json)
 agent sandbox variable rm K       # delete a variable
 
+agent hooks install               # install Claude Code Stop/SessionEnd hooks + enroll this repo
+agent hooks enroll [owner/name]   # opt a repo in to transcript sync (per-repo consent)
+agent hooks unenroll [owner/name] # opt a repo out
+agent hooks status                # show installed hooks + enrolled repos
+agent session sync                # sync the local Claude Code transcript (hooks run this for you)
+
 agent budget                      # current budget summary
 agent usage                       # usage dashboard for the period
 agent ping                        # check authenticated /v1 connectivity
 ```
+
+## Local Claude Code session sync
+
+`agent hooks install` writes `Stop` + `SessionEnd` hooks into
+`~/.claude/settings.json`; each fires `agent session sync --hook`, which
+uploads the session's transcript to your Ellipsis account so local sessions
+appear alongside cloud ones. Consent is per-repo: the hook silently does
+nothing outside repos you've enrolled with `agent hooks enroll`. Transcripts
+are redacted client-side (token/key patterns never leave the machine
+unredacted), gzipped, and synced after every turn; offline syncs are spooled
+under `~/.config/ellipsis/spool/` and retried automatically.
 
 Most commands accept `--json` to print the raw API response. The CLI talks to
 the public `/v1` REST API; point it elsewhere with `ELLIPSIS_API_BASE_URL`

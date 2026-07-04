@@ -257,3 +257,26 @@ export interface CliAuthPoll {
   status: CliAuthPollStatus
   access_token?: string
 }
+
+// ---------------------------- laptop sync --------------------------------
+
+// POST /v1/sessions/sync — mirrors SyncLaptopSessionRequest/-Response in
+// ellipsis/src/public_api/services/laptop_sync_service.py.
+export type SyncHookEvent = 'stop' | 'session_end' | 'manual'
+
+export interface SyncSessionRequest {
+  cc_session_id: string
+  // The full on-disk JSONL transcript, redacted client-side, gzipped, base64.
+  transcript_gzip_b64: string
+  repo?: string
+  cwd?: string
+  hook_event?: SyncHookEvent
+  reason?: string
+}
+
+export interface SyncSessionResponse {
+  agent_session_id: string
+  agent_process_id: string
+  event_count: number
+  stored: boolean
+}

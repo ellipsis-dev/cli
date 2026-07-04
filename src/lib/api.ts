@@ -18,6 +18,8 @@ import type {
   SandboxVariableSummary,
   SavedAgentConfig,
   StartAgentRunRequest,
+  SyncSessionRequest,
+  SyncSessionResponse,
   UsageDashboard,
   WhoAmI,
 } from './types'
@@ -123,6 +125,14 @@ export class ApiClient {
       `/v1/agents/runs/${encodeURIComponent(runId)}/replay`,
       req,
     )
+  }
+
+  // ------------------------------ laptop sync -----------------------------
+
+  // Sync a local Claude Code session transcript (fired by the CC Stop /
+  // SessionEnd hooks via `agent session sync`). User tokens only server-side.
+  syncSession(req: SyncSessionRequest): Promise<SyncSessionResponse> {
+    return this.request('POST', '/v1/sessions/sync', req)
   }
 
   // ----------------------------- agent configs ----------------------------

@@ -17,6 +17,10 @@ function configFile(): string {
 export interface CliConfig {
   token?: string
   apiBase?: string
+  // Repos ("owner/name") opted in to laptop transcript sync. Consent is
+  // per-repo, developer-local (see lib/enrollment.ts); `agent session sync`
+  // silently no-ops anywhere else.
+  enrolledRepos?: string[]
 }
 
 export function loadConfig(): CliConfig {

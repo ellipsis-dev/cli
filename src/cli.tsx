@@ -2,6 +2,8 @@ import { Command } from 'commander'
 import { registerLogin } from './commands/login'
 import { registerMe } from './commands/me'
 import { registerRun } from './commands/run'
+import { registerSession } from './commands/session'
+import { registerHooks } from './commands/hooks'
 import { registerConfig } from './commands/config'
 import { registerSandbox } from './commands/sandbox'
 import { registerTemplate } from './commands/template'
@@ -19,6 +21,8 @@ program
 registerLogin(program)
 registerMe(program)
 registerRun(program)
+registerSession(program)
+registerHooks(program)
 registerConfig(program)
 registerSandbox(program)
 registerTemplate(program)
