@@ -9,6 +9,7 @@ import type {
   CreateAgentConfigRequest,
   CreatedAgentConfig,
   GetSandboxVariablesResponse,
+  HandoffSessionRequest,
   ListAgentConfigsResponse,
   ListAgentRunsQuery,
   ListAgentRunsResponse,
@@ -133,6 +134,12 @@ export class ApiClient {
   // SessionEnd hooks via `agent session sync`). User tokens only server-side.
   syncSession(req: SyncSessionRequest): Promise<SyncSessionResponse> {
     return this.request('POST', '/v1/sessions/sync', req)
+  }
+
+  // Hand a synced laptop session off to a cloud agent session (the WIP commit
+  // must already be pushed; see `agent session handoff`).
+  startHandoffSession(req: HandoffSessionRequest): Promise<AgentRun> {
+    return this.request('POST', '/v1/sessions/handoff', req)
   }
 
   // ----------------------------- agent configs ----------------------------

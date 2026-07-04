@@ -43,6 +43,7 @@ agent hooks enroll [owner/name]   # opt a repo in to transcript sync (per-repo c
 agent hooks unenroll [owner/name] # opt a repo out
 agent hooks status                # show installed hooks + enrolled repos
 agent session sync                # sync the local Claude Code transcript (hooks run this for you)
+agent session handoff "finish the tests and open a PR"   # hand this session off to a cloud agent
 
 agent budget                      # current budget summary
 agent usage                       # usage dashboard for the period
@@ -59,6 +60,12 @@ nothing outside repos you've enrolled with `agent hooks enroll`. Transcripts
 are redacted client-side (token/key patterns never leave the machine
 unredacted), gzipped, and synced after every turn; offline syncs are spooled
 under `~/.config/ellipsis/spool/` and retried automatically.
+
+`agent session handoff "<instructions>"` closes the loop: it captures your
+dirty working tree as a WIP commit (without touching it), pushes it to
+`refs/ellipsis/handoff/<id>`, syncs the transcript one last time, and starts a
+cloud agent session that checks out your WIP commit and continues from your
+instructions — chained to the local session so the history stays connected.
 
 Most commands accept `--json` to print the raw API response. The CLI talks to
 the public `/v1` REST API; point it elsewhere with `ELLIPSIS_API_BASE_URL`

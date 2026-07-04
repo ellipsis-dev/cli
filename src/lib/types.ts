@@ -280,3 +280,13 @@ export interface SyncSessionResponse {
   event_count: number
   stored: boolean
 }
+
+// POST /v1/sessions/handoff — mirrors HandoffSessionRequest in
+// ellipsis/src/public_api/services/handoff_service.py. The response is the
+// created agent session (same shape the run endpoints return).
+export interface HandoffSessionRequest {
+  cc_session_id: string
+  repo: string
+  wip_sha: string
+  prompt?: string
+}

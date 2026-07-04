@@ -12,11 +12,13 @@
 // failures spool to disk and are retried before the next successful sync.
 
 import { basename, join } from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { gzipSync } from 'node:zlib'
 import type { Command } from 'commander'
 import { ApiClient, ApiError } from '../lib/api'
+import { resolveAppBase } from '../lib/config'
 import { isEnrolled, repoForCwd } from '../lib/enrollment'
 import { redactTranscript } from '../lib/redact'
 import { flushSpool, spoolSync } from '../lib/spool'
@@ -154,6 +156,100 @@ async function doSync(opts: SyncOpts): Promise<void> {
   }
 }
 
+function git(cwd: string, args: string[]): string {
+  return execFileSync('git', ['-C', cwd, ...args], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim()
+}
+
+// Build a sync payload for an explicit (non-hook) transcript upload. Used by
+// handoff, which is itself the consent action — no enrollment gate here.
+function buildSyncPayload(
+  cwd: string,
+  repo: string,
+  transcriptPath: string,
+  event: SyncHookEvent,
+): { ccSessionId: string; payload: SyncSessionRequest } {
+  const ccSessionId = basename(transcriptPath).replace(/\.jsonl$/, '')
+  const text = redactTranscript(readFileSync(transcriptPath, 'utf8'))
+  return {
+    ccSessionId,
+    payload: {
+      cc_session_id: ccSessionId,
+      transcript_gzip_b64: gzipSync(Buffer.from(text, 'utf8')).toString('base64'),
+      repo,
+      cwd,
+      hook_event: event,
+    },
+  }
+}
+
+interface HandoffOpts {
+  transcript?: string
+  json?: boolean
+}
+
+// Laptop → cloud handoff (LOCAL_CLAUDE_CODE.md §7.2): (1) build a commit of
+// the dirty working tree without disturbing it and push it to
+// refs/ellipsis/handoff/<id>; (2) final transcript sync; (3) POST
+// /v1/sessions/handoff — the server starts a cloud session on the built-in
+// handoff config with the WIP sha as checkout target, chained to the laptop
+// session via parent_kind=handoff.
+async function doHandoff(instructions: string, opts: HandoffOpts): Promise<void> {
+  const cwd = process.cwd()
+  const repo = repoForCwd(cwd)
+  if (!repo) {
+    throw new Error(
+      'not inside a git repo with a recognizable GitHub remote — handoff needs a repo to push the WIP commit to.',
+    )
+  }
+  const transcriptPath = opts.transcript ?? latestTranscriptForCwd(cwd)
+  if (!transcriptPath || !existsSync(transcriptPath)) {
+    throw new Error(
+      'no local Claude Code transcript found for this directory (pass --transcript <path>).',
+    )
+  }
+
+  // (1) WIP commit: `git stash create` captures tracked changes as a commit
+  // without touching the working tree; a clean tree hands off HEAD itself.
+  const stashSha = git(cwd, ['stash', 'create', 'ellipsis handoff'])
+  const wipSha = stashSha || git(cwd, ['rev-parse', 'HEAD'])
+  const { ccSessionId, payload } = buildSyncPayload(
+    cwd,
+    repo,
+    transcriptPath,
+    'manual',
+  )
+  const ref = `refs/ellipsis/handoff/${ccSessionId.slice(0, 8)}`
+  git(cwd, ['push', 'origin', `${wipSha}:${ref}`])
+  console.log(`pushed WIP commit ${wipSha.slice(0, 12)} → ${ref}`)
+
+  // (2) final transcript sync — running handoff IS the consent action for
+  // this session, so no enrollment gate.
+  const api = new ApiClient()
+  await api.syncSession(payload)
+
+  // (3) start the cloud session.
+  const session = await api.startHandoffSession({
+    cc_session_id: ccSessionId,
+    repo,
+    wip_sha: wipSha,
+    prompt: instructions,
+  })
+  if (opts.json) {
+    printJson(session)
+    return
+  }
+  const me = await api.whoami().catch(() => undefined)
+  console.log(`started handoff session ${session.id}`)
+  if (me) {
+    console.log(
+      `${resolveAppBase()}/${encodeURIComponent(me.customer_login)}/agents/sessions/${encodeURIComponent(session.id)}`,
+    )
+  }
+}
+
 export function registerSession(program: Command): void {
   const session = program
     .command('session')
@@ -177,5 +273,16 @@ export function registerSession(program: Command): void {
         return
       }
       await runAction(() => doSync(opts))
+    })
+
+  session
+    .command('handoff <instructions>')
+    .description(
+      'Hand this Claude Code session off to a cloud agent: push a WIP commit, sync the transcript, start a session with your instructions',
+    )
+    .option('--transcript <path>', 'explicit transcript .jsonl path')
+    .option('--json', 'output the created session as raw JSON')
+    .action(async (instructions: string, opts: HandoffOpts) => {
+      await runAction(() => doHandoff(instructions, opts))
     })
 }
