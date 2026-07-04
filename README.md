@@ -1,12 +1,12 @@
 # Ellipsis CLI
 
 Drive the [Ellipsis](https://ellipsis.dev) cloud from your terminal: start agent
-runs, stream their output live, manage configurations, and open a run in the
-browser IDE.
+sessions, stream their output live, manage configurations, and open a session
+in the browser IDE.
 
 This is a thin client. The agent runs in the Ellipsis cloud; the CLI
 authenticates, opens a WebSocket, and streams results. It is open source
-(MIT) — the proprietary engine stays server-side.
+(MIT), and the proprietary engine stays server-side.
 
 ## Install
 
@@ -21,14 +21,15 @@ agent login                       # device-code auth (use --no-browser for SSH)
 agent logout                      # remove stored credentials
 agent me                          # show the current credential's identity
 
-agent run start --config <id>     # start a run from a saved config
-agent run start --config-file f.json   # ...or from an inline config
-agent run start --template welcome-to-ellipsis   # ...or from a maintained template
-agent run start --config <id> --config-override "limits:\n  run: 5"  # override config fields for this run
-agent run start --config <id> --watch  # start and immediately stream it
-agent run list --limit 20         # list recent runs (filter by --source, --days, …)
-agent run get <run-id>            # inspect one run (prints a dashboard link)
-agent run get <run-id> --watch    # follow a run until it finishes
+agent session start --config <id>     # start a session from a saved config
+agent session start --config-file f.json   # ...or from an inline config
+agent session start --template welcome-to-ellipsis   # ...or from a maintained template
+agent session start --config <id> --config-override "limits:\n  run: 5"  # override config fields for this session
+agent session start --config <id> --watch  # start and immediately stream it
+agent session list --limit 20         # list recent sessions (filter by --source, --days, …)
+agent session get <session-id>        # inspect one session (prints a dashboard link)
+agent session get <session-id> --watch  # follow a session until it finishes
+agent session stop <session-id>       # stop an in-flight session
 
 agent config list                 # list saved agent configs
 agent config get <config-id>      # show one config as YAML (-o json for JSON)
@@ -47,10 +48,10 @@ Most commands accept `--json` to print the raw API response. The CLI talks to
 the public `/v1` REST API; point it elsewhere with `ELLIPSIS_API_BASE_URL`
 (or the legacy `ELLIPSIS_API_BASE`).
 
-`--watch` (on both `run start` and `run get`) streams the run's output live over
-WebSocket until it reaches a terminal status, falling back to periodic status
-polling if the live stream is unavailable. Either way it first prints a
-clickable dashboard link. The stream protocol is specified in
+`--watch` (on both `session start` and `session get`) streams the session's
+output live over WebSocket until it reaches a terminal status, falling back to
+periodic status polling if the live stream is unavailable. Either way it first
+prints a clickable dashboard link. The stream protocol is specified in
 [`docs/RUN_STREAMING_SPEC.md`](docs/RUN_STREAMING_SPEC.md).
 
 ### Auth
@@ -58,7 +59,7 @@ clickable dashboard link. The stream protocol is specified in
 `agent login` uses the device-code flow: it requests a code pair, prints a
 verification URL (and opens it unless `--no-browser`), and polls until you
 approve the request in the dashboard. The issued user token is stored under
-`~/.config/ellipsis/config.json` (mode 0600) and attributes runs to you.
+`~/.config/ellipsis/config.json` (mode 0600) and attributes sessions to you.
 
 **Credentials resolve in this order (highest wins):** explicit argument →
 environment (`ELLIPSIS_API_TOKEN` / `ELLIPSIS_API_BASE_URL`, with the legacy
@@ -138,7 +139,7 @@ scoped to that one repo only — no account-wide PAT involved.
 
 ### Status
 
-The full `/v1` REST surface (auth, runs, configs, budget/usage) is wired against
-the live API. Still pending: the server-side WebSocket frame protocol behind
-`run view`, a `run stop` endpoint, and replacing the hand-rolled request/response
-types with the generated `@ellipsis/sdk` package.
+The full `/v1` REST surface (auth, sessions, configs, budget/usage) is wired
+against the live API, including live WebSocket streaming and `session stop`.
+Still pending: replacing the hand-rolled request/response types with the
+generated `@ellipsis/sdk` package.

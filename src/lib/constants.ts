@@ -6,8 +6,9 @@ import pkg from '../../package.json'
 export const VERSION: string = pkg.version
 
 // Sent on every API/WebSocket request so the server can record which client
-// started a run (stored on the run as client_version, shown for support). Not a
-// security boundary — the server derives a run's `source` from the credential.
+// started a session (stored on the session as client_version, shown for
+// support). Not a security boundary — the server derives a session's `source`
+// from the credential.
 export const USER_AGENT = `ellipsis-cli/${VERSION}`
 
 // The bare default; env (ELLIPSIS_API_BASE_URL / ELLIPSIS_API_BASE) and the

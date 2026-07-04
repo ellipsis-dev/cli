@@ -1,7 +1,7 @@
 import { resolveApiBase, resolveToken } from './config'
 import { USER_AGENT } from './constants'
 import type {
-  AgentRun,
+  AgentSession,
   AgentTemplate,
   BudgetSummary,
   CliAuthPoll,
@@ -10,14 +10,14 @@ import type {
   CreatedAgentConfig,
   GetSandboxVariablesResponse,
   ListAgentConfigsResponse,
-  ListAgentRunsQuery,
-  ListAgentRunsResponse,
+  ListAgentSessionsQuery,
+  ListAgentSessionsResponse,
   ListAgentTemplatesResponse,
-  ReplayAgentRunRequest,
+  ReplayAgentSessionRequest,
   SandboxVariableInput,
   SandboxVariableSummary,
   SavedAgentConfig,
-  StartAgentRunRequest,
+  StartAgentSessionRequest,
   UsageDashboard,
   WhoAmI,
 } from './types'
@@ -97,52 +97,53 @@ export class ApiClient {
     return this.request('GET', '/v1/usage')
   }
 
-  // ------------------------------ agent runs ------------------------------
+  // ---------------------------- agent sessions -----------------------------
 
-  startAgentRun(req: StartAgentRunRequest): Promise<AgentRun> {
-    return this.request('POST', '/v1/agents/runs', req)
+  startAgentSession(req: StartAgentSessionRequest): Promise<AgentSession> {
+    return this.request('POST', '/v1/sessions', req)
   }
 
-  async listAgentRuns(query?: ListAgentRunsQuery): Promise<AgentRun[]> {
-    const res = await this.request<ListAgentRunsResponse>(
+  async listAgentSessions(query?: ListAgentSessionsQuery): Promise<AgentSession[]> {
+    const res = await this.request<ListAgentSessionsResponse>(
       'GET',
-      '/v1/agents/runs',
+      '/v1/sessions',
       undefined,
       query as Record<string, unknown> | undefined,
     )
-    return res.runs
+    return res.sessions
   }
 
-  getAgentRun(runId: string): Promise<AgentRun> {
-    return this.request('GET', `/v1/agents/runs/${encodeURIComponent(runId)}`)
+  getAgentSession(sessionId: string): Promise<AgentSession> {
+    return this.request('GET', `/v1/sessions/${encodeURIComponent(sessionId)}`)
   }
 
-  replayAgentRun(runId: string, req: ReplayAgentRunRequest): Promise<AgentRun> {
+  replayAgentSession(sessionId: string, req: ReplayAgentSessionRequest): Promise<AgentSession> {
     return this.request(
       'POST',
-      `/v1/agents/runs/${encodeURIComponent(runId)}/replay`,
+      `/v1/sessions/${encodeURIComponent(sessionId)}/replay`,
       req,
     )
+  }
+
+  stopAgentSession(sessionId: string): Promise<AgentSession> {
+    return this.request('POST', `/v1/sessions/${encodeURIComponent(sessionId)}/stop`)
   }
 
   // ----------------------------- agent configs ----------------------------
 
   async listAgentConfigs(): Promise<SavedAgentConfig[]> {
-    const res = await this.request<ListAgentConfigsResponse>(
-      'GET',
-      '/v1/agents/configs',
-    )
+    const res = await this.request<ListAgentConfigsResponse>('GET', '/v1/configs')
     return res.configs
   }
 
   // Opens a pull request that adds the config's YAML to the repo's agents/
   // directory; the agent goes live once it merges and syncs.
   createAgentConfig(req: CreateAgentConfigRequest): Promise<CreatedAgentConfig> {
-    return this.request('POST', '/v1/agents/configs', req)
+    return this.request('POST', '/v1/configs', req)
   }
 
   getAgentConfig(configId: string): Promise<SavedAgentConfig> {
-    return this.request('GET', `/v1/agents/configs/${encodeURIComponent(configId)}`)
+    return this.request('GET', `/v1/configs/${encodeURIComponent(configId)}`)
   }
 
   // -------------------------- sandbox variables ---------------------------
@@ -179,15 +180,12 @@ export class ApiClient {
   // ---------------------------- agent templates ---------------------------
 
   async listAgentTemplates(): Promise<AgentTemplate[]> {
-    const res = await this.request<ListAgentTemplatesResponse>(
-      'GET',
-      '/v1/agents/templates',
-    )
+    const res = await this.request<ListAgentTemplatesResponse>('GET', '/v1/templates')
     return res.templates
   }
 
   getAgentTemplate(slug: string): Promise<AgentTemplate> {
-    return this.request('GET', `/v1/agents/templates/${encodeURIComponent(slug)}`)
+    return this.request('GET', `/v1/templates/${encodeURIComponent(slug)}`)
   }
 
   // --------------------------- device-code auth ---------------------------

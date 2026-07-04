@@ -2,13 +2,13 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { applyConfigOverride, readConfigFile, watchRun } from '../src/commands/run'
+import { applyConfigOverride, readConfigFile, watchSession } from '../src/commands/session'
 import type { ApiClient } from '../src/lib/api'
-import type { AgentRun, AgentRunStatus } from '../src/lib/types'
+import type { AgentSession, AgentSessionStatus } from '../src/lib/types'
 
-function run(status: AgentRunStatus): AgentRun {
+function session(status: AgentSessionStatus): AgentSession {
   return {
-    id: 'run_1',
+    id: 'session_1',
     customer_id: 'c',
     created_at: '2026-06-25T00:00:00+00:00',
     updated_at: '2026-06-25T00:00:00+00:00',
@@ -24,7 +24,7 @@ function run(status: AgentRunStatus): AgentRun {
   }
 }
 
-describe('watchRun', () => {
+describe('watchSession', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -37,33 +37,33 @@ describe('watchRun', () => {
   it('polls until a terminal status, then stops', async () => {
     const get = vi
       .fn()
-      .mockResolvedValueOnce(run('running'))
-      .mockResolvedValueOnce(run('running'))
-      .mockResolvedValueOnce(run('completed'))
-    const api = { getAgentRun: get } as unknown as ApiClient
+      .mockResolvedValueOnce(session('running'))
+      .mockResolvedValueOnce(session('running'))
+      .mockResolvedValueOnce(session('completed'))
+    const api = { getAgentSession: get } as unknown as ApiClient
 
-    const promise = watchRun(api, 'run_1', 1, true)
+    const promise = watchSession(api, 'session_1', 1, true)
     await vi.advanceTimersByTimeAsync(1000) // 1st poll running -> sleep -> 2nd poll
     await vi.advanceTimersByTimeAsync(1000) // -> 3rd poll completed -> return
     await promise
 
     expect(get).toHaveBeenCalledTimes(3)
-    expect(get).toHaveBeenCalledWith('run_1')
+    expect(get).toHaveBeenCalledWith('session_1')
   })
 
-  it('returns immediately when the run is already terminal', async () => {
-    const get = vi.fn().mockResolvedValueOnce(run('error'))
-    const api = { getAgentRun: get } as unknown as ApiClient
+  it('returns immediately when the session is already terminal', async () => {
+    const get = vi.fn().mockResolvedValueOnce(session('error'))
+    const api = { getAgentSession: get } as unknown as ApiClient
 
-    await watchRun(api, 'run_1', 5, true) // no timer advance needed
+    await watchSession(api, 'session_1', 5, true) // no timer advance needed
     expect(get).toHaveBeenCalledTimes(1)
   })
 
   it('treats stopped/cancelled as terminal', async () => {
-    for (const status of ['stopped', 'cancelled'] as AgentRunStatus[]) {
-      const get = vi.fn().mockResolvedValueOnce(run(status))
-      const api = { getAgentRun: get } as unknown as ApiClient
-      await watchRun(api, 'run_1', 5, true)
+    for (const status of ['stopped', 'cancelled'] as AgentSessionStatus[]) {
+      const get = vi.fn().mockResolvedValueOnce(session(status))
+      const api = { getAgentSession: get } as unknown as ApiClient
+      await watchSession(api, 'session_1', 5, true)
       expect(get).toHaveBeenCalledTimes(1)
     }
   })
