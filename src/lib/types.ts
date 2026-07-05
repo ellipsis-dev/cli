@@ -76,7 +76,15 @@ export interface UsageDashboard {
 
 // ----------------------------- agent sessions ----------------------------
 
-export type AgentSessionSource = 'react' | 'manual' | 'api' | 'cli' | 'mention' | 'cron'
+export type AgentSessionSource =
+  | 'react'
+  | 'manual'
+  | 'api'
+  | 'cli'
+  | 'mention'
+  | 'cron'
+  // A Claude Code session ingested from a developer laptop via `agent session sync`.
+  | 'laptop'
 
 export type AgentSessionStatus =
   | 'scheduled'
@@ -128,10 +136,23 @@ export type AgentConfig = Record<string, unknown>
 
 // --------------------------- request / response -------------------------
 
+// Laptop -> cloud handoff params: start a fresh session on the built-in
+// handoff config, chained to the handed-off session (parent_kind=handoff).
+// Mutually exclusive with config_id / config / template_id.
+export interface HandoffAgentSessionParams {
+  parent_session_id: string
+  repo: string
+  // The WIP commit pushed to refs/ellipsis/handoff/<short> — the sandbox
+  // checkout target.
+  sha: string
+  ref?: string
+}
+
 export interface StartAgentSessionRequest {
   config_id?: string
   config?: AgentConfig
   template_id?: string
+  handoff?: HandoffAgentSessionParams
   // No `source`: the server derives a session's provenance from the credential
   // (a user token => `cli`), so it can't be spoofed by the request body.
   metadata?: Record<string, string>
@@ -157,6 +178,30 @@ export interface ReplayAgentSessionRequest {
   config_override?: Record<string, unknown>
   config_override_yaml?: string
   prompt?: string
+}
+
+// One hook-driven transcript sync from this laptop (POST /v1/sessions/sync).
+// The transcript is redacted client-side, gzipped, then base64-encoded.
+export interface SyncAgentSessionRequest {
+  cc_session_id: string
+  transcript_gzip_b64: string
+  // Which Claude Code hook fired the sync: Stop (mid-session, once per turn)
+  // or SessionEnd (the process terminated).
+  reason: 'stop' | 'session_end'
+  // The enrolled repository ("owner/name", from the cwd's git remote), the
+  // cwd, and the checked-out branch — laptop-side context for the session row.
+  repo?: string
+  cwd?: string
+  git_branch?: string
+}
+
+export interface SyncAgentSessionResponse {
+  session_id: string
+  process_id: string
+  event_count: number
+  // False when the server already stored a snapshot at least this long
+  // (longest-snapshot-wins) — acknowledged, nothing written. Still success.
+  accepted: boolean
 }
 
 export interface ListAgentSessionsResponse {

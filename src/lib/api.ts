@@ -16,6 +16,8 @@ import type {
   ReplayAgentSessionRequest,
   SandboxVariableInput,
   SandboxVariableSummary,
+  SyncAgentSessionRequest,
+  SyncAgentSessionResponse,
   SavedAgentConfig,
   StartAgentSessionRequest,
   UsageDashboard,
@@ -115,6 +117,10 @@ export class ApiClient {
 
   getAgentSession(sessionId: string): Promise<AgentSession> {
     return this.request('GET', `/v1/sessions/${encodeURIComponent(sessionId)}`)
+  }
+
+  syncAgentSession(req: SyncAgentSessionRequest): Promise<SyncAgentSessionResponse> {
+    return this.request('POST', '/v1/sessions/sync', req)
   }
 
   replayAgentSession(sessionId: string, req: ReplayAgentSessionRequest): Promise<AgentSession> {
