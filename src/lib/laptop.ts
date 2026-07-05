@@ -15,6 +15,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
@@ -263,6 +264,164 @@ export function dropSpooledSync(file: string): void {
     unlinkSync(file)
   } catch {
     // Already gone (a concurrent hook flushed it) — fine.
+  }
+}
+
+// Cheap count of spooled (retriable, not-yet-delivered) syncs, without
+// parsing them — used by the hook stats object.
+export function spooledPendingCount(): number {
+  const dir = spoolDir()
+  if (!existsSync(dir)) return 0
+  return readdirSync(dir).filter((n) => n.endsWith('.json')).length
+}
+
+// ---------------------------------------------------------------------------
+// Hook observability. In hook mode `agent session sync` is a quiet no-op on
+// every failure path by design (async hooks' output is discarded and a broken
+// sync must never disturb a Claude Code session), so nothing is visible in the
+// session itself. Instead, every sync attempt appends one JSONL line to
+// hooks/sync.log.jsonl (read by `agent hooks logs`) and atomically rewrites
+// hooks/stats.json — a plain JSON object anything can read without invoking
+// the CLI (read by `agent hooks stats`). All of it is best-effort: a logging
+// failure stays silent so hook mode keeps its exit-0 guarantee.
+// ---------------------------------------------------------------------------
+
+export type SyncOutcome =
+  | 'synced' // delivered to POST /v1/sessions/sync
+  | 'skipped_unenrolled' // consent gate: repo not enrolled (or no git remote)
+  | 'not_logged_in' // no token anywhere
+  | 'no_transcript' // transcript path missing/empty on disk
+  | 'spooled' // retriable failure (network / 5xx); queued for the next sync
+  | 'rejected' // permanent failure (4xx / bad invocation); never retried
+
+export interface SyncLogEntry {
+  ts: string // ISO-8601, when the attempt finished
+  outcome: SyncOutcome
+  cc_session_id?: string
+  repo?: string
+  reason?: string // stop | session_end
+  session_id?: string // v1 API session id (synced only)
+  event_count?: number // events the server acknowledged (synced only)
+  error?: string // failure detail (non-synced outcomes)
+}
+
+// The stats object rewritten on every sync. 24h windows are derived from the
+// activity log; total_synced is carried forward so the log cap can't shrink it.
+export interface HookSyncStats {
+  last_sync_at?: string // ts of the most recent attempt (any outcome)
+  last_outcome?: SyncOutcome
+  last_error?: string // error of the most recent failed attempt
+  synced_24h: number
+  failed_24h: number // not_logged_in / no_transcript / spooled / rejected
+  spooled_pending: number
+  total_synced: number
+  recent_session_ids: string[] // distinct v1 session ids, most recent first
+}
+
+// The log is an audit trail for "did that background sync fail, and why",
+// not unbounded history — keep the newest N lines.
+const SYNC_LOG_MAX_LINES = 1000
+const RECENT_SESSION_IDS_MAX = 10
+
+const FAILURE_OUTCOMES: ReadonlySet<SyncOutcome> = new Set<SyncOutcome>([
+  'not_logged_in',
+  'no_transcript',
+  'spooled',
+  'rejected',
+])
+
+function hooksDir(): string {
+  return join(
+    process.env.ELLIPSIS_CONFIG_DIR ?? join(homedir(), '.config', 'ellipsis'),
+    'hooks',
+  )
+}
+
+export function syncLogPath(): string {
+  return join(hooksDir(), 'sync.log.jsonl')
+}
+
+export function hookStatsPath(): string {
+  return join(hooksDir(), 'stats.json')
+}
+
+// stats.json readers may race a hook's rewrite, so writes go through a
+// same-directory temp file + rename (atomic on POSIX).
+function writeFileAtomic(path: string, data: string): void {
+  const tmp = `${path}.${process.pid}.tmp`
+  writeFileSync(tmp, data, { mode: 0o600 })
+  renameSync(tmp, path)
+}
+
+export function readSyncLog(): SyncLogEntry[] {
+  const path = syncLogPath()
+  if (!existsSync(path)) return []
+  const out: SyncLogEntry[] = []
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    if (!line.trim()) continue
+    try {
+      out.push(JSON.parse(line) as SyncLogEntry)
+    } catch {
+      // A torn line from a crashed hook — skip it, keep the rest.
+    }
+  }
+  return out
+}
+
+export function readHookStats(): HookSyncStats | undefined {
+  try {
+    return JSON.parse(readFileSync(hookStatsPath(), 'utf8')) as HookSyncStats
+  } catch {
+    return undefined
+  }
+}
+
+export function computeHookStats(
+  entries: SyncLogEntry[],
+  totalSynced: number,
+  now: Date = new Date(),
+): HookSyncStats {
+  const dayAgo = now.getTime() - 24 * 60 * 60 * 1000
+  const recent = entries.filter((e) => Date.parse(e.ts) >= dayAgo)
+  const last = entries[entries.length - 1]
+  const lastFailed = [...entries].reverse().find((e) => FAILURE_OUTCOMES.has(e.outcome))
+  const recentIds: string[] = []
+  for (const e of [...entries].reverse()) {
+    if (e.outcome !== 'synced' || !e.session_id) continue
+    if (recentIds.includes(e.session_id)) continue
+    recentIds.push(e.session_id)
+    if (recentIds.length >= RECENT_SESSION_IDS_MAX) break
+  }
+  return {
+    last_sync_at: last?.ts,
+    last_outcome: last?.outcome,
+    last_error: lastFailed?.error,
+    synced_24h: recent.filter((e) => e.outcome === 'synced').length,
+    failed_24h: recent.filter((e) => FAILURE_OUTCOMES.has(e.outcome)).length,
+    spooled_pending: spooledPendingCount(),
+    total_synced: totalSynced,
+    recent_session_ids: recentIds,
+  }
+}
+
+// Append one attempt to the activity log (capped) and rewrite stats.json.
+// Never throws: observability must not break the hook-mode exit-0 guarantee.
+export function recordSyncOutcome(entry: Omit<SyncLogEntry, 'ts'>): void {
+  try {
+    mkdirSync(hooksDir(), { recursive: true })
+    const full: SyncLogEntry = { ts: new Date().toISOString(), ...entry }
+    const entries = [...readSyncLog(), full].slice(-SYNC_LOG_MAX_LINES)
+    writeFileAtomic(syncLogPath(), entries.map((e) => JSON.stringify(e)).join('\n') + '\n')
+    // total_synced carries forward from the previous stats object (the log is
+    // capped, so recounting it would shrink the total); first write falls back
+    // to counting whatever history the log holds.
+    const prevTotal =
+      readHookStats()?.total_synced ??
+      entries.filter((e) => e.outcome === 'synced' && e !== full).length
+    const total = prevTotal + (full.outcome === 'synced' ? 1 : 0)
+    writeFileAtomic(hookStatsPath(), JSON.stringify(computeHookStats(entries, total), null, 2) + '\n')
+  } catch {
+    // Best-effort by design.
   }
 }
 

@@ -30,9 +30,11 @@ import {
   enrolledRepos,
   listSpooledSyncs,
   pushHandoffRef,
+  recordSyncOutcome,
   redactLine,
   repoFromCwd,
   spoolSync,
+  type SyncOutcome,
 } from '../lib/laptop'
 import { ApiError } from '../lib/api'
 import { resolveToken } from '../lib/config'
@@ -625,9 +627,6 @@ async function syncTranscript(opts: {
   // Hook mode = driven by CC (stdin context, no explicit flags): all failure
   // paths are silent no-ops so they never surface into the session.
   const hookMode = hook !== undefined && !opts.transcript && !opts.sessionId
-  const quit = (message: string): void => {
-    if (!hookMode) throw new Error(message)
-  }
 
   const ccSessionId = opts.sessionId ?? hook?.session_id
   const transcriptPath = opts.transcript ?? hook?.transcript_path
@@ -638,20 +637,33 @@ async function syncTranscript(opts: {
       : hook?.hook_event_name === 'SessionEnd'
         ? 'session_end'
         : 'stop'
+  const repo = repoFromCwd(cwd)
+
+  // Hook mode is quiet on every failure path, so the local activity log
+  // (hooks/sync.log.jsonl + stats.json, surfaced by `agent hooks logs/stats`)
+  // is the only place a failed background sync is observable. Recording is
+  // best-effort and never throws, preserving the exit-0 guarantee.
+  const quit = (outcome: SyncOutcome, message: string): void => {
+    recordSyncOutcome({ outcome, cc_session_id: ccSessionId, repo, reason, error: message })
+    if (!hookMode) throw new Error(message)
+  }
+
   if (!ccSessionId || !transcriptPath) {
-    return quit('need --session-id and --transcript (or hook JSON on stdin)')
+    return quit('rejected', 'need --session-id and --transcript (or hook JSON on stdin)')
   }
 
   // Consent gate: per-repo opt-in, silently skipped otherwise.
-  const repo = repoFromCwd(cwd)
   if (!repo || !enrolledRepos().includes(repo.toLowerCase())) {
-    return quit(`repository ${repo ?? `at ${cwd}`} is not enrolled (agent hooks enroll)`)
+    return quit(
+      'skipped_unenrolled',
+      `repository ${repo ?? `at ${cwd}`} is not enrolled (agent hooks enroll)`,
+    )
   }
   if (!resolveToken()) {
-    return quit('not logged in. Run `agent login` first, or set ELLIPSIS_API_TOKEN.')
+    return quit('not_logged_in', 'not logged in. Run `agent login` first, or set ELLIPSIS_API_TOKEN.')
   }
   if (!existsSync(transcriptPath)) {
-    return quit(`transcript not found: ${transcriptPath}`)
+    return quit('no_transcript', `transcript not found: ${transcriptPath}`)
   }
 
   // Redact line-by-line (secrets never leave the laptop unredacted), then
@@ -660,7 +672,9 @@ async function syncTranscript(opts: {
     .split('\n')
     .filter((l) => l.trim().length > 0)
     .map(redactLine)
-  if (lines.length === 0) return quit(`transcript is empty: ${transcriptPath}`)
+  if (lines.length === 0) {
+    return quit('no_transcript', `transcript is empty: ${transcriptPath}`)
+  }
 
   const req: SyncAgentSessionRequest = {
     cc_session_id: ccSessionId,
@@ -674,6 +688,14 @@ async function syncTranscript(opts: {
   const api = new ApiClient()
   try {
     const res = await api.syncAgentSession(req)
+    recordSyncOutcome({
+      outcome: 'synced',
+      cc_session_id: ccSessionId,
+      repo,
+      reason,
+      session_id: res.session_id,
+      event_count: res.event_count,
+    })
     if (opts.json) printJson(res)
     else if (!hookMode) {
       console.log(
@@ -686,11 +708,11 @@ async function syncTranscript(opts: {
       // Spool (latest snapshot per session wins) and stay quiet in hook mode —
       // the next sync flushes it.
       spoolSync(req)
-      if (!hookMode) throw err
+      quit('spooled', (err as Error).message)
       return
     }
     // Permanent rejection (auth, validation, payload too large): never spool.
-    if (!hookMode) throw err
+    quit('rejected', (err as Error).message)
     return
   }
 
