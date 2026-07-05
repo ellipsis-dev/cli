@@ -1,6 +1,7 @@
 import type { Command } from 'commander'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { extname } from 'node:path'
+import { gzipSync } from 'node:zlib'
 import { parse as parseYaml } from 'yaml'
 import { ApiClient } from '../lib/api'
 import { requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
@@ -20,7 +21,21 @@ import type {
   AgentSessionStatus,
   ReplayAgentSessionRequest,
   StartAgentSessionRequest,
+  SyncAgentSessionRequest,
 } from '../lib/types'
+import {
+  branchFromCwd,
+  createWipCommit,
+  dropSpooledSync,
+  enrolledRepos,
+  listSpooledSyncs,
+  pushHandoffRef,
+  redactLine,
+  repoFromCwd,
+  spoolSync,
+} from '../lib/laptop'
+import { ApiError } from '../lib/api'
+import { resolveToken } from '../lib/config'
 
 // Poll cadence for the `--watch` REST fallback (used only when live WebSocket
 // streaming is unavailable). Not user-configurable — the fallback is rare.
@@ -267,6 +282,85 @@ export function registerSession(program: Command): void {
       },
     )
 
+  // Laptop → cloud handoff (design: LOCAL_CLAUDE_CODE.md §7.2): snapshot the
+  // dirty working tree as a commit (without disturbing it), push it to
+  // refs/ellipsis/handoff/<short>, and start a fresh cloud session on the
+  // built-in handoff config with the instructions as its prompt — never a
+  // literal `claude --resume` of the local session.
+  session
+    .command('handoff <instructions>')
+    .description('Hand the current repo + a synced session off to a cloud agent')
+    .requiredOption(
+      '-p, --parent <sessionId>',
+      'the synced laptop session to chain from (see `agent session list --source laptop`)',
+    )
+    .option('--cwd <path>', 'repository to hand off (default: current directory)')
+    .option('--json', 'output raw JSON')
+    .action(
+      async (
+        instructions: string,
+        opts: { parent: string; cwd?: string; json?: boolean },
+      ) => {
+        await runAction(async () => {
+          const cwd = opts.cwd ?? process.cwd()
+          const repo = repoFromCwd(cwd)
+          if (!repo) {
+            throw new Error('not inside a git repository with an origin remote')
+          }
+          const { sha, dirty } = createWipCommit(cwd)
+          const ref = pushHandoffRef(cwd, sha)
+          if (!opts.json) {
+            console.log(
+              dirty
+                ? `✓ pushed working-tree snapshot ${sha.slice(0, 12)} to ${ref}`
+                : `✓ working tree clean — handing off HEAD ${sha.slice(0, 12)} via ${ref}`,
+            )
+          }
+          const api = new ApiClient()
+          const session = await api.startAgentSession({
+            handoff: { parent_session_id: opts.parent, repo, sha, ref },
+            prompt: instructions,
+          })
+          if (opts.json) {
+            printJson(session)
+            return
+          }
+          console.log(`✓ started handoff session ${session.id} (${session.status})`)
+          await printSessionUrl(api, session.id)
+          console.log(`  follow with: agent session get ${session.id} --watch`)
+        })
+      },
+    )
+
+  // The laptop-transcript sync (design: LOCAL_CLAUDE_CODE.md §7.1). Normally
+  // invoked by the Claude Code Stop/SessionEnd hooks `agent hooks install`
+  // writes, with the hook's JSON context on stdin; the flags exist for manual
+  // runs and testing. In hook mode every failure path is a QUIET no-op (exit
+  // 0): consent gaps (unenrolled repo), a logged-out CLI, and network errors
+  // must never surface into someone's Claude Code session. Network failures
+  // spool to disk and flush on the next successful sync.
+  session
+    .command('sync')
+    .description('Sync a Claude Code transcript to Ellipsis (invoked by CC hooks)')
+    .option('--transcript <path>', 'transcript JSONL path (default: from hook stdin)')
+    .option('--session-id <id>', 'Claude Code session id (default: from hook stdin)')
+    .option('--reason <reason>', 'stop | session_end (default: from hook stdin)')
+    .option('--cwd <path>', 'session working directory (default: from hook stdin)')
+    .option('--json', 'output raw JSON')
+    .action(
+      async (opts: {
+        transcript?: string
+        sessionId?: string
+        reason?: string
+        cwd?: string
+        json?: boolean
+      }) => {
+        await runAction(async () => {
+          await syncTranscript(opts)
+        })
+      },
+    )
+
   session
     .command('stop <sessionId>')
     .description('Stop an in-flight session (POST /v1/sessions/{id}/stop)')
@@ -483,4 +577,136 @@ function sleep(ms: number): Promise<void> {
 // Local wall-clock HH:MM:SS for the --watch transition log.
 function nowClock(): string {
   return new Date().toTimeString().slice(0, 8)
+}
+
+// ---------------------------------------------------------------------------
+// `agent session sync` implementation.
+// ---------------------------------------------------------------------------
+
+// The JSON context Claude Code writes to a hook's stdin. Fields beyond these
+// exist per event; we only need the session identity + transcript location.
+interface HookStdin {
+  session_id?: string
+  transcript_path?: string
+  cwd?: string
+  hook_event_name?: string
+  reason?: string
+}
+
+async function readHookStdin(): Promise<HookStdin | undefined> {
+  if (process.stdin.isTTY) return undefined
+  let data = ''
+  for await (const chunk of process.stdin) data += chunk
+  data = data.trim()
+  if (!data) return undefined
+  try {
+    return JSON.parse(data) as HookStdin
+  } catch {
+    return undefined
+  }
+}
+
+// A fetch() network failure (DNS, refused, offline) — retriable, so spool.
+// ApiError >= 500 is treated the same; 4xx is permanent and never spooled.
+function isRetriable(err: unknown): boolean {
+  if (err instanceof ApiError) return err.status >= 500
+  // Anything that never produced an HTTP response (DNS, refused, offline).
+  return true
+}
+
+async function syncTranscript(opts: {
+  transcript?: string
+  sessionId?: string
+  reason?: string
+  cwd?: string
+  json?: boolean
+}): Promise<void> {
+  const hook = await readHookStdin()
+  // Hook mode = driven by CC (stdin context, no explicit flags): all failure
+  // paths are silent no-ops so they never surface into the session.
+  const hookMode = hook !== undefined && !opts.transcript && !opts.sessionId
+  const quit = (message: string): void => {
+    if (!hookMode) throw new Error(message)
+  }
+
+  const ccSessionId = opts.sessionId ?? hook?.session_id
+  const transcriptPath = opts.transcript ?? hook?.transcript_path
+  const cwd = opts.cwd ?? hook?.cwd ?? process.cwd()
+  const reason: 'stop' | 'session_end' =
+    opts.reason === 'session_end' || opts.reason === 'stop'
+      ? opts.reason
+      : hook?.hook_event_name === 'SessionEnd'
+        ? 'session_end'
+        : 'stop'
+  if (!ccSessionId || !transcriptPath) {
+    return quit('need --session-id and --transcript (or hook JSON on stdin)')
+  }
+
+  // Consent gate: per-repo opt-in, silently skipped otherwise.
+  const repo = repoFromCwd(cwd)
+  if (!repo || !enrolledRepos().includes(repo.toLowerCase())) {
+    return quit(`repository ${repo ?? `at ${cwd}`} is not enrolled (agent hooks enroll)`)
+  }
+  if (!resolveToken()) {
+    return quit('not logged in. Run `agent login` first, or set ELLIPSIS_API_TOKEN.')
+  }
+  if (!existsSync(transcriptPath)) {
+    return quit(`transcript not found: ${transcriptPath}`)
+  }
+
+  // Redact line-by-line (secrets never leave the laptop unredacted), then
+  // gzip + base64 for the JSON body.
+  const lines = readFileSync(transcriptPath, 'utf8')
+    .split('\n')
+    .filter((l) => l.trim().length > 0)
+    .map(redactLine)
+  if (lines.length === 0) return quit(`transcript is empty: ${transcriptPath}`)
+
+  const req: SyncAgentSessionRequest = {
+    cc_session_id: ccSessionId,
+    transcript_gzip_b64: gzipSync(lines.join('\n') + '\n').toString('base64'),
+    reason,
+    repo,
+    cwd,
+    git_branch: branchFromCwd(cwd),
+  }
+
+  const api = new ApiClient()
+  try {
+    const res = await api.syncAgentSession(req)
+    if (opts.json) printJson(res)
+    else if (!hookMode) {
+      console.log(
+        `✓ synced ${res.event_count} events to session ${res.session_id}` +
+          (res.accepted ? '' : ' (server already had a newer snapshot)'),
+      )
+    }
+  } catch (err) {
+    if (isRetriable(err)) {
+      // Spool (latest snapshot per session wins) and stay quiet in hook mode —
+      // the next sync flushes it.
+      spoolSync(req)
+      if (!hookMode) throw err
+      return
+    }
+    // Permanent rejection (auth, validation, payload too large): never spool.
+    if (!hookMode) throw err
+    return
+  }
+
+  // The API is reachable — flush anything an earlier offline sync spooled.
+  for (const { file, req: spooled } of listSpooledSyncs()) {
+    if (spooled.cc_session_id === ccSessionId) {
+      // The snapshot we just synced supersedes it (snapshots only grow).
+      dropSpooledSync(file)
+      continue
+    }
+    try {
+      await api.syncAgentSession(spooled)
+      dropSpooledSync(file)
+    } catch (err) {
+      if (isRetriable(err)) break // server unhealthy again; retry next time
+      dropSpooledSync(file) // permanent rejection: retrying can't succeed
+    }
+  }
 }
