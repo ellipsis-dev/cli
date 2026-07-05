@@ -202,6 +202,9 @@ export interface AgentTemplate {
 
 export interface ListAgentTemplatesResponse {
   templates: AgentTemplate[]
+  // The verbatim config of the run-on-demand `recent-work-summary` template
+  // behind the dashboard's first-run CTA, served alongside the gallery.
+  first_run_yaml: string
 }
 
 export interface ListAgentSessionsQuery {
