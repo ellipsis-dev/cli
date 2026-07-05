@@ -5,7 +5,7 @@ import {
   decideReconnect,
   nextReconnectDelayMs,
   resolveWsBase,
-  streamRun,
+  streamSession,
   StreamAuthError,
   StreamUnavailableError,
   type SocketFactory,
@@ -108,8 +108,8 @@ describe('pure helpers', () => {
   })
 
   it('builds the stream URL with an optional after_seq cursor', () => {
-    expect(buildStreamUrl('wss://h', 'run 1', 0)).toBe('wss://h/v1/runs/run%201/stream')
-    expect(buildStreamUrl('wss://h', 'r', 7)).toBe('wss://h/v1/runs/r/stream?after_seq=7')
+    expect(buildStreamUrl('wss://h', 'session 1', 0)).toBe('wss://h/v1/sessions/session%201/stream')
+    expect(buildStreamUrl('wss://h', 's', 7)).toBe('wss://h/v1/sessions/s/stream?after_seq=7')
   })
 
   it('resolves the ws base from env, then derives it from the api base', () => {
@@ -121,9 +121,9 @@ describe('pure helpers', () => {
   })
 })
 
-// ------------------------------ streamRun -----------------------------------
+// ---------------------------- streamSession ---------------------------------
 
-describe('streamRun', () => {
+describe('streamSession', () => {
   beforeEach(() => {
     vi.useFakeTimers()
   })
@@ -135,9 +135,9 @@ describe('streamRun', () => {
   it('emits every frame and resolves on done', async () => {
     const { factory, sockets } = makeFactory()
     const frames: StreamFrame[] = []
-    const p = streamRun({
+    const p = streamSession({
       token: 't',
-      runId: 'r',
+      sessionId: 's',
       wsBase: 'ws://x',
       connect: factory,
       onFrame: (f) => frames.push(f),
@@ -155,9 +155,9 @@ describe('streamRun', () => {
 
   it('reconnects after a drop and resumes from the last seq (no loss/dupes)', async () => {
     const { factory, sockets } = makeFactory()
-    const p = streamRun({
+    const p = streamSession({
       token: 't',
-      runId: 'r',
+      sessionId: 's',
       wsBase: 'ws://x',
       connect: factory,
       onFrame: () => {},
@@ -169,7 +169,7 @@ describe('streamRun', () => {
 
     await vi.advanceTimersByTimeAsync(500) // backoff for attempt 1
     expect(sockets).toHaveLength(2)
-    expect(sockets[1].url).toBe('ws://x/v1/runs/r/stream?after_seq=2')
+    expect(sockets[1].url).toBe('ws://x/v1/sessions/s/stream?after_seq=2')
 
     sockets[1].sock.emitFrame({ type: 'done', status: 'completed', exit_status: null })
     const outcome = await p
@@ -178,21 +178,21 @@ describe('streamRun', () => {
 
   it('surfaces a server error frame as an error outcome (not a fallback)', async () => {
     const { factory, sockets } = makeFactory()
-    const p = streamRun({ token: 't', runId: 'r', wsBase: 'ws://x', connect: factory, onFrame: () => {} })
+    const p = streamSession({ token: 't', sessionId: 's', wsBase: 'ws://x', connect: factory, onFrame: () => {} })
     sockets[0].sock.emitFrame({ type: 'error', message: 'boom' })
     expect(await p).toEqual({ type: 'error', message: 'boom' })
   })
 
   it('falls back (throws StreamUnavailableError) on an unsupported close', async () => {
     const { factory, sockets } = makeFactory()
-    const p = streamRun({ token: 't', runId: 'r', wsBase: 'ws://x', connect: factory, onFrame: () => {} })
+    const p = streamSession({ token: 't', sessionId: 's', wsBase: 'ws://x', connect: factory, onFrame: () => {} })
     sockets[0].sock.emitClose(1003)
     await expect(p).rejects.toBeInstanceOf(StreamUnavailableError)
   })
 
   it('falls back when the socket never connects after a couple of tries', async () => {
     const { factory, sockets } = makeFactory()
-    const p = streamRun({ token: 't', runId: 'r', wsBase: 'ws://x', connect: factory, onFrame: () => {} })
+    const p = streamSession({ token: 't', sessionId: 's', wsBase: 'ws://x', connect: factory, onFrame: () => {} })
     const rejection = expect(p).rejects.toBeInstanceOf(StreamUnavailableError)
     sockets[0].sock.emitError(new Error('ECONNREFUSED'))
     await vi.advanceTimersByTimeAsync(500)
@@ -203,7 +203,7 @@ describe('streamRun', () => {
 
   it('fails hard (StreamAuthError) on an auth-rejected close', async () => {
     const { factory, sockets } = makeFactory()
-    const p = streamRun({ token: 't', runId: 'r', wsBase: 'ws://x', connect: factory, onFrame: () => {} })
+    const p = streamSession({ token: 't', sessionId: 's', wsBase: 'ws://x', connect: factory, onFrame: () => {} })
     sockets[0].sock.emitClose(1008)
     await expect(p).rejects.toBeInstanceOf(StreamAuthError)
   })

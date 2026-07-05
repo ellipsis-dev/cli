@@ -2,14 +2,14 @@ import WebSocket from 'ws'
 import { resolveApiBase } from './config'
 import { DEFAULT_WS_BASE, USER_AGENT } from './constants'
 
-// The frame protocol spoken over the run WebSocket (server -> client). One JSON
-// object per message. Mirrors run_stream.py in the backend.
+// The frame protocol spoken over the session WebSocket (server -> client). One
+// JSON object per message. Mirrors session_stream.py in the backend.
 //   status: { type, status, ts }
 //   stdout/stderr: { type, data, seq, ts }
 //   done: { type, status, exit_status }
 //   error: { type, message }
-// `seq` is a monotonic per-run cursor; the client resumes from the last seq it
-// saw via `?after_seq=` so a dropped socket loses nothing.
+// `seq` is a monotonic per-session cursor; the client resumes from the last seq
+// it saw via `?after_seq=` so a dropped socket loses nothing.
 export interface StreamFrame {
   type: 'stdout' | 'stderr' | 'status' | 'done' | 'error'
   data?: string
@@ -20,7 +20,7 @@ export interface StreamFrame {
   exit_status?: string | null
 }
 
-// How streamRun() finished. `done`/`error` are normal terminal outcomes;
+// How streamSession() finished. `done`/`error` are normal terminal outcomes;
 // `aborted` means the caller cancelled via the AbortSignal.
 export type StreamOutcome =
   | { type: 'done'; status: string; exitStatus?: string | null }
@@ -36,7 +36,7 @@ export class StreamUnavailableError extends Error {
   }
 }
 
-// Thrown when the server rejects the credential for this run (close 1008).
+// Thrown when the server rejects the credential for this session (close 1008).
 // Polling would fail the same way, so this is not a fallback case.
 export class StreamAuthError extends Error {
   constructor(message: string) {
@@ -47,7 +47,7 @@ export class StreamAuthError extends Error {
 
 export interface StreamOptions {
   token: string
-  runId: string
+  sessionId: string
   onFrame: (frame: StreamFrame) => void
   wsBase?: string
   afterSeq?: number
@@ -57,7 +57,7 @@ export interface StreamOptions {
   connect?: SocketFactory
 }
 
-// Minimal socket surface streamRun() depends on, so tests can drive the
+// Minimal socket surface streamSession() depends on, so tests can drive the
 // reconnect/resume logic without a real server.
 export interface StreamSocket {
   onOpen(cb: () => void): void
@@ -154,8 +154,8 @@ export function resolveWsBase(apiBase?: string): string {
   return DEFAULT_WS_BASE
 }
 
-export function buildStreamUrl(wsBase: string, runId: string, afterSeq: number): string {
-  const url = `${wsBase}/v1/runs/${encodeURIComponent(runId)}/stream`
+export function buildStreamUrl(wsBase: string, sessionId: string, afterSeq: number): string {
+  const url = `${wsBase}/v1/sessions/${encodeURIComponent(sessionId)}/stream`
   return afterSeq > 0 ? `${url}?after_seq=${afterSeq}` : url
 }
 
@@ -244,11 +244,12 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 // ------------------------------ public API ---------------------------------
 
-// Stream an agent run's output to completion, reconnecting with backoff and
-// resuming from the last seen `seq` so a dropped socket loses no frames. Calls
-// `onFrame` for every frame received. Resolves with the terminal outcome, or
-// throws StreamUnavailableError (caller should poll instead) / StreamAuthError.
-export async function streamRun(opts: StreamOptions): Promise<StreamOutcome> {
+// Stream an agent session's output to completion, reconnecting with backoff
+// and resuming from the last seen `seq` so a dropped socket loses no frames.
+// Calls `onFrame` for every frame received. Resolves with the terminal
+// outcome, or throws StreamUnavailableError (caller should poll instead) /
+// StreamAuthError.
+export async function streamSession(opts: StreamOptions): Promise<StreamOutcome> {
   const wsBase = opts.wsBase ?? resolveWsBase()
   const factory = opts.connect ?? defaultFactory
   const maxReconnects = opts.maxReconnects ?? DEFAULT_MAX_RECONNECTS
@@ -265,7 +266,7 @@ export async function streamRun(opts: StreamOptions): Promise<StreamOutcome> {
 
   for (;;) {
     if (opts.signal?.aborted) return { type: 'aborted' }
-    const url = buildStreamUrl(wsBase, opts.runId, afterSeq)
+    const url = buildStreamUrl(wsBase, opts.sessionId, afterSeq)
     const res = await connectOnce(url, opts.token, factory, emit, opts.signal)
 
     if (res.kind === 'done') {
@@ -283,7 +284,7 @@ export async function streamRun(opts: StreamOptions): Promise<StreamOutcome> {
       maxReconnects,
     })
     if (decision.action === 'fail-auth') {
-      throw new StreamAuthError('not authorized to stream this run')
+      throw new StreamAuthError('not authorized to stream this session')
     }
     if (decision.action === 'fallback') {
       const why =

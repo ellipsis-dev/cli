@@ -1,7 +1,7 @@
 import { Command } from 'commander'
 import { registerLogin } from './commands/login'
 import { registerMe } from './commands/me'
-import { registerRun } from './commands/run'
+import { registerSession } from './commands/session'
 import { registerConfig } from './commands/config'
 import { registerSandbox } from './commands/sandbox'
 import { registerTemplate } from './commands/template'
@@ -13,12 +13,12 @@ const program = new Command()
 
 program
   .name('agent')
-  .description('Ellipsis agent CLI — drive the Ellipsis cloud from your terminal')
+  .description('Ellipsis agent CLI: drive the Ellipsis cloud from your terminal')
   .version(VERSION)
 
 registerLogin(program)
 registerMe(program)
-registerRun(program)
+registerSession(program)
 registerConfig(program)
 registerSandbox(program)
 registerTemplate(program)

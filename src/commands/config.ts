@@ -14,7 +14,7 @@ export function registerConfig(program: Command): void {
 
   config
     .command('list')
-    .description('List saved agent configurations (GET /v1/agents/configs)')
+    .description('List saved agent configurations (GET /v1/configs)')
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
@@ -41,7 +41,7 @@ export function registerConfig(program: Command): void {
 
   config
     .command('get <configId>')
-    .description('Get a single agent configuration (GET /v1/agents/configs/{id})')
+    .description('Get a single agent configuration (GET /v1/configs/{id})')
     .option('-o, --output <format>', 'output format: yaml (default) or json', parseFormat, 'yaml')
     .action(async (configId: string, opts: { output: 'yaml' | 'json' }) => {
       await runAction(async () => {

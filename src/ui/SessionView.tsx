@@ -1,14 +1,14 @@
 import React, { useEffect, useState } from 'react'
 import { Box, Text, useApp } from 'ink'
 import Spinner from 'ink-spinner'
-import { streamRun, type StreamFrame } from '../lib/ws'
+import { streamSession, type StreamFrame } from '../lib/ws'
 
 interface Props {
-  runId: string
+  sessionId: string
   token: string
 }
 
-export function RunView({ runId, token }: Props): React.ReactElement {
+export function SessionView({ sessionId, token }: Props): React.ReactElement {
   const { exit } = useApp()
   const [lines, setLines] = useState<string[]>([])
   const [status, setStatus] = useState<string>('connecting')
@@ -26,7 +26,7 @@ export function RunView({ runId, token }: Props): React.ReactElement {
           break
       }
     }
-    streamRun({ token, runId, onFrame, signal: controller.signal })
+    streamSession({ token, sessionId, onFrame, signal: controller.signal })
       .then((outcome) => {
         if (outcome.type === 'error') setStatus(`error: ${outcome.message}`)
         else if (outcome.type === 'done') setStatus('done')
@@ -37,7 +37,7 @@ export function RunView({ runId, token }: Props): React.ReactElement {
         exit()
       })
     return () => controller.abort()
-  }, [runId, token, exit])
+  }, [sessionId, token, exit])
 
   const done = status === 'done'
 
@@ -47,7 +47,7 @@ export function RunView({ runId, token }: Props): React.ReactElement {
         {done ? <Text color="green">✓ </Text> : <Spinner type="dots" />}
         <Text color="cyan">
           {' '}
-          run {runId} — {status}
+          session {sessionId}: {status}
         </Text>
       </Box>
       {lines.map((line, i) => (

@@ -9,7 +9,7 @@ export function registerTemplate(program: Command): void {
 
   template
     .command('list')
-    .description('List built-in agent templates (GET /v1/agents/templates)')
+    .description('List built-in agent templates (GET /v1/templates)')
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
