@@ -202,8 +202,9 @@ export interface AgentTemplate {
 
 export interface ListAgentTemplatesResponse {
   templates: AgentTemplate[]
-  // The verbatim config of the run-on-demand `recent-work-summary` template
-  // behind the dashboard's first-run CTA, served alongside the gallery.
+  // The verbatim config of the run-on-demand template behind the dashboard's
+  // first-run CTA (`recent-work-summary`), served with the gallery so the hero
+  // can show the exact agent it starts.
   first_run_yaml: string
 }
 
