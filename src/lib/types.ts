@@ -286,6 +286,188 @@ export interface PutSandboxVariablesRequest {
   variables: SandboxVariableInput[]
 }
 
+// ------------------------------- analytics -------------------------------
+// Mirrors of the /v1/analytics/* responses (analytics_service.py) — the same
+// aggregation behind the app's /analytics dashboard, token-authed. The CLI
+// renders the leaderboards and totals; feed items and day buckets it only
+// passes through to --json are typed loosely.
+
+// Shared window params: explicit start/end (ISO timestamps) or a `days`
+// look-back (mutually exclusive with start; server default: last 30 days).
+export interface AnalyticsWindowQuery {
+  days?: number
+  start?: string
+  end?: string
+}
+
+// all = everyone, user = humans only, bot = apps/agents only.
+export type AnalyticsAccountType = 'all' | 'user' | 'bot'
+
+export interface AnalyticsMetricsQuery extends AnalyticsWindowQuery {
+  repo?: string[] // "owner/name"
+  author?: string[] // PR-author logins
+  account_type?: AnalyticsAccountType
+  status?: string[] // open | draft | merged | closed
+}
+
+// A person or app that reviewed PRs in the window.
+export interface ReviewerUsage {
+  login: string
+  avatar_url: string | null
+  reviews: number
+  approved: number
+  changes_requested: number
+  comments: number
+  lines_reviewed: number
+}
+
+// An author who merged a PR in the window.
+export interface ContributorUsage {
+  login: string
+  avatar_url: string | null
+  prs_merged: number
+  reviews: number
+  additions: number
+  deletions: number
+  ai_attributed_prs: number
+}
+
+export interface AnalyticsRepoUsage {
+  repo_full_name: string
+  prs_merged: number
+  reviews: number
+  active_contributors: number
+  ai_attributed_prs: number
+  additions: number
+  deletions: number
+}
+
+export interface AnalyticsMetricsTotals {
+  prs_opened: number
+  prs_merged: number
+  prs_closed: number
+  reviews: number
+  prs_reviewed: number
+  approved: number
+  changes_requested: number
+  commented: number
+  review_comments: number
+  additions: number
+  deletions: number
+  commits: number
+  active_contributors: number
+  open_prs: number
+  median_time_to_merge_hours: number
+  median_time_to_first_review_hours: number
+}
+
+export interface GetAnalyticsMetricsResponse {
+  series: Array<Record<string, unknown>>
+  totals: AnalyticsMetricsTotals
+  repositories: AnalyticsRepoUsage[]
+  contributors: ContributorUsage[]
+  reviewers: ReviewerUsage[]
+  available_repos: Array<{ repo_full_name: string; prs: number }>
+  available_authors: Array<{ login: string; prs: number }>
+}
+
+export interface AnalyticsPullRequestsQuery extends AnalyticsWindowQuery {
+  // Raw GithubAccountType strings ("User", "Bot"), unlike the metrics/reviews
+  // account_type enum — mirrors the backend filter.
+  account_type?: string[]
+  repository_id?: number[]
+  author_id?: number[]
+  status?: string[]
+}
+
+export interface PullRequestsDayBucket {
+  date: string
+  prs: number
+  prs_human: number
+  prs_bot: number
+  merged: number
+  closed: number
+  lines: number
+  lines_human: number
+  lines_bot: number
+  commits: number
+  commits_human: number
+  commits_bot: number
+  authors: number
+  authors_human: number
+  authors_bot: number
+  // merge_time percentiles pass through untyped.
+  [key: string]: unknown
+}
+
+export interface PullRequestsTotals {
+  prs: number
+  merged: number
+  lines: number
+  commits: number
+  active_authors: number
+  merge_time_p50_hours: number
+}
+
+export interface GetAnalyticsPullRequestsResponse {
+  series: PullRequestsDayBucket[]
+  totals: PullRequestsTotals
+  facets: Record<string, unknown>
+  recent: Array<Record<string, unknown>>
+  // True when the window hit the server's PR scan cap and figures undercount.
+  truncated: boolean
+}
+
+export interface AnalyticsReviewsQuery extends AnalyticsWindowQuery {
+  repo?: string[] // bare repo names (matching the review facet values)
+  author?: string[] // reviewer logins
+  account_type?: AnalyticsAccountType
+  review_state?: string[] // APPROVED | CHANGES_REQUESTED | COMMENTED | ...
+}
+
+export interface ReviewsDayBucket {
+  date: string
+  reviews: number
+  approved: number
+  commented: number
+  changes_requested: number
+  reviewers_human: number
+  reviewers_bot: number
+  reviewers_total: number
+  comments: number
+  comments_human: number
+  comments_bot: number
+}
+
+export interface ReviewsTotals {
+  reviews: number
+  reviewers: number
+  prs: number
+  comments: number
+  comments_human: number
+  comments_bot: number
+  thumbs_up: number
+  thumbs_down: number
+}
+
+export interface ReviewAuthorFacet {
+  login: string
+  avatar_url: string | null
+  account_type: string | null
+  reviews: number
+}
+
+export interface GetAnalyticsReviewsResponse {
+  reviews: Array<Record<string, unknown>>
+  review_comments: Array<Record<string, unknown>>
+  series: ReviewsDayBucket[]
+  totals: ReviewsTotals
+  facets: {
+    repos: Array<{ repository_name: string; reviews: number }>
+    authors: ReviewAuthorFacet[]
+  }
+}
+
 // ------------------------------ cli auth --------------------------------
 
 export interface CliAuthStart {

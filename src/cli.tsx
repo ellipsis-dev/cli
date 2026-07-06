@@ -7,6 +7,7 @@ import { registerSandbox } from './commands/sandbox'
 import { registerHooks } from './commands/hooks'
 import { registerTemplate } from './commands/template'
 import { registerUsage } from './commands/usage'
+import { registerAnalytics } from './commands/analytics'
 import { registerPing } from './commands/ping'
 import { VERSION } from './lib/constants'
 
@@ -25,6 +26,7 @@ registerSandbox(program)
 registerHooks(program)
 registerTemplate(program)
 registerUsage(program)
+registerAnalytics(program)
 registerPing(program)
 
 await program.parseAsync(process.argv)

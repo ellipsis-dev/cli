@@ -3,11 +3,17 @@ import { USER_AGENT } from './constants'
 import type {
   AgentSession,
   AgentTemplate,
+  AnalyticsMetricsQuery,
+  AnalyticsPullRequestsQuery,
+  AnalyticsReviewsQuery,
   BudgetSummary,
   CliAuthPoll,
   CliAuthStart,
   CreateAgentConfigRequest,
   CreatedAgentConfig,
+  GetAnalyticsMetricsResponse,
+  GetAnalyticsPullRequestsResponse,
+  GetAnalyticsReviewsResponse,
   GetSandboxVariablesResponse,
   ListAgentConfigsResponse,
   ListAgentSessionsQuery,
@@ -97,6 +103,44 @@ export class ApiClient {
 
   getUsage(): Promise<UsageDashboard> {
     return this.request('GET', '/v1/usage')
+  }
+
+  // ------------------------------- analytics ------------------------------
+  // GitHub PR + review analytics — the same aggregation behind the app's
+  // /analytics dashboard, scoped to the token's customer. Window: pass
+  // start/end or days (server default: the last 30 days).
+
+  getAnalyticsMetrics(
+    query?: AnalyticsMetricsQuery,
+  ): Promise<GetAnalyticsMetricsResponse> {
+    return this.request(
+      'GET',
+      '/v1/analytics/metrics',
+      undefined,
+      query as Record<string, unknown> | undefined,
+    )
+  }
+
+  getAnalyticsPullRequests(
+    query?: AnalyticsPullRequestsQuery,
+  ): Promise<GetAnalyticsPullRequestsResponse> {
+    return this.request(
+      'GET',
+      '/v1/analytics/pull-requests',
+      undefined,
+      query as Record<string, unknown> | undefined,
+    )
+  }
+
+  getAnalyticsReviews(
+    query?: AnalyticsReviewsQuery,
+  ): Promise<GetAnalyticsReviewsResponse> {
+    return this.request(
+      'GET',
+      '/v1/analytics/reviews',
+      undefined,
+      query as Record<string, unknown> | undefined,
+    )
   }
 
   // ---------------------------- agent sessions -----------------------------
