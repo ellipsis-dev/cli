@@ -7,20 +7,26 @@ import type {
   AnalyticsMetricsQuery,
   AnalyticsPullRequestsQuery,
   AnalyticsReviewsQuery,
+  AssetView,
   BudgetSummary,
   CliAuthPoll,
   CliAuthStart,
   CreateAgentConfigRequest,
+  CreateAssetRequest,
+  CreateAssetResponse,
   CreatedAgentConfig,
   GetAnalyticsMetricsResponse,
   GetAnalyticsPullRequestsResponse,
   GetAnalyticsReviewsResponse,
+  GetAssetResponse,
   GetIntegrationsResponse,
   GetSandboxVariablesResponse,
   ListAgentConfigsResponse,
   ListAgentSessionsQuery,
   ListAgentSessionsResponse,
   ListAgentTemplatesResponse,
+  ListAssetsQuery,
+  ListAssetsResponse,
   ListGithubMembersResponse,
   ListGithubRepositoriesResponse,
   ListLinearTeamsResponse,
@@ -152,6 +158,32 @@ export class ApiClient {
       undefined,
       query as Record<string, unknown> | undefined,
     )
+  }
+
+  // -------------------------------- assets --------------------------------
+  // Persist a file (v1: a PNG, base64 in the JSON body, ≤10 MiB) to the
+  // platform beyond the sandbox's lifetime. Returns the org-membership-gated
+  // dashboard URL to paste on a PR. Reads are scoped to the token's customer.
+
+  createAsset(req: CreateAssetRequest): Promise<CreateAssetResponse> {
+    return this.request('POST', '/v1/assets', req)
+  }
+
+  async listAssets(query?: ListAssetsQuery): Promise<AssetView[]> {
+    const res = await this.request<ListAssetsResponse>(
+      'GET',
+      '/v1/assets',
+      undefined,
+      query as Record<string, unknown> | undefined,
+    )
+    return res.assets
+  }
+
+  // Metadata + the gated dashboard `url` + a short-lived presigned
+  // `download_url`. Pull the bytes locally by GETting `download_url` right
+  // after this call — the JSON API never carries the file itself.
+  getAsset(assetId: string): Promise<GetAssetResponse> {
+    return this.request('GET', `/v1/assets/${encodeURIComponent(assetId)}`)
   }
 
   // ---------------------------- agent sessions -----------------------------

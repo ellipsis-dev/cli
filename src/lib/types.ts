@@ -675,6 +675,58 @@ export interface GetAnalyticsReviewsResponse {
   }
 }
 
+// -------------------------------- assets --------------------------------
+// Files an agent (or a customer via API key / user token) persists to the
+// platform beyond the sandbox's lifetime (assets_service.py). v1 is PNG
+// screenshots posted as org-membership-gated links on PRs.
+
+// Caller-facing metadata for a stored asset — no storage internals (customer
+// id, S3 key, sha).
+export interface AssetView {
+  id: string
+  filename: string
+  content_type: string
+  size_bytes: number
+  created_at: string
+  // The originating session when the upload came from a sandbox token.
+  agent_session_id?: string | null
+}
+
+// POST /v1/assets body. The bytes are base64-encoded; `content_type` must be
+// allowlisted (v1: "image/png") and match the decoded bytes' magic bytes.
+export interface CreateAssetRequest {
+  filename: string
+  content_type: string
+  data_b64: string
+}
+
+export interface CreateAssetResponse {
+  asset: AssetView
+  // The fully-formed gated dashboard URL (app root + /assets/{id}) — the link
+  // to paste into a PR comment. Returned so callers never hard-code the shape.
+  url: string
+}
+
+// GET /v1/assets query. Newest-first metadata for the token's customer;
+// `agent_session_id` scopes to one run's uploads, `limit` is clamped to 250.
+export interface ListAssetsQuery {
+  agent_session_id?: string
+  limit?: number
+}
+
+export interface ListAssetsResponse {
+  assets: AssetView[]
+}
+
+// GET /v1/assets/{asset_id}: metadata + the gated dashboard URL + a
+// short-lived presigned S3 GET. Fetch the bytes locally by GETting
+// `download_url` immediately after this call.
+export interface GetAssetResponse {
+  asset: AssetView
+  url: string
+  download_url: string
+}
+
 // ------------------------------ cli auth --------------------------------
 
 export interface CliAuthStart {
