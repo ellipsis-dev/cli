@@ -53,6 +53,10 @@ agent sandbox variable rm K       # delete a variable
 
 agent budget                      # current budget summary
 agent usage                       # usage dashboard for the period
+
+agent analytics reviewers --account-type bot   # which apps review the most PRs
+agent analytics prs --days 30     # PR volume/trend with human vs bot splits
+agent analytics reviews --repo my-service      # review totals + top reviewers
 agent ping                        # check authenticated /v1 connectivity
 ```
 

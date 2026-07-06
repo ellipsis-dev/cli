@@ -12,6 +12,7 @@ import { registerSlack } from './commands/slack'
 import { registerLinear } from './commands/linear'
 import { registerSentry } from './commands/sentry'
 import { registerUsage } from './commands/usage'
+import { registerAnalytics } from './commands/analytics'
 import { registerPing } from './commands/ping'
 import { VERSION } from './lib/constants'
 
@@ -35,6 +36,7 @@ registerSlack(program)
 registerLinear(program)
 registerSentry(program)
 registerUsage(program)
+registerAnalytics(program)
 registerPing(program)
 
 await program.parseAsync(process.argv)
