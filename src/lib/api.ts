@@ -7,11 +7,15 @@ import type {
   AnalyticsMetricsQuery,
   AnalyticsPullRequestsQuery,
   AnalyticsReviewsQuery,
+  AssetView,
   BudgetSummary,
   CliAuthPoll,
   CliAuthStart,
   CreateAgentConfigRequest,
+  CreateAssetRequest,
+  CreateAssetResponse,
   CreatedAgentConfig,
+  GetAssetResponse,
   GetAnalyticsMetricsResponse,
   GetAnalyticsPullRequestsResponse,
   GetAnalyticsReviewsResponse,
@@ -21,6 +25,8 @@ import type {
   ListAgentSessionsQuery,
   ListAgentSessionsResponse,
   ListAgentTemplatesResponse,
+  ListAssetsQuery,
+  ListAssetsResponse,
   ListGithubMembersResponse,
   ListGithubRepositoriesResponse,
   ListLinearTeamsResponse,
@@ -208,6 +214,34 @@ export class ApiClient {
 
   stopAgentSession(sessionId: string): Promise<AgentSession> {
     return this.request('POST', `/v1/sessions/${encodeURIComponent(sessionId)}/stop`)
+  }
+
+  // --------------------------------- assets --------------------------------
+  // Agent asset storage: persist a file to the platform and get back an
+  // org-membership-gated link (documents/eng/AGENT_ASSET_STORAGE.md in the
+  // ellipsis repo). v1 is PNG-only with a 10 MiB cap, enforced server-side.
+
+  uploadAsset(req: CreateAssetRequest): Promise<CreateAssetResponse> {
+    return this.request('POST', '/v1/assets', req)
+  }
+
+  // Newest-first metadata for the credential's customer's assets. Metadata
+  // only — presigned download URLs are minted per explicit getAsset.
+  async listAssets(query?: ListAssetsQuery): Promise<AssetView[]> {
+    const res = await this.request<ListAssetsResponse>(
+      'GET',
+      '/v1/assets',
+      undefined,
+      query as Record<string, unknown> | undefined,
+    )
+    return res.assets
+  }
+
+  // Metadata + the gated URL + a short-lived presigned `download_url`. To pull
+  // the bytes locally, GET download_url immediately (it expires in ~60s; if it
+  // lapses, just call this again for a fresh one).
+  getAsset(assetId: string): Promise<GetAssetResponse> {
+    return this.request('GET', `/v1/assets/${encodeURIComponent(assetId)}`)
   }
 
   // ----------------------------- agent configs ----------------------------

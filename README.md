@@ -47,6 +47,10 @@ agent slack members               # workspace members, with linked GitHub identi
 agent linear teams                # teams in the connected Linear organization
 agent sentry orgs                 # connected Sentry organizations
 
+agent asset upload shot.png       # store a PNG; prints an org-gated link to paste into a PR comment
+agent asset list                  # list stored assets (--session <id> scopes to one run's uploads)
+agent asset get <asset-id> -o shot.png   # show one asset, or download its bytes with -o
+
 agent sandbox variable list       # list sandbox env variable names (values are write-only)
 agent sandbox variable set A=1 B=2     # create/update variables (or --from-file .env/.json)
 agent sandbox variable rm K       # delete a variable

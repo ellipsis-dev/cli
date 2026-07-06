@@ -4,6 +4,7 @@ import { registerMe } from './commands/me'
 import { registerSession } from './commands/session'
 import { registerConfig } from './commands/config'
 import { registerSandbox } from './commands/sandbox'
+import { registerAsset } from './commands/asset'
 import { registerHooks } from './commands/hooks'
 import { registerTemplate } from './commands/template'
 import { registerIntegrations } from './commands/integrations'
@@ -28,6 +29,7 @@ registerMe(program)
 registerSession(program)
 registerConfig(program)
 registerSandbox(program)
+registerAsset(program)
 registerHooks(program)
 registerTemplate(program)
 registerIntegrations(program)

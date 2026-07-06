@@ -292,3 +292,67 @@ describe('createAgentConfig', () => {
     })
   })
 })
+
+describe('ApiClient assets', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('POSTs the upload payload and returns the gated URL', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            asset: { id: 'a1', filename: 'shot.png' },
+            url: 'https://app.ellipsis.dev/assets/a1',
+          }),
+          { status: 201 },
+        ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await new ApiClient('http://api.test', 't').uploadAsset({
+      filename: 'shot.png',
+      content_type: 'image/png',
+      data_b64: 'aGk=',
+    })
+    expect(out.url).toBe('https://app.ellipsis.dev/assets/a1')
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('http://api.test/v1/assets')
+    expect((init as RequestInit).method).toBe('POST')
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      filename: 'shot.png',
+      content_type: 'image/png',
+      data_b64: 'aGk=',
+    })
+  })
+
+  it('lists assets, unwrapping the envelope and passing filters as query', async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ assets: [{ id: 'a1' }] }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await new ApiClient('http://api.test', 't').listAssets({
+      agent_session_id: 'session_1',
+      limit: 5,
+    })
+    expect(out).toEqual([{ id: 'a1' }])
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'http://api.test/v1/assets?agent_session_id=session_1&limit=5',
+    )
+  })
+
+  it('URL-encodes the asset id on get', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ asset: { id: 'a/1' }, url: 'u', download_url: 'd' }),
+          { status: 200 },
+        ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await new ApiClient('http://api.test', 't').getAsset('a/1')
+    expect(out.download_url).toBe('d')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/assets/a%2F1')
+  })
+})
