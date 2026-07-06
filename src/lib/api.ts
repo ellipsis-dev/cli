@@ -2,6 +2,7 @@ import { resolveApiBase, resolveToken } from './config'
 import { USER_AGENT } from './constants'
 import type {
   AgentSession,
+  AgentStep,
   AgentTemplate,
   AnalyticsMetricsQuery,
   AnalyticsPullRequestsQuery,
@@ -14,14 +15,24 @@ import type {
   GetAnalyticsMetricsResponse,
   GetAnalyticsPullRequestsResponse,
   GetAnalyticsReviewsResponse,
+  GetIntegrationsResponse,
   GetSandboxVariablesResponse,
   ListAgentConfigsResponse,
   ListAgentSessionsQuery,
   ListAgentSessionsResponse,
   ListAgentTemplatesResponse,
+  ListGithubMembersResponse,
+  ListGithubRepositoriesResponse,
+  ListLinearTeamsResponse,
+  ListSentryOrganizationsResponse,
+  ListSessionStepsResponse,
+  ListSlackChannelsResponse,
+  ListSlackMembersResponse,
   ReplayAgentSessionRequest,
   SandboxVariableInput,
   SandboxVariableSummary,
+  SearchSessionsQuery,
+  SearchSessionsResponse,
   SyncAgentSessionRequest,
   SyncAgentSessionResponse,
   SavedAgentConfig,
@@ -163,6 +174,26 @@ export class ApiClient {
     return this.request('GET', `/v1/sessions/${encodeURIComponent(sessionId)}`)
   }
 
+  // Session-grouped search over step text, recap text, created PRs, and
+  // recap-embedding similarity. Each result says which arms matched.
+  searchSessions(query: SearchSessionsQuery): Promise<SearchSessionsResponse> {
+    return this.request(
+      'GET',
+      '/v1/sessions/search',
+      undefined,
+      query as unknown as Record<string, unknown>,
+    )
+  }
+
+  // The session's full stored transcript, ordered by created_at then step_index.
+  async getAgentSessionSteps(sessionId: string): Promise<AgentStep[]> {
+    const res = await this.request<ListSessionStepsResponse>(
+      'GET',
+      `/v1/sessions/${encodeURIComponent(sessionId)}/steps`,
+    )
+    return res.steps
+  }
+
   syncAgentSession(req: SyncAgentSessionRequest): Promise<SyncAgentSessionResponse> {
     return this.request('POST', '/v1/sessions/sync', req)
   }
@@ -238,6 +269,39 @@ export class ApiClient {
     return this.request('GET', `/v1/templates/${encodeURIComponent(slug)}`)
   }
 
+  // ------------------------ integration discovery -------------------------
+  // Read-only views of what's connected for the account. Slack and Linear
+  // listings 404 when that integration isn't connected; GitHub always works
+  // (an Ellipsis account is a GitHub account) and Sentry returns an empty list.
+
+  getIntegrations(): Promise<GetIntegrationsResponse> {
+    return this.request('GET', '/v1/integrations')
+  }
+
+  listGithubRepositories(): Promise<ListGithubRepositoriesResponse> {
+    return this.request('GET', '/v1/github/repos')
+  }
+
+  listGithubMembers(): Promise<ListGithubMembersResponse> {
+    return this.request('GET', '/v1/github/members')
+  }
+
+  listSlackChannels(): Promise<ListSlackChannelsResponse> {
+    return this.request('GET', '/v1/slack/channels')
+  }
+
+  listSlackMembers(): Promise<ListSlackMembersResponse> {
+    return this.request('GET', '/v1/slack/members')
+  }
+
+  listLinearTeams(): Promise<ListLinearTeamsResponse> {
+    return this.request('GET', '/v1/linear/teams')
+  }
+
+  listSentryOrganizations(): Promise<ListSentryOrganizationsResponse> {
+    return this.request('GET', '/v1/sentry/organizations')
+  }
+
   // --------------------------- device-code auth ---------------------------
   // Unauthenticated: the CLI has no credential yet — that's what it's obtaining.
 
@@ -247,6 +311,22 @@ export class ApiClient {
 
   pollCliAuth(deviceCode: string): Promise<CliAuthPoll> {
     return this.request('POST', '/v1/cli-auth/poll', { device_code: deviceCode })
+  }
+}
+
+// Await a provider listing, mapping its 404 (Slack/Linear not connected for
+// this account) to a short friendly error instead of the raw HTTP failure.
+// Anything else propagates unchanged.
+export async function requireConnected<T>(provider: string, call: Promise<T>): Promise<T> {
+  try {
+    return await call
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) {
+      throw new Error(
+        `${provider} is not connected. Connect it in the Ellipsis dashboard, then retry.`,
+      )
+    }
+    throw err
   }
 }
 

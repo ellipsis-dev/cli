@@ -5,7 +5,8 @@ import { ApiClient } from '../lib/api'
 import { resolveAppBase } from '../lib/config'
 import { formatTs, printJson, printTable, printYaml, runAction } from '../lib/output'
 import { configUrl } from '../lib/urls'
-import type { SavedAgentConfig } from '../lib/types'
+import { readConfigFile } from './session'
+import type { CreateAgentConfigRequest, SavedAgentConfig } from '../lib/types'
 
 const DEFAULT_CONFIG_PATH = 'agents/my_agent.yaml'
 
@@ -58,6 +59,58 @@ export function registerConfig(program: Command): void {
         console.error(`\nview: ${configUrl(resolveAppBase(), me.customer_login, configId)}`)
       })
     })
+
+  // Create an agent the same way the dashboard does: Ellipsis opens a pull
+  // request adding the config YAML to the repo, and the agent goes live when
+  // it merges. Distinct from `config init`, which scaffolds a local file.
+  config
+    .command('create')
+    .description('Create an agent by opening a pull request with its config (POST /v1/configs)')
+    .requiredOption(
+      '--repo <name>',
+      'repository name in your account to open the pull request against',
+    )
+    .option('-f, --file <path>', 'agent config file (.yaml/.yml or .json) to add')
+    .option(
+      '--template <slug>',
+      'create from an Ellipsis template instead of a file (see `agent template list`)',
+    )
+    .option(
+      '--path <path>',
+      'file path within the repo for the config (default: agents/<slug>.yaml; must be a synced location)',
+    )
+    .option('--json', 'output raw JSON')
+    .action(
+      async (opts: {
+        repo: string
+        file?: string
+        template?: string
+        path?: string
+        json?: boolean
+      }) => {
+        await runAction(async () => {
+          // The server enforces "exactly one of config / template_id";
+          // pre-check locally for a clearer error than a bare 400.
+          if (!opts.file === !opts.template) {
+            throw new Error('provide exactly one of --file <path> or --template <slug>')
+          }
+          const req: CreateAgentConfigRequest = {
+            repository: opts.repo,
+            path: opts.path,
+          }
+          if (opts.file) req.config = readConfigFile(opts.file)
+          if (opts.template) req.template_id = opts.template
+          const created = await new ApiClient().createAgentConfig(req)
+          if (opts.json) {
+            printJson(created)
+            return
+          }
+          console.log(`✓ opened a pull request adding the agent (${created.path})`)
+          console.log(created.pull_request_url)
+          console.log('Merge it to deploy the agent.')
+        })
+      },
+    )
 
   config
     .command('init [path]')

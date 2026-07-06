@@ -26,14 +26,26 @@ agent session start --config-file f.json   # ...or from an inline config
 agent session start --template welcome-to-ellipsis   # ...or from a maintained template
 agent session start --config <id> --config-override "limits:\n  run: 5"  # override config fields for this session
 agent session start --config <id> --watch  # start and immediately stream it
-agent session list --limit 20         # list recent sessions (filter by --source, --days, …)
+agent session list --limit 20         # list recent sessions (filter by --source, --author, --days, …)
+agent session search "webhook retries"   # search session history: transcripts, recaps, created PRs, similarity
+agent session search "acme/api#512" --author tony --since "3 days ago"   # PR-shaped queries and facets
 agent session get <session-id>        # inspect one session (prints a dashboard link)
 agent session get <session-id> --watch  # follow a session until it finishes
+agent session steps <session-id>      # read a session's stored transcript, one line per step
 agent session stop <session-id>       # stop an in-flight session
 
 agent config list                 # list saved agent configs
 agent config get <config-id>      # show one config as YAML (-o json for JSON)
 agent config init [path]          # scaffold a starter config (default: agents/my_agent.yaml)
+agent config create --repo api --file agents/foo.yaml   # create an agent via a pull request (or --template <slug>)
+
+agent integrations                # every connected integration in one table
+agent github repos                # repositories connected to the GitHub installation
+agent github members              # org roster (the logins/ids --author accepts), with linked Slack identities
+agent slack channels              # channels in the connected Slack workspace
+agent slack members               # workspace members, with linked GitHub identities
+agent linear teams                # teams in the connected Linear organization
+agent sentry orgs                 # connected Sentry organizations
 
 agent sandbox variable list       # list sandbox env variable names (values are write-only)
 agent sandbox variable set A=1 B=2     # create/update variables (or --from-file .env/.json)
@@ -143,7 +155,8 @@ scoped to that one repo only — no account-wide PAT involved.
 
 ### Status
 
-The full `/v1` REST surface (auth, sessions, configs, budget/usage) is wired
-against the live API, including live WebSocket streaming and `session stop`.
+The full `/v1` REST surface (auth, sessions, session search/steps, configs,
+integration discovery, budget/usage) is wired against the live API, including
+live WebSocket streaming and `session stop`.
 Still pending: replacing the hand-rolled request/response types with the
 generated `@ellipsis/sdk` package.

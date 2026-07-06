@@ -260,6 +260,213 @@ export interface ListAgentSessionsQuery {
   start?: string
   end?: string
   limit?: number
+  // A GitHub account id (GET /v1/github/members); scopes the list to sessions
+  // attributed to that developer. The CLI resolves it from a --author login.
+  author_id?: number
+}
+
+// ------------------------------ session steps ----------------------------
+
+// One stored transcript event, from GET /v1/sessions/{id}/steps. Loosely
+// typed: `data` is the raw Claude Code stream event (assistant turn, tool
+// call, tool result, final result); the CLI only extracts display text.
+export interface AgentStep {
+  id: string
+  created_at: string
+  step_index: number
+  step_type: string
+  step_subtype: string | null
+  data: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface ListSessionStepsResponse {
+  steps: AgentStep[]
+}
+
+// ----------------------------- session search ----------------------------
+
+export type SessionSearchScope = 'steps' | 'recaps' | 'both'
+
+export interface SearchSessionsQuery {
+  q: string
+  scope?: SessionSearchScope
+  source?: AgentSessionSource[]
+  author_id?: number[]
+  agent_config_id?: string[]
+  session_ids?: string[]
+  repo?: string
+  status?: AgentSessionStatus[]
+  start?: string
+  end?: string
+  limit?: number
+}
+
+// One agent step matching the search, denormalized with enough session
+// context to render a result row (backend LogSearchHit).
+export interface StepSearchHit {
+  step_id: string
+  agent_session_id: string
+  step_index: number
+  step_type: string
+  step_subtype: string | null
+  created_at: string
+  snippet: string
+  [key: string]: unknown
+}
+
+// One search result session. `matched` lists which arms hit:
+// "steps" | "recap" | "pr" | "similar".
+export interface SessionSearchResult {
+  session: AgentSession
+  matched: string[]
+  recap_snippet: string | null
+  step_hits: StepSearchHit[]
+  // Total step hits within the search window; may exceed step_hits.length
+  // (which the server caps), so "and N more" can render.
+  step_hit_count: number
+}
+
+// The GITHUB_USER attributions among the results, keyed by attribution_id, so
+// the CLI can show author logins without a second lookup.
+export interface GithubAccountSnippet {
+  id: number
+  login: string
+  type: string
+  avatar_url: string
+}
+
+export interface SearchSessionsResponse {
+  results: SessionSearchResult[]
+  attributed_users: Record<string, GithubAccountSnippet>
+}
+
+// -------------------------- integration discovery ------------------------
+// Read-only views of what's connected for the account (GET /v1/integrations
+// and the per-provider listings). Responses never include secrets.
+
+export interface GithubIntegrationSummary {
+  account_login: string
+  account_type: string
+  repository_selection: 'all' | 'selected'
+  suspended: boolean
+  repository_count: number
+}
+
+export interface SlackIntegrationSummary {
+  team_id: string
+  team_name: string
+  operations_channel_id: string | null
+}
+
+export interface LinearTeamSummary {
+  id: string
+  name: string
+  key: string | null
+  // Whether Ellipsis is enabled for this team.
+  is_enabled: boolean
+}
+
+export interface LinearIntegrationSummary {
+  organization_id: string
+  teams: LinearTeamSummary[]
+}
+
+export interface JiraIntegrationSummary {
+  cloud_id: string
+}
+
+export interface SentryOrganizationSummary {
+  integration_id: string
+  organization_slug: string
+}
+
+// A key is null (or an empty list for sentry) when that integration is not
+// connected, so the response always shows the full universe of integrations.
+export interface GetIntegrationsResponse {
+  github: GithubIntegrationSummary | null
+  slack: SlackIntegrationSummary | null
+  linear: LinearIntegrationSummary | null
+  jira: JiraIntegrationSummary | null
+  sentry: SentryOrganizationSummary[]
+}
+
+// A repository connected to the installation: a valid `repository` for
+// POST /v1/configs and for repository lists in an agent config.
+export interface RepositorySummary {
+  id: number
+  name: string
+  full_name: string
+  private: boolean
+  default_branch: string | null
+  description: string | null
+}
+
+export interface ListGithubRepositoriesResponse {
+  repositories: RepositorySummary[]
+}
+
+export interface LinkedSlackIdentity {
+  slack_user_id: string
+  slack_email: string | null
+}
+
+export interface LinkedGithubIdentity {
+  id: number
+  login: string | null
+}
+
+// An org member (or the account itself for a personal customer). `id` is the
+// universe of author_id values for session list/search queries.
+export interface GithubMemberSummary {
+  id: number
+  login: string | null
+  name: string | null
+  avatar_url: string | null
+  // null for a personal (user) account, which has no org roles.
+  role: string | null
+  slack: LinkedSlackIdentity | null
+}
+
+export interface ListGithubMembersResponse {
+  members: GithubMemberSummary[]
+}
+
+export interface SlackMemberSummary {
+  id: string
+  name: string | null
+  real_name: string | null
+  display_name: string | null
+  email: string | null
+  github: LinkedGithubIdentity | null
+}
+
+export interface ListSlackMembersResponse {
+  team_id: string
+  team_name: string
+  members: SlackMemberSummary[]
+}
+
+export interface SlackChannelSummary {
+  id: string
+  name: string | null
+  is_private: boolean | null
+  is_member: boolean | null
+}
+
+export interface ListSlackChannelsResponse {
+  team_id: string
+  team_name: string
+  channels: SlackChannelSummary[]
+}
+
+export interface ListLinearTeamsResponse {
+  organization_id: string
+  teams: LinearTeamSummary[]
+}
+
+export interface ListSentryOrganizationsResponse {
+  organizations: SentryOrganizationSummary[]
 }
 
 // -------------------------- sandbox variables ---------------------------
