@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { collect, collectKeyValue, toInt } from '../src/lib/args'
+import {
+  collect,
+  collectKeyValue,
+  collectSource,
+  collectStatus,
+  parseScope,
+  parseWhen,
+  toInt,
+} from '../src/lib/args'
 
 describe('toInt', () => {
   it('parses base-10 integers', () => {
@@ -40,5 +48,48 @@ describe('collectKeyValue', () => {
 
   it('rejects values without an =', () => {
     expect(() => collectKeyValue('novalue', {})).toThrow(/key=value/)
+  })
+})
+
+describe('collectSource / collectStatus / parseScope', () => {
+  it('accumulate valid values like collect', () => {
+    expect(collectSource('cli', collectSource('laptop', []))).toEqual(['laptop', 'cli'])
+    expect(collectStatus('completed', [])).toEqual(['completed'])
+    expect(parseScope('recaps')).toBe('recaps')
+  })
+
+  it('reject unknown values listing the valid ones', () => {
+    expect(() => collectSource('slack', [])).toThrow(/source must be one of: laptop, react/)
+    expect(() => collectStatus('done', [])).toThrow(/status must be one of: scheduled/)
+    expect(() => parseScope('all')).toThrow(/scope must be one of: steps, recaps, both/)
+  })
+})
+
+describe('parseWhen', () => {
+  // Fixed reference instant so the natural forms resolve deterministically.
+  const now = new Date('2026-07-06T15:30:00')
+
+  it('passes ISO 8601 timestamps through verbatim', () => {
+    expect(parseWhen('2026-07-01T00:00:00+00:00', now)).toBe('2026-07-01T00:00:00+00:00')
+    expect(parseWhen('2026-07-01', now)).toBe('2026-07-01')
+  })
+
+  it('resolves natural forms to the start of that day', () => {
+    const startOfDay = (daysBack: number): string => {
+      const d = new Date(now)
+      d.setDate(d.getDate() - daysBack)
+      d.setHours(0, 0, 0, 0)
+      return d.toISOString()
+    }
+    expect(parseWhen('today', now)).toBe(startOfDay(0))
+    expect(parseWhen('yesterday', now)).toBe(startOfDay(1))
+    expect(parseWhen('3 days ago', now)).toBe(startOfDay(3))
+    expect(parseWhen('1 day ago', now)).toBe(startOfDay(1))
+    expect(parseWhen('YESTERDAY', now)).toBe(startOfDay(1)) // case-insensitive
+  })
+
+  it('rejects anything else', () => {
+    expect(() => parseWhen('last tuesday', now)).toThrow(/ISO 8601/)
+    expect(() => parseWhen('', now)).toThrow(/ISO 8601/)
   })
 })
