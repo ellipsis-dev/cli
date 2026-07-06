@@ -21,6 +21,75 @@ export function toInt(value: string): number {
   return n
 }
 
+// Values the server accepts for the session facets, mirrored here so a typo
+// fails fast with the full list instead of a server-side 422.
+export const SESSION_SOURCES = [
+  'laptop',
+  'react',
+  'manual',
+  'api',
+  'cli',
+  'mention',
+  'cron',
+] as const
+
+export const SESSION_STATUSES = [
+  'scheduled',
+  'creating_sandbox',
+  'running',
+  'retrying',
+  'completed',
+  'error',
+  'cancelled',
+  'stopped',
+] as const
+
+export const SEARCH_SCOPES = ['steps', 'recaps', 'both'] as const
+
+function oneOf(kind: string, allowed: readonly string[], value: string): string {
+  if (!allowed.includes(value)) {
+    throw new InvalidArgumentError(`${kind} must be one of: ${allowed.join(', ')}`)
+  }
+  return value
+}
+
+// Repeatable, validated variants of `collect` for the search facets.
+export function collectSource(value: string, previous: string[]): string[] {
+  return [...previous, oneOf('source', SESSION_SOURCES, value)]
+}
+
+export function collectStatus(value: string, previous: string[]): string[] {
+  return [...previous, oneOf('status', SESSION_STATUSES, value)]
+}
+
+export function parseScope(value: string): string {
+  return oneOf('scope', SEARCH_SCOPES, value)
+}
+
+// Parse a time-window flag: an ISO 8601 timestamp passed through verbatim, or
+// the natural forms "today", "yesterday", and "N days ago" resolved to the
+// start of that day (local time). `now` is injectable for tests.
+export function parseWhen(value: string, now: Date = new Date()): string {
+  const text = value.trim().toLowerCase()
+  let daysBack: number | undefined
+  if (text === 'today') daysBack = 0
+  if (text === 'yesterday') daysBack = 1
+  const match = text.match(/^(\d+) days? ago$/)
+  if (match) daysBack = Number(match[1])
+  if (daysBack !== undefined) {
+    const day = new Date(now)
+    day.setDate(day.getDate() - daysBack)
+    day.setHours(0, 0, 0, 0)
+    return day.toISOString()
+  }
+  if (Number.isNaN(Date.parse(value))) {
+    throw new InvalidArgumentError(
+      `expected an ISO 8601 timestamp, "today", "yesterday", or "N days ago", got "${value}"`,
+    )
+  }
+  return value
+}
+
 // Accumulate repeated `key=value` options into an object.
 export function collectKeyValue(
   value: string,

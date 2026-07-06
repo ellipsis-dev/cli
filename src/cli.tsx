@@ -6,6 +6,11 @@ import { registerConfig } from './commands/config'
 import { registerSandbox } from './commands/sandbox'
 import { registerHooks } from './commands/hooks'
 import { registerTemplate } from './commands/template'
+import { registerIntegrations } from './commands/integrations'
+import { registerGithub } from './commands/github'
+import { registerSlack } from './commands/slack'
+import { registerLinear } from './commands/linear'
+import { registerSentry } from './commands/sentry'
 import { registerUsage } from './commands/usage'
 import { registerPing } from './commands/ping'
 import { VERSION } from './lib/constants'
@@ -24,6 +29,11 @@ registerConfig(program)
 registerSandbox(program)
 registerHooks(program)
 registerTemplate(program)
+registerIntegrations(program)
+registerGithub(program)
+registerSlack(program)
+registerLinear(program)
+registerSentry(program)
 registerUsage(program)
 registerPing(program)
 

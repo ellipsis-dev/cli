@@ -5,8 +5,23 @@ import { gzipSync } from 'node:zlib'
 import { parse as parseYaml } from 'yaml'
 import { ApiClient } from '../lib/api'
 import { requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
-import { formatTs, printJson, printTable, runAction, usdFromMillicents } from '../lib/output'
-import { collect, collectKeyValue, toInt } from '../lib/args'
+import {
+  formatTs,
+  printJson,
+  printTable,
+  relativeAge,
+  runAction,
+  usdFromMillicents,
+} from '../lib/output'
+import {
+  collect,
+  collectKeyValue,
+  collectSource,
+  collectStatus,
+  parseScope,
+  parseWhen,
+  toInt,
+} from '../lib/args'
 import { sessionUrl } from '../lib/urls'
 import {
   resolveWsBase,
@@ -19,7 +34,11 @@ import type {
   AgentSession,
   AgentSessionSource,
   AgentSessionStatus,
+  AgentStep,
+  GithubAccountSnippet,
   ReplayAgentSessionRequest,
+  SessionSearchResult,
+  SessionSearchScope,
   StartAgentSessionRequest,
   SyncAgentSessionRequest,
 } from '../lib/types'
@@ -149,6 +168,10 @@ export function registerSession(program: Command): void {
     .description('List recent agent sessions (GET /v1/sessions)')
     .option('-c, --config-id <id>', 'filter by config id')
     .option('-s, --source <source>', 'filter by source (repeatable)', collect, [] as string[])
+    .option(
+      '-a, --author <login>',
+      'only sessions attributed to this developer (a GitHub login, see `agent github members`)',
+    )
     .option('-d, --days <n>', 'look back N days', toInt)
     .option('--start <iso>', 'start of the time window (ISO 8601)')
     .option('--end <iso>', 'end of the time window (ISO 8601)')
@@ -158,6 +181,7 @@ export function registerSession(program: Command): void {
       async (opts: {
         configId?: string
         source: string[]
+        author?: string
         days?: number
         start?: string
         end?: string
@@ -165,9 +189,11 @@ export function registerSession(program: Command): void {
         json?: boolean
       }) => {
         await runAction(async () => {
-          const sessions = await new ApiClient().listAgentSessions({
+          const api = new ApiClient()
+          const sessions = await api.listAgentSessions({
             config_id: opts.configId,
             source: opts.source.length ? (opts.source as AgentSessionSource[]) : undefined,
+            author_id: opts.author ? await resolveAuthorId(api, opts.author) : undefined,
             days: opts.days,
             start: opts.start,
             end: opts.end,
@@ -196,6 +222,108 @@ export function registerSession(program: Command): void {
         })
       },
     )
+
+  session
+    .command('search <query>')
+    .description(
+      'Search sessions by transcript text, recap text, created PR, or similarity (GET /v1/sessions/search)',
+    )
+    .addHelpText(
+      'after',
+      '\nA PR-shaped query ("#512", "acme/api#512", or a pull request URL) also finds the ' +
+        'session that created that exact pull request.\n' +
+        'Sources: laptop, react, manual, api, cli, mention, cron. ' +
+        '--since/--until accept ISO 8601 or "today", "yesterday", "N days ago".',
+    )
+    .option(
+      '-a, --author <login>',
+      'only sessions attributed to this developer (a GitHub login, see `agent github members`)',
+    )
+    .option('--agent <config-id>', 'only sessions run by this agent config (repeatable)', collect, [] as string[])
+    .option('-s, --source <source>', 'filter by source (repeatable)', collectSource, [] as string[])
+    .option('-r, --repo <name>', 'only sessions on this repository ("owner/name" or a bare name)')
+    .option('--status <status>', 'filter by session status (repeatable)', collectStatus, [] as string[])
+    .option('--scope <scope>', 'what to search: steps, recaps, or both', parseScope, 'both')
+    .option('--session <id>', 'restrict the search to this session (repeatable)', collect, [] as string[])
+    .option('--since <when>', 'only sessions at or after this time', (v: string) => parseWhen(v))
+    .option('--until <when>', 'only sessions at or before this time', (v: string) => parseWhen(v))
+    .option('-l, --limit <n>', 'max result sessions (up to 100)', toInt, 20)
+    .option('--json', 'output raw JSON')
+    .action(
+      async (
+        query: string,
+        opts: {
+          author?: string
+          agent: string[]
+          source: string[]
+          repo?: string
+          status: string[]
+          scope: string
+          session: string[]
+          since?: string
+          until?: string
+          limit: number
+          json?: boolean
+        },
+      ) => {
+        await runAction(async () => {
+          const api = new ApiClient()
+          const authorId = opts.author ? await resolveAuthorId(api, opts.author) : undefined
+          const res = await api.searchSessions({
+            q: query,
+            scope: opts.scope as SessionSearchScope,
+            source: opts.source.length ? (opts.source as AgentSessionSource[]) : undefined,
+            author_id: authorId === undefined ? undefined : [authorId],
+            agent_config_id: opts.agent.length ? opts.agent : undefined,
+            session_ids: opts.session.length ? opts.session : undefined,
+            repo: opts.repo,
+            status: opts.status.length ? (opts.status as AgentSessionStatus[]) : undefined,
+            start: opts.since,
+            end: opts.until,
+            limit: opts.limit,
+          })
+          if (opts.json) {
+            printJson(res)
+            return
+          }
+          if (res.results.length === 0) {
+            console.log('No matching sessions found.')
+            return
+          }
+          for (const result of res.results) {
+            for (const line of formatSearchResult(result, res.attributed_users)) {
+              console.log(line)
+            }
+          }
+          console.log(
+            '\nInspect one: agent session get <id>; full transcript: agent session steps <id>',
+          )
+        })
+      },
+    )
+
+  session
+    .command('steps <sessionId>')
+    .description("Read a session's stored transcript (GET /v1/sessions/{id}/steps)")
+    .option('--json', 'output raw JSON (full step payloads)')
+    .action(async (sessionId: string, opts: { json?: boolean }) => {
+      await runAction(async () => {
+        const steps = await new ApiClient().getAgentSessionSteps(sessionId)
+        if (opts.json) {
+          printJson(steps)
+          return
+        }
+        if (steps.length === 0) {
+          console.log('No steps recorded for this session.')
+          return
+        }
+        // Chronological, one line per step; --json has the full payloads.
+        const ordered = [...steps].sort(
+          (a, b) => a.created_at.localeCompare(b.created_at) || a.step_index - b.step_index,
+        )
+        for (const step of ordered) console.log(formatStepLine(step))
+      })
+    })
 
   session
     .command('get <sessionId>')
@@ -570,6 +698,106 @@ function readMappingFile(path: string, label: string): Record<string, unknown> {
     const kind = ext === '.json' ? 'JSON' : 'YAML'
     throw new Error(`could not parse ${kind} ${label} file ${path}: ${(err as Error).message}`)
   }
+}
+
+// Resolve a --author GitHub login to the account id the API filters by
+// (author_id on GET /v1/sessions and /v1/sessions/search), via the org roster.
+// An unknown login fails with the known logins so the user can self-correct.
+export async function resolveAuthorId(api: ApiClient, login: string): Promise<number> {
+  const { members } = await api.listGithubMembers()
+  const member = members.find((m) => m.login?.toLowerCase() === login.toLowerCase())
+  if (member) return member.id
+  const known = members.flatMap((m) => (m.login ? [m.login] : [])).join(', ')
+  throw new Error(
+    `no GitHub member with login "${login}"` +
+      (known ? ` (known logins: ${known})` : ''),
+  )
+}
+
+// One search result as display lines: a header (id, status, author, age,
+// matched arms), then the best snippet indented. The recap snippet wins over
+// step hits when both matched; step_hit_count renders as a trailing count so
+// "many hits" is visible without dumping every step. Exported for tests.
+export function formatSearchResult(
+  result: SessionSearchResult,
+  users: Record<string, GithubAccountSnippet>,
+  now: Date = new Date(),
+): string[] {
+  const s = result.session
+  const author = s.attribution_id ? users[String(s.attribution_id)]?.login : undefined
+  const header = [
+    s.id,
+    s.status,
+    ...(author ? [author] : []),
+    relativeAge(s.created_at, now),
+    `matched: ${result.matched.join(', ')}`,
+  ].join('  ')
+  const lines = [header]
+  const snippet = result.recap_snippet ?? result.step_hits[0]?.snippet
+  if (snippet) lines.push(`    ${oneLine(snippet, 200)}`)
+  if (result.step_hit_count > 1) {
+    lines.push(`    ${result.step_hit_count} matching steps`)
+  }
+  return lines
+}
+
+// One transcript step as a single display line: index, timestamp, step type,
+// and the first ~120 characters of its text content. Exported for tests.
+export function formatStepLine(step: AgentStep): string {
+  const type = step.step_subtype ? `${step.step_type}/${step.step_subtype}` : step.step_type
+  return [
+    String(step.step_index).padStart(4),
+    formatTs(step.created_at),
+    type.padEnd(16),
+    oneLine(stepText(step), 120),
+  ].join('  ')
+}
+
+// A content block of a Claude Code stream event, typed loosely: the CLI only
+// extracts display text and names, never interprets the payload.
+interface StepContentBlock {
+  type?: string
+  text?: string
+  thinking?: string
+  name?: string
+  input?: unknown
+  content?: unknown
+}
+
+// Best-effort display text for a stored step. `data` is the raw Claude Code
+// stream event: a result step carries `result`, assistant/user steps carry an
+// API message whose content is a string or a list of blocks (text, thinking,
+// tool_use, tool_result). Anything unrecognized falls back to its JSON.
+export function stepText(step: AgentStep): string {
+  const data = step.data ?? {}
+  if (typeof data.result === 'string') return data.result
+  const message = data.message as { content?: unknown } | undefined
+  const text = contentText(message?.content)
+  if (text) return text
+  return JSON.stringify(data)
+}
+
+function contentText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  const parts: string[] = []
+  for (const block of content as StepContentBlock[]) {
+    if (typeof block.text === 'string' && block.text) parts.push(block.text)
+    else if (typeof block.thinking === 'string' && block.thinking) parts.push(block.thinking)
+    else if (block.type === 'tool_use') {
+      parts.push(`[tool: ${block.name ?? '?'}] ${JSON.stringify(block.input ?? {})}`)
+    } else if (block.type === 'tool_result') {
+      const inner = contentText(block.content)
+      parts.push(inner || JSON.stringify(block.content ?? ''))
+    }
+  }
+  return parts.join(' ')
+}
+
+// Collapse whitespace/newlines to one displayable line, truncated to `max`.
+function oneLine(text: string, max: number): string {
+  const collapsed = text.replace(/\s+/g, ' ').trim()
+  return collapsed.length <= max ? collapsed : `${collapsed.slice(0, max - 3)}...`
 }
 
 function sleep(ms: number): Promise<void> {
