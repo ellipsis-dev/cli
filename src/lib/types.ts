@@ -107,6 +107,10 @@ export interface AgentSession {
   status_reason: string | null
   source?: AgentSessionSource
   agent_config_id: string | null
+  // Durable-conversation identity (stateful sessions): a keyed session runs
+  // the cloud session loop and accepts /messages; null = single-shot.
+  session_key?: string | null
+  session_state?: 'idle' | 'running' | 'closed' | null
   cost_tokens: number
   cost_sandbox_cpu: number
   cost_sandbox_memory: number
@@ -135,6 +139,12 @@ export interface SavedAgentConfig {
 export type AgentConfig = Record<string, unknown>
 
 // --------------------------- request / response -------------------------
+
+// Body of POST /v1/sessions/{id}/messages (`agent session connect`): a human
+// message appended to a durable session's inbox.
+export interface SendSessionMessageRequest {
+  message: string
+}
 
 // Laptop -> cloud handoff params: start a fresh session on the built-in
 // handoff config, chained to the handed-off session (parent_kind=handoff).

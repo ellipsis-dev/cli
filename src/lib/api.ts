@@ -35,6 +35,7 @@ import type {
   ListSlackChannelsResponse,
   ListSlackMembersResponse,
   ReplayAgentSessionRequest,
+  SendSessionMessageRequest,
   SandboxVariableInput,
   SandboxVariableSummary,
   SearchSessionsQuery,
@@ -214,6 +215,16 @@ export class ApiClient {
 
   stopAgentSession(sessionId: string): Promise<AgentSession> {
     return this.request('POST', `/v1/sessions/${encodeURIComponent(sessionId)}/stop`)
+  }
+
+  // Post a human message into a durable (keyed) session's conversation. The
+  // inbox delivers it to the agent's Claude Code stdin at the next turn
+  // boundary, or wakes the session when idle. 409 for single-shot / closed
+  // sessions (no inbox loop to attend it).
+  sendSessionMessage(sessionId: string, message: string): Promise<AgentSession> {
+    return this.request('POST', `/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
+      message,
+    } satisfies SendSessionMessageRequest)
   }
 
   // --------------------------------- assets --------------------------------
