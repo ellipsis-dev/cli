@@ -34,6 +34,7 @@ import type {
   ListLinearTeamsResponse,
   ListSentryOrganizationsResponse,
   ListSessionStepsResponse,
+  ListSessionTranscriptsResponse,
   ListSlackChannelsResponse,
   ListSlackMembersResponse,
   ReplayAgentSessionRequest,
@@ -201,6 +202,16 @@ export class ApiClient {
       `/v1/sessions/${encodeURIComponent(sessionId)}/steps`,
     )
     return res.steps
+  }
+
+  // The session's raw transcripts — one .jsonl.gz per process — each with a
+  // short-lived presigned download URL. Fetch the URL immediately; the JSON
+  // API never carries the bytes.
+  getSessionTranscripts(sessionId: string): Promise<ListSessionTranscriptsResponse> {
+    return this.request(
+      'GET',
+      `/v1/sessions/${encodeURIComponent(sessionId)}/transcripts`,
+    )
   }
 
   syncAgentSession(req: SyncAgentSessionRequest): Promise<SyncAgentSessionResponse> {

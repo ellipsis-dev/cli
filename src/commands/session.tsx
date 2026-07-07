@@ -1,7 +1,7 @@
 import type { Command } from 'commander'
-import { existsSync, readFileSync } from 'node:fs'
-import { extname } from 'node:path'
-import { gzipSync } from 'node:zlib'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { extname, join } from 'node:path'
+import { gunzipSync, gzipSync } from 'node:zlib'
 import { parse as parseYaml } from 'yaml'
 import { ApiClient } from '../lib/api'
 import { requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
@@ -39,6 +39,7 @@ import type {
   ReplayAgentSessionRequest,
   SessionSearchResult,
   SessionSearchScope,
+  SessionTranscript,
   StartAgentSessionRequest,
   SyncAgentSessionRequest,
 } from '../lib/types'
@@ -331,6 +332,76 @@ export function registerSession(program: Command): void {
         for (const step of ordered) console.log(formatStepLine(step))
       })
     })
+
+  session
+    .command('transcript <sessionId>')
+    .description(
+      "Download a session's raw transcript files (GET /v1/sessions/{id}/transcripts)",
+    )
+    .option('-o, --output <path>', 'write to a file instead of stdout')
+    .option('--process <processId>', 'pick a specific process (retries have several)')
+    .option('--all', "download every process's transcript")
+    .option('-d, --dir <dir>', 'directory for --all downloads', '.')
+    .option('--json', 'print the metadata response (incl. download URLs), download nothing')
+    .option('--gzip', 'keep the .jsonl.gz bytes as-is (skip gunzip)')
+    .action(
+      async (
+        sessionId: string,
+        opts: {
+          output?: string
+          process?: string
+          all?: boolean
+          dir: string
+          json?: boolean
+          gzip?: boolean
+        },
+      ) => {
+        await runAction(async () => {
+          if (opts.all && (opts.process || opts.output)) {
+            throw new Error('--all cannot be combined with --process or -o')
+          }
+          const res = await new ApiClient().getSessionTranscripts(sessionId)
+          if (opts.json) {
+            printJson(res)
+            return
+          }
+          if (res.transcripts.length === 0) {
+            console.log('No transcripts stored for this session.')
+            return
+          }
+          const ext = opts.gzip ? 'jsonl.gz' : 'jsonl'
+          if (opts.all) {
+            mkdirSync(opts.dir, { recursive: true })
+            for (const t of res.transcripts) {
+              const path = join(opts.dir, `${t.process_id}.${ext}`)
+              writeFileSync(path, await fetchTranscript(t, { gzip: opts.gzip }))
+              console.log(path)
+            }
+            return
+          }
+          // Default: the latest process (the list is in process-creation
+          // order, so retries supersede the attempts before them).
+          let transcript = res.transcripts[res.transcripts.length - 1]!
+          if (opts.process) {
+            const picked = res.transcripts.find((t) => t.process_id === opts.process)
+            if (!picked) {
+              throw new Error(
+                `no transcript for process '${opts.process}' — available: ` +
+                  res.transcripts.map((t) => t.process_id).join(', '),
+              )
+            }
+            transcript = picked
+          }
+          const data = await fetchTranscript(transcript, { gzip: opts.gzip })
+          if (opts.output) {
+            writeFileSync(opts.output, data)
+            console.log(opts.output)
+          } else {
+            process.stdout.write(data)
+          }
+        })
+      },
+    )
 
   session
     .command('get <sessionId>')
@@ -808,6 +879,39 @@ export function formatSearchResult(
 // formatStepLine / stepText moved to lib/steps.ts (shared with `session
 // connect`); re-exported here for existing importers and tests.
 export { formatStepLine, stepText }
+
+// Pull a transcript from its presigned S3 URL (bare fetch — the signature in
+// the URL is the credential) and gunzip unless the caller wants the raw
+// .jsonl.gz bytes. A warning for a failed final write goes to stderr so the
+// default stdout stream stays pure JSONL.
+export async function fetchTranscript(
+  transcript: SessionTranscript,
+  opts: { gzip?: boolean },
+): Promise<Buffer> {
+  if (transcript.write_status === 'failed') {
+    console.error(
+      `warning: ${transcript.process_id}'s final transcript write failed — ` +
+        'the tail past the last periodic flush may be missing',
+    )
+  }
+  const res = await fetch(transcript.download_url)
+  if (!res.ok) {
+    if (res.status === 404) {
+      throw new Error(
+        `transcript for ${transcript.process_id} is gone from storage — ` +
+          'it was likely deleted by your log retention setting',
+      )
+    }
+    throw new Error(
+      `download failed: ${res.status} ${res.statusText}` +
+        (res.status === 403
+          ? ' (the presigned URL likely expired — re-run the command for a fresh one)'
+          : ''),
+    )
+  }
+  const raw = Buffer.from(await res.arrayBuffer())
+  return opts.gzip ? raw : gunzipSync(raw)
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))

@@ -294,6 +294,28 @@ export interface ListSessionStepsResponse {
   steps: AgentStep[]
 }
 
+// One process's raw transcript from GET /v1/sessions/{id}/transcripts: the
+// pointer metadata plus a short-lived presigned S3 GET for the .jsonl.gz
+// object itself (expires after expires_in seconds — fetch it immediately).
+export interface SessionTranscript {
+  process_id: string
+  // "claude_stream_json" (cloud) or "claude_transcript" (synced laptop).
+  format: string
+  event_count: number | null
+  bytes: number | null
+  written_at: string | null
+  // null = only periodic flushes so far (session still running); "failed" =
+  // the final write failed, so the tail past the last flush may be missing.
+  write_status: 'ok' | 'failed' | null
+  download_url: string
+  expires_in: number
+}
+
+export interface ListSessionTranscriptsResponse {
+  session_id: string
+  transcripts: SessionTranscript[]
+}
+
 // GET /v1/sessions/{id}/ide (`agent session ide`): the live sandbox's
 // code-server tunnel URL. Unguessable, customer-scoped at discovery, and dead
 // once the sandbox is torn down — fetch it fresh on every open, never store it.

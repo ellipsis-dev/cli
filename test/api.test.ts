@@ -192,6 +192,20 @@ describe('ApiClient sandbox variables', () => {
   })
 })
 
+describe('getSessionTranscripts', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('hits the transcripts path and returns the response', async () => {
+    const body = { session_id: 'session_1', transcripts: [] }
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(body), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await new ApiClient('http://api.test', 't').getSessionTranscripts('session_1')
+    expect(out).toEqual(body)
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/sessions/session_1/transcripts')
+  })
+})
+
 describe('replayAgentSession', () => {
   afterEach(() => vi.unstubAllGlobals())
 
