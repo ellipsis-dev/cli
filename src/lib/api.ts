@@ -21,6 +21,8 @@ import type {
   GetAnalyticsReviewsResponse,
   GetIntegrationsResponse,
   GetSandboxVariablesResponse,
+  GetSessionIdeResponse,
+  GetSessionPortResponse,
   ListAgentConfigsResponse,
   ListAgentSessionsQuery,
   ListAgentSessionsResponse,
@@ -225,6 +227,23 @@ export class ApiClient {
     return this.request('POST', `/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
       message,
     } satisfies SendSessionMessageRequest)
+  }
+
+  // The session's browser-IDE tunnel URL: the backend idempotently starts
+  // code-server in the live sandbox and hands back its unguessable,
+  // dies-with-the-box URL. 409 when the sandbox isn't running (send the
+  // session a message to wake it first).
+  getSessionIde(sessionId: string): Promise<GetSessionIdeResponse> {
+    return this.request('GET', `/v1/sessions/${encodeURIComponent(sessionId)}/ide`)
+  }
+
+  // A preview port's tunnel URL (a dev server running in the sandbox). Same
+  // gate + lifetime as the IDE URL.
+  getSessionPort(sessionId: string, port: number): Promise<GetSessionPortResponse> {
+    return this.request(
+      'GET',
+      `/v1/sessions/${encodeURIComponent(sessionId)}/ports/${port}`,
+    )
   }
 
   // --------------------------------- assets --------------------------------

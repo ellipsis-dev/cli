@@ -55,6 +55,7 @@ import {
   spoolSync,
   type SyncOutcome,
 } from '../lib/laptop'
+import { openBrowser } from '../lib/auth'
 import { registerConnect } from './connect'
 import { formatStepLine, oneLine, stepText } from '../lib/steps'
 import { ApiError } from '../lib/api'
@@ -512,6 +513,63 @@ export function registerSession(program: Command): void {
         console.log(`✓ stopped session ${sessionId} (${s.status})`)
       })
     })
+
+  // The browser IDE into a live session's sandbox (GET /v1/sessions/{id}/ide).
+  // The URL is minted fresh per open — it dies with the sandbox, so there is
+  // nothing worth storing. 409s (sandbox idle/torn down, pre-IDE sandbox)
+  // carry curated server messages; runAction surfaces them as-is.
+  session
+    .command('ide <sessionId>')
+    .description("Open the session's browser IDE (GET /v1/sessions/{id}/ide)")
+    .addHelpText(
+      'after',
+      '\nThe IDE shares the live sandbox\'s working tree with the agent. The URL dies ' +
+        'with the sandbox; if the session is idle, send it a message to wake it first ' +
+        '(agent session connect).',
+    )
+    .option('--no-open', 'print the URL without opening a browser')
+    .option('--json', 'output raw JSON')
+    .action(async (sessionId: string, opts: { open: boolean; json?: boolean }) => {
+      await runAction(async () => {
+        const res = await new ApiClient().getSessionIde(sessionId)
+        if (opts.json) {
+          printJson(res)
+          return
+        }
+        console.log(res.url)
+        if (opts.open) openBrowser(res.url)
+      })
+    })
+
+  // A preview port's tunnel URL (GET /v1/sessions/{id}/ports/{port}) — a dev
+  // server the agent or the IDE user started in the sandbox.
+  session
+    .command('port <sessionId> <port>')
+    .description("Open a preview port on the session's sandbox (GET /v1/sessions/{id}/ports/{port})")
+    .addHelpText(
+      'after',
+      '\nExposed preview ports: 3000, 5173, 8000, 8080. The URL only serves while ' +
+        'something in the sandbox listens on that port, and dies with the sandbox.',
+    )
+    .option('--no-open', 'print the URL without opening a browser')
+    .option('--json', 'output raw JSON')
+    .action(
+      async (sessionId: string, port: string, opts: { open: boolean; json?: boolean }) => {
+        await runAction(async () => {
+          const portNumber = Number.parseInt(port, 10)
+          if (Number.isNaN(portNumber)) {
+            throw new Error(`port must be a number, got "${port}"`)
+          }
+          const res = await new ApiClient().getSessionPort(sessionId, portNumber)
+          if (opts.json) {
+            printJson(res)
+            return
+          }
+          console.log(res.url)
+          if (opts.open) openBrowser(res.url)
+        })
+      },
+    )
 }
 
 // `--watch` entry point: stream the session's output live over WebSocket, and

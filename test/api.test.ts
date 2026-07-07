@@ -356,3 +356,36 @@ describe('ApiClient assets', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/assets/a%2F1')
   })
 })
+
+describe('ApiClient session IDE and ports', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('fetches the IDE tunnel URL', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ url: 'https://ide.modal.host' }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await new ApiClient('http://api.test', 't').getSessionIde('session_1')
+    expect(out.url).toBe('https://ide.modal.host')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/sessions/session_1/ide')
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
+  })
+
+  it('fetches a preview port tunnel URL', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ url: 'https://p3000.modal.host', port: 3000 }), {
+          status: 200,
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await new ApiClient('http://api.test', 't').getSessionPort('session_1', 3000)
+    expect(out).toEqual({ url: 'https://p3000.modal.host', port: 3000 })
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'http://api.test/v1/sessions/session_1/ports/3000',
+    )
+  })
+})
