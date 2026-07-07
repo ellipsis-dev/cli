@@ -294,6 +294,21 @@ export interface ListSessionStepsResponse {
   steps: AgentStep[]
 }
 
+// GET /v1/sessions/{id}/ide (`agent session ide`): the live sandbox's
+// code-server tunnel URL. Unguessable, customer-scoped at discovery, and dead
+// once the sandbox is torn down — fetch it fresh on every open, never store it.
+export interface GetSessionIdeResponse {
+  url: string
+}
+
+// GET /v1/sessions/{id}/ports/{port} (`agent session port`): the tunnel URL
+// for one of the sandbox's preview ports (a dev server the agent or the IDE
+// user started). Same lifetime/gating as the IDE URL.
+export interface GetSessionPortResponse {
+  url: string
+  port: number
+}
+
 // ----------------------------- session search ----------------------------
 
 export type SessionSearchScope = 'steps' | 'recaps' | 'both'
