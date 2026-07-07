@@ -685,6 +685,59 @@ export interface GetAnalyticsReviewsResponse {
   }
 }
 
+// --------------------------------- assets --------------------------------
+// Agent asset storage (ellipsis: documents/eng/AGENT_ASSET_STORAGE.md): files
+// an agent persists beyond its sandbox's lifetime — v1 is PNG screenshots
+// posted as org-gated links on PRs. Mirrors assets_service.py.
+
+// Caller-facing asset metadata — no storage internals (S3 key, sha, owner).
+export interface AssetView {
+  id: string
+  filename: string
+  content_type: string
+  size_bytes: number
+  created_at: string
+  // The originating session, when the upload came from a sandbox.
+  agent_session_id: string | null
+}
+
+export interface CreateAssetRequest {
+  // Original basename, display only (the S3 key derives from the server-side
+  // asset id, never from this).
+  filename: string
+  // v1: must be image/png; the server magic-byte-checks the decoded bytes.
+  content_type: string
+  // The raw file bytes, base64-encoded (same JSON-body precedent as session
+  // transcript sync).
+  data_b64: string
+}
+
+export interface CreateAssetResponse {
+  asset: AssetView
+  // The fully-formed org-gated dashboard URL (app.ellipsis.dev/assets/{id}) —
+  // the link an agent pastes into a PR comment.
+  url: string
+}
+
+export interface ListAssetsQuery {
+  // Scope to one run's uploads.
+  agent_session_id?: string
+  limit?: number
+}
+
+export interface ListAssetsResponse {
+  assets: AssetView[]
+}
+
+export interface GetAssetResponse {
+  asset: AssetView
+  // The gated dashboard URL (same link the upload returned).
+  url: string
+  // Short-lived (60s) presigned S3 GET for the actual bytes — fetch it
+  // immediately; the JSON API never carries the file itself.
+  download_url: string
+}
+
 // ------------------------------ cli auth --------------------------------
 
 export interface CliAuthStart {
