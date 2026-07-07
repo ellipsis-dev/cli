@@ -1,10 +1,16 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
+import { gzipSync } from 'node:zlib'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { applyConfigOverride, readConfigFile, watchSession } from '../src/commands/session'
+import {
+  applyConfigOverride,
+  fetchTranscript,
+  readConfigFile,
+  watchSession,
+} from '../src/commands/session'
 import type { ApiClient } from '../src/lib/api'
-import type { AgentSession, AgentSessionStatus } from '../src/lib/types'
+import type { AgentSession, AgentSessionStatus, SessionTranscript } from '../src/lib/types'
 
 function session(status: AgentSessionStatus): AgentSession {
   return {
@@ -157,5 +163,57 @@ describe('applyConfigOverride', () => {
     expect(() => applyConfigOverride({}, { configOverrideFile: path })).toThrow(
       /could not parse YAML config override file/,
     )
+  })
+})
+
+describe('fetchTranscript', () => {
+  const transcript = (overrides: Partial<SessionTranscript> = {}): SessionTranscript => ({
+    process_id: 'proc_1',
+    format: 'claude_stream_json',
+    event_count: 2,
+    bytes: 100,
+    written_at: '2026-07-07T00:00:00+00:00',
+    write_status: 'ok',
+    download_url: 'https://s3.example.com/signed',
+    expires_in: 60,
+    ...overrides,
+  })
+  const gzipped = gzipSync(Buffer.from('{"a":1}\n{"b":2}\n'))
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('gunzips by default', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(new Uint8Array(gzipped), { status: 200 })),
+    )
+    const out = await fetchTranscript(transcript(), {})
+    expect(out.toString()).toBe('{"a":1}\n{"b":2}\n')
+  })
+
+  it('keeps the raw bytes with gzip: true', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(new Uint8Array(gzipped), { status: 200 })),
+    )
+    const out = await fetchTranscript(transcript(), { gzip: true })
+    expect(Buffer.compare(out, gzipped)).toBe(0)
+  })
+
+  it('maps a storage 404 to the retention explanation', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 404 })))
+    await expect(fetchTranscript(transcript(), {})).rejects.toThrow(/log retention/)
+  })
+
+  it('warns on stderr for a failed final write but still downloads', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(new Uint8Array(gzipped), { status: 200 })),
+    )
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const out = await fetchTranscript(transcript({ write_status: 'failed' }), {})
+    expect(out.toString()).toContain('{"a":1}')
+    expect(errSpy.mock.calls[0][0]).toMatch(/final transcript write failed/)
+    errSpy.mockRestore()
   })
 })
