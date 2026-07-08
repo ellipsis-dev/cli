@@ -285,6 +285,14 @@ export class ApiClient {
     return this.request('GET', `/v1/assets/${encodeURIComponent(assetId)}`)
   }
 
+  // Permanently remove an asset (its metadata row and the stored bytes). The
+  // server returns 204 with an empty body on success; 404 when the id is
+  // unknown to the credential's customer, 403 when the token isn't allowed to
+  // delete (e.g. a sandbox token).
+  deleteAsset(assetId: string): Promise<void> {
+    return this.request('DELETE', `/v1/assets/${encodeURIComponent(assetId)}`)
+  }
+
   // ----------------------------- agent configs ----------------------------
 
   async listAgentConfigs(): Promise<SavedAgentConfig[]> {
