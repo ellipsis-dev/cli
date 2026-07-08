@@ -14,6 +14,29 @@ authenticates, opens a WebSocket, and streams results. It is open source
 brew install ellipsis-dev/cli/agent
 ```
 
+## Teach your coding agent about Ellipsis
+
+[`skills/ellipsis`](skills/ellipsis/SKILL.md) is an
+[Agent Skill](https://agentskills.io) that teaches any coding agent (Claude
+Code, Cursor, Codex, and others) what the Ellipsis platform is and how to
+drive it with this CLI:
+
+```sh
+npx skills add ellipsis-dev/cli
+```
+
+Or copy `skills/ellipsis/` into your agent's skills directory
+(`~/.claude/skills/` for Claude Code). Ellipsis agents can load it straight
+from their config, no clone required:
+
+```yaml
+skills:
+  - path: skills/ellipsis
+    repository:
+      owner: ellipsis-dev
+      name: cli
+```
+
 ## Usage
 
 ```sh
