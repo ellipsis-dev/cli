@@ -1,7 +1,7 @@
 import { type Command } from 'commander'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
-import { ApiClient } from '../lib/api'
+import { ApiClient, ApiError } from '../lib/api'
 import { formatTs, printJson, printTable, runAction } from '../lib/output'
 import type { AssetView, CreateAssetRequest, GetAssetResponse } from '../lib/types'
 
@@ -150,6 +150,35 @@ export function registerAsset(program: Command): void {
         }
         if (opts.json) printJson(res)
         else if (!opts.output) renderAsset(res)
+      })
+    })
+
+  asset
+    .command('delete <asset-id>')
+    .alias('rm')
+    .description('Delete an asset — it disappears from list/get and its link stops resolving (DELETE /v1/assets/{id})')
+    .option('--json', 'output raw JSON')
+    .action(async (assetId: string, opts: { json?: boolean }) => {
+      await runAction(async () => {
+        try {
+          await new ApiClient().deleteAsset(assetId)
+        } catch (err) {
+          // A 404 covers "never existed", "someone else's", and "already
+          // deleted" — all the same "there's nothing here to delete" to the
+          // caller, so give one clear message instead of the raw HTTP error.
+          if (err instanceof ApiError && err.status === 404) {
+            throw new Error(`asset not found: ${assetId}`)
+          }
+          // A 403 is a real policy decision (e.g. sandbox tokens can't delete);
+          // surface the server's own explanation rather than masking it.
+          if (err instanceof ApiError && err.status === 403) {
+            throw new Error(err.detail)
+          }
+          throw err
+        }
+        // 204 No Content — nothing to echo, so confirm with the id.
+        if (opts.json) printJson({ id: assetId, deleted: true })
+        else console.log(`✓ deleted ${assetId}`)
       })
     })
 }

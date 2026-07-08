@@ -369,6 +369,17 @@ describe('ApiClient assets', () => {
     expect(out.download_url).toBe('d')
     expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/assets/a%2F1')
   })
+
+  it('DELETEs the asset id (encoded) and tolerates a 204 empty body', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await new ApiClient('http://api.test', 't').deleteAsset('a/1')
+    expect(out).toBeUndefined()
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('http://api.test/v1/assets/a%2F1')
+    expect((init as RequestInit).method).toBe('DELETE')
+  })
 })
 
 describe('ApiClient session IDE and ports', () => {
