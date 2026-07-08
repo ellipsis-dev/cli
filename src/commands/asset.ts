@@ -156,7 +156,7 @@ export function registerAsset(program: Command): void {
   asset
     .command('delete <asset-id>')
     .alias('rm')
-    .description('Delete an asset — its metadata and stored bytes (DELETE /v1/assets/{id})')
+    .description('Delete an asset — it disappears from list/get and its link stops resolving (DELETE /v1/assets/{id})')
     .option('--json', 'output raw JSON')
     .action(async (assetId: string, opts: { json?: boolean }) => {
       await runAction(async () => {
