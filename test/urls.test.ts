@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { configUrl, sessionUrl } from '../src/lib/urls'
+import { cliAuthUrl, configUrl, sessionUrl } from '../src/lib/urls'
 
 describe('sessionUrl', () => {
   it('builds the session detail path scoped by account login', () => {
@@ -19,6 +19,20 @@ describe('configUrl', () => {
   it('builds the agent (config) detail path scoped by account login', () => {
     expect(configUrl('https://app.ellipsis.dev', 'octocat', 'cfg_123')).toBe(
       'https://app.ellipsis.dev/octocat/agents/configs/cfg_123',
+    )
+  })
+})
+
+describe('cliAuthUrl', () => {
+  it('builds the approval page url against the given app base', () => {
+    expect(cliAuthUrl('https://app.ellipsis.dev', 'PMLJ-VMN2')).toBe(
+      'https://app.ellipsis.dev/cli-auth?code=PMLJ-VMN2',
+    )
+  })
+
+  it('tracks the app base host, so a beta base yields a beta approval url', () => {
+    expect(cliAuthUrl('https://beta-app.ellipsis.dev', 'PMLJ-VMN2')).toBe(
+      'https://beta-app.ellipsis.dev/cli-auth?code=PMLJ-VMN2',
     )
   })
 })

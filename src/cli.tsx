@@ -1,5 +1,6 @@
 import { Command } from 'commander'
 import { registerLogin } from './commands/login'
+import { registerHost } from './commands/host'
 import { registerMe } from './commands/me'
 import { registerSession } from './commands/session'
 import { registerConfig } from './commands/config'
@@ -25,6 +26,7 @@ program
   .version(VERSION)
 
 registerLogin(program)
+registerHost(program)
 registerMe(program)
 registerSession(program)
 registerConfig(program)

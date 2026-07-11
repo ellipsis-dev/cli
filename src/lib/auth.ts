@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { ApiClient } from './api'
-import { saveConfig, loadConfig } from './config'
+import { setActiveHostToken } from './config'
 import type { CliAuthStart } from './types'
 
 export interface DeviceLoginHandlers {
@@ -52,11 +52,11 @@ export async function deviceLogin(
   throw new Error('Timed out waiting for approval.')
 }
 
-// Persists the token alongside the apiBase it was minted against, so a token
-// obtained from a local/staging backend isn't silently reused against prod.
+// Persists the token on the active host (seeding one at the resolved base if
+// the user logged in before adding a host), so a token minted against one
+// instance is never silently reused against another.
 export function persistToken(token: string): void {
-  const config = loadConfig()
-  saveConfig({ ...config, token })
+  setActiveHostToken(token)
 }
 
 // Best-effort browser open; never throws (headless/SSH sessions just won't have
