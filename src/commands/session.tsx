@@ -57,7 +57,7 @@ import {
   type SyncOutcome,
 } from '../lib/laptop'
 import { openBrowser } from '../lib/auth'
-import { registerConnect } from './connect'
+import { registerConnect, runConnectRaw } from './connect'
 import { formatStepLine, oneLine, stepText } from '../lib/steps'
 import { ApiError } from '../lib/api'
 import { resolveToken } from '../lib/config'
@@ -112,6 +112,10 @@ export function registerSession(program: Command): void {
       {} as Record<string, string>,
     )
     .option('-w, --watch', 'stream the session live until it reaches a terminal status')
+    .option(
+      '--connect',
+      "after starting, wait for the sandbox and attach a raw PTY to the agent's live terminal (needs an interactive terminal)",
+    )
     .option('--json', 'output raw JSON')
     .action(
       async (opts: {
@@ -123,6 +127,7 @@ export function registerSession(program: Command): void {
         prompt?: string
         metadata: Record<string, string>
         watch?: boolean
+        connect?: boolean
         json?: boolean
       }) => {
         await runAction(async () => {
@@ -134,6 +139,14 @@ export function registerSession(program: Command): void {
           }
           if (sources.length > 1) {
             throw new Error('provide only one of --config / --config-file / --template')
+          }
+          // --connect takes over the terminal, so it can't pair with the
+          // NDJSON stream (--json) or the read-only watcher (--watch).
+          if (opts.connect && opts.json) {
+            throw new Error('--connect is interactive and cannot be combined with --json')
+          }
+          if (opts.connect && opts.watch) {
+            throw new Error('provide only one of --connect / --watch')
           }
           const req: StartAgentSessionRequest = {
             metadata: opts.metadata,
@@ -150,6 +163,13 @@ export function registerSession(program: Command): void {
 
           const api = new ApiClient()
           const session = await api.startAgentSession(req)
+
+          if (opts.connect) {
+            console.log(`✓ started session ${session.id} (${session.status})`)
+            await printSessionUrl(api, session.id)
+            await startConnect(api, session.id)
+            return
+          }
 
           if (opts.watch) {
             if (!opts.json) {
@@ -641,6 +661,39 @@ export function registerSession(program: Command): void {
         })
       },
     )
+}
+
+// `start --connect`: wait for the session's sandbox to come live, then attach a
+// raw PTY (the same bridge as `session connect --raw`). A terminal status before
+// RUNNING means the session never got a sandbox (e.g. a preflight/budget gate),
+// so there is nothing to attach to.
+const CONNECT_READY_TIMEOUT_SECONDS = 120
+
+export async function startConnect(api: ApiClient, sessionId: string): Promise<void> {
+  process.stdout.write('waiting for the sandbox')
+  const deadline = Date.now() + CONNECT_READY_TIMEOUT_SECONDS * 1000
+  for (;;) {
+    const s = await api.getAgentSession(sessionId)
+    if (s.status === 'running') break
+    if (TERMINAL_STATUSES.has(s.status)) {
+      const reason = s.status_reason ? ` — ${s.status_reason}` : ''
+      console.log(`\nsession ${s.status} before it became connectable${reason}`)
+      process.exitCode = 1
+      return
+    }
+    if (Date.now() > deadline) {
+      console.log(
+        `\ntimed out waiting for the sandbox; once it is running, attach with:\n` +
+          `  agent session connect --raw ${sessionId}`,
+      )
+      process.exitCode = 1
+      return
+    }
+    process.stdout.write('.')
+    await sleep(1000)
+  }
+  process.stdout.write(' ready\n')
+  await runConnectRaw(sessionId)
 }
 
 // `--watch` entry point: stream the session's output live over WebSocket, and
