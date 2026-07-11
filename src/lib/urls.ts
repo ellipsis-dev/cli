@@ -11,3 +11,14 @@ export function sessionUrl(appBase: string, accountLogin: string, sessionId: str
 export function configUrl(appBase: string, accountLogin: string, configId: string): string {
   return `${appBase}/${encodeURIComponent(accountLogin)}/agents/configs/${encodeURIComponent(configId)}`
 }
+
+// The device-code approval page for `agent login`. `userCode` is the user_code
+// minted by POST /v1/cli-auth/start. Built client-side from the resolved app
+// base (not the server's verification_uri_complete) so the host always matches
+// the API base the CLI is pointed at: the backend fills its own copy from an
+// env var that defaults to prod, so a beta/dev login is otherwise sent to the
+// prod dashboard where a code minted against another environment can never be
+// approved.
+export function cliAuthUrl(appBase: string, userCode: string): string {
+  return `${appBase}/cli-auth?code=${encodeURIComponent(userCode)}`
+}

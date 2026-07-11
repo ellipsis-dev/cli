@@ -1,7 +1,8 @@
 import type { Command } from 'commander'
 import { ApiClient } from '../lib/api'
-import { loadConfig, saveConfig } from '../lib/config'
+import { loadConfig, resolveAppBase, saveConfig } from '../lib/config'
 import { deviceLogin, openBrowser, persistToken } from '../lib/auth'
+import { cliAuthUrl } from '../lib/urls'
 
 export function registerLogin(program: Command): void {
   program
@@ -13,11 +14,16 @@ export function registerLogin(program: Command): void {
       try {
         const { token } = await deviceLogin(api, {
           onPrompt: (start) => {
+            // Build the approval URL from the app base derived from OUR api base,
+            // not the server's verification_uri_complete — the backend defaults
+            // that to prod, so a beta/dev login would otherwise be sent to the
+            // prod dashboard (where the code can't be approved). See cliAuthUrl.
+            const verificationUrl = cliAuthUrl(resolveAppBase(), start.user_code)
             console.log('To authenticate, open this URL and approve the request:')
-            console.log(`  ${start.verification_uri_complete}`)
+            console.log(`  ${verificationUrl}`)
             console.log(`Verification code: ${start.user_code}`)
             if (opts.browser !== false) {
-              openBrowser(start.verification_uri_complete)
+              openBrowser(verificationUrl)
             }
             console.log('Waiting for approval…')
           },
