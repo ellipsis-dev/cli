@@ -21,7 +21,7 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { loadConfig, saveConfig } from './config'
+import { getEnrolledRepos, setEnrolledRepos } from './config'
 import type { SyncAgentSessionRequest } from './types'
 
 // ---------------------------------------------------------------------------
@@ -164,22 +164,17 @@ export function branchFromCwd(cwd: string): string | undefined {
 }
 
 export function enrolledRepos(): string[] {
-  return (loadConfig().enrolledRepos ?? []).map((r) => r.toLowerCase())
+  return getEnrolledRepos()
 }
 
 export function enrollRepo(repo: string): void {
-  const config = loadConfig()
-  const set = new Set((config.enrolledRepos ?? []).map((r) => r.toLowerCase()))
+  const set = new Set(getEnrolledRepos())
   set.add(repo.toLowerCase())
-  saveConfig({ ...config, enrolledRepos: [...set].sort() })
+  setEnrolledRepos([...set].sort())
 }
 
 export function unenrollRepo(repo: string): void {
-  const config = loadConfig()
-  const next = (config.enrolledRepos ?? []).filter(
-    (r) => r.toLowerCase() !== repo.toLowerCase(),
-  )
-  saveConfig({ ...config, enrolledRepos: next })
+  setEnrolledRepos(getEnrolledRepos().filter((r) => r !== repo.toLowerCase()))
 }
 
 // ---------------------------------------------------------------------------

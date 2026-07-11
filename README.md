@@ -40,9 +40,16 @@ skills:
 ## Usage
 
 ```sh
-agent login                       # device-code auth (use --no-browser for SSH)
-agent logout                      # remove stored credentials
+agent login                       # device-code auth against the active host
+agent logout                      # remove stored credentials (--all for every host)
 agent me                          # show the current credential's identity
+
+agent host list                   # list configured hosts (the active one is marked *)
+agent host add beta https://beta-api.ellipsis.dev   # add a host and switch to it
+agent host use prod               # switch the active host
+agent host current                # show the active host and how it resolves
+agent host set beta --rename staging   # rename / re-point a host (--api-base / --app-base)
+agent host delete beta            # remove a host and its stored token
 
 agent session start --config <id>     # start a session from a saved config
 agent session start --config-file f.json   # ...or from an inline config
@@ -91,8 +98,9 @@ agent ping                        # check authenticated /v1 connectivity
 ```
 
 Most commands accept `--json` to print the raw API response. The CLI talks to
-the public `/v1` REST API; point it elsewhere with `ELLIPSIS_API_BASE_URL`
-(or the legacy `ELLIPSIS_API_BASE`).
+the public `/v1` REST API. Point it at a different instance durably with
+`agent host` (below), or per-invocation with `ELLIPSIS_API_BASE_URL` (or the
+legacy `ELLIPSIS_API_BASE`).
 
 `--watch` (on both `session start` and `session get`) streams the session's
 output live over WebSocket until it reaches a terminal status, falling back to
@@ -109,12 +117,31 @@ approve the request in the dashboard. The issued user token is stored under
 
 **Credentials resolve in this order (highest wins):** explicit argument →
 environment (`ELLIPSIS_API_TOKEN` / `ELLIPSIS_API_BASE_URL`, with the legacy
-`ELLIPSIS_API_BASE` accepted as a fallback) → config file → default. This lets
-the CLI run headlessly — e.g. inside an Ellipsis cloud sandbox where a
-per-sandbox token and base URL are injected into the environment — with no
-`agent login` and no config file on disk. `agent logout` only clears the
-on-disk token; a token supplied via `ELLIPSIS_API_TOKEN` lives in the
-environment and keeps working until you unset it.
+`ELLIPSIS_API_BASE` accepted as a fallback) → the **active host** in the config
+file → default (prod). This lets the CLI run headlessly — e.g. inside an
+Ellipsis cloud sandbox where a per-sandbox token and base URL are injected into
+the environment — with no `agent login` and no config file on disk. `agent
+logout` only clears the on-disk token (`--all` for every host); a token supplied
+via `ELLIPSIS_API_TOKEN` lives in the environment and keeps working until you
+unset it.
+
+### Hosts
+
+`agent host` selects which Ellipsis instance the CLI targets — Ellipsis Cloud,
+a preview environment, or a self-hosted deployment — so you can switch without
+re-exporting env vars. `agent host add <name> <api-url>` registers an instance
+and makes it active; `agent host use <name>` switches; `agent host list` shows
+them all (the active one marked `*`). Each host keeps its own token (so
+switching doesn't re-authenticate) and its own dashboard/app URL. The app URL
+is derived from the API URL by default (`api.` → `app.`); a self-hosted instance
+whose dashboard host isn't a mechanical swap sets it explicitly with `agent host
+add … --app-base <url>` (or `agent host set <name> --app-base <url>`). `agent
+login` then authenticates the active host, and every link the CLI prints points
+at that host's dashboard.
+
+Hosts and tokens live in `~/.config/ellipsis/config.json` (mode 0600). A config
+file from before hosts existed is migrated in place on first use — your existing
+login becomes a host named for its API base — so nothing needs re-doing.
 
 ## Develop
 
