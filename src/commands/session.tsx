@@ -21,6 +21,7 @@ import {
   parseScope,
   parseWhen,
   toInt,
+  toNumber,
 } from '../lib/args'
 import { sessionUrl } from '../lib/urls'
 import {
@@ -84,7 +85,14 @@ export function registerSession(program: Command): void {
   session
     .command('start')
     .description('Start a new agent session (POST /v1/sessions)')
-    .option('-c, --config <id>', 'start from a saved agent config id')
+    .argument(
+      '[prompt]',
+      'what the agent should do this session (positional shorthand for --prompt)',
+    )
+    .option(
+      '-c, --config <id>',
+      'start from a saved agent config id (default: the platform default config)',
+    )
     .option(
       '-f, --config-file <path>',
       'start from an inline agent config (.yaml/.yml or .json file)',
@@ -101,9 +109,21 @@ export function registerSession(program: Command): void {
       '--config-override-file <path>',
       'read the partial config override from a file (.yaml/.yml or .json) instead of inline',
     )
+    .option('--model <id>', 'set claude.model for this session (e.g. claude-opus-4-8)')
+    .option('--system <text>', 'set claude.system (the agent system prompt) for this session')
+    .option(
+      '--repo <owner/name>',
+      'check out a repository in the sandbox (repeatable; "name" defaults owner to your account)',
+      collect,
+      [] as string[],
+    )
+    .option('--cpu <n>', 'sandbox vCPUs (e.g. 2 or 0.5)', toNumber)
+    .option('--memory <size>', 'sandbox memory (e.g. 8GB)')
+    .option('--timeout <duration>', 'sandbox timeout (e.g. 30m or 1h)')
+    .option('--budget <usd>', 'per-run spend limit in USD for this session (limits.run)', toNumber)
     .option(
       '-p, --prompt <text>',
-      'per-session instructions appended to the initial user query for this session',
+      "the session prompt, appended to the agent's initial user query (or pass it positionally)",
     )
     .option(
       '-m, --metadata <key=value>',
@@ -111,42 +131,74 @@ export function registerSession(program: Command): void {
       collectKeyValue,
       {} as Record<string, string>,
     )
-    .option('-w, --watch', 'stream the session live until it reaches a terminal status')
+    .option('-d, --detach', 'start and return immediately (fire-and-forget; the default)')
+    .option(
+      '-w, --watch',
+      'block until the session reaches a terminal status, streaming live output',
+    )
+    .option(
+      '--quiet',
+      'with --watch, wait without streaming — print only the final result and exit with a matching code',
+    )
     .option(
       '--connect',
       'after starting, wait for the sandbox and connect: view the conversation, follow it live, and send messages',
     )
     .option('--json', 'output raw JSON')
     .action(
-      async (opts: {
-        config?: string
-        configFile?: string
-        template?: string
-        configOverride?: string
-        configOverrideFile?: string
-        prompt?: string
-        metadata: Record<string, string>
-        watch?: boolean
-        connect?: boolean
-        json?: boolean
-      }) => {
+      async (
+        promptArg: string | undefined,
+        opts: {
+          config?: string
+          configFile?: string
+          template?: string
+          configOverride?: string
+          configOverrideFile?: string
+          model?: string
+          system?: string
+          repo: string[]
+          cpu?: number
+          memory?: string
+          timeout?: string
+          budget?: number
+          prompt?: string
+          metadata: Record<string, string>
+          detach?: boolean
+          watch?: boolean
+          quiet?: boolean
+          connect?: boolean
+          json?: boolean
+        },
+      ) => {
         await runAction(async () => {
-          // The server enforces "exactly one of config / config_id / template_id";
-          // pre-check locally for a clearer error than a bare 400.
+          // A config source is optional: with none, the server runs on the
+          // platform default config and the prompt is the sole instruction.
+          // At most one source may be given.
           const sources = [opts.config, opts.configFile, opts.template].filter(Boolean)
-          if (sources.length === 0) {
-            throw new Error('provide one of --config <id>, --config-file <path>, or --template <slug>')
-          }
           if (sources.length > 1) {
             throw new Error('provide only one of --config / --config-file / --template')
           }
-          // --connect takes over the terminal, so it can't pair with the
-          // NDJSON stream (--json) or the read-only watcher (--watch).
+          // The prompt is either positional or --prompt, not both.
+          if (promptArg !== undefined && opts.prompt !== undefined) {
+            throw new Error('provide the prompt positionally or with --prompt, not both')
+          }
+          const promptText = promptArg ?? opts.prompt
+          // At most one attach mode. --detach is the default made explicit;
+          // --watch blocks (live, or quiet with --quiet); --connect is interactive.
+          const modes = [
+            opts.detach && '--detach',
+            opts.watch && '--watch',
+            opts.connect && '--connect',
+          ].filter(Boolean)
+          if (modes.length > 1) {
+            throw new Error(`provide at most one of ${modes.join(' / ')}`)
+          }
+          if (opts.quiet && !opts.watch) {
+            throw new Error('--quiet only applies with --watch')
+          }
+          // --connect takes over the terminal, so it can't emit the NDJSON stream.
           if (opts.connect && opts.json) {
             throw new Error('--connect is interactive and cannot be combined with --json')
-          }
-          if (opts.connect && opts.watch) {
-            throw new Error('provide only one of --connect / --watch')
           }
           const req: StartAgentSessionRequest = {
             metadata: opts.metadata,
@@ -154,12 +206,14 @@ export function registerSession(program: Command): void {
           if (opts.config) req.config_id = opts.config
           if (opts.configFile) req.config = readConfigFile(opts.configFile)
           if (opts.template) req.template_id = opts.template
-          // Merged onto the chosen config and re-validated server-side; set
-          // limits.run here to override this session's budget.
-          applyConfigOverride(req, opts)
+          // Sugar flags (--model, --repo, --cpu, ...) and the raw
+          // --config-override are merged into one structured override, applied
+          // onto the chosen (or default) config and re-validated server-side.
+          const override = buildStartOverride(opts)
+          if (override) req.config_override = override
           // Appended to the initial user query at build time; gives this
           // session instructions on top of the config's shared system prompt.
-          if (opts.prompt) req.prompt = opts.prompt
+          if (promptText) req.prompt = promptText
 
           const api = new ApiClient()
           const session = await api.startAgentSession(req)
@@ -176,7 +230,13 @@ export function registerSession(program: Command): void {
               console.log(`✓ started session ${session.id}`)
               await printSessionUrl(api, session.id)
             }
-            await watchSessionStreaming(api, session.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+            // --quiet blocks on status only (no live output stream); either way
+            // the terminal status sets the exit code.
+            if (opts.quiet) {
+              await watchSession(api, session.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+            } else {
+              await watchSessionStreaming(api, session.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+            }
             return
           }
 
@@ -194,7 +254,7 @@ export function registerSession(program: Command): void {
   session
     .command('list')
     .description('List recent agent sessions (GET /v1/sessions)')
-    .option('-c, --config-id <id>', 'filter by config id')
+    .option('-c, --config <id>', 'filter by config id')
     .option('-s, --source <source>', 'filter by source (repeatable)', collect, [] as string[])
     .option(
       '-a, --author <login>',
@@ -207,7 +267,7 @@ export function registerSession(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(
       async (opts: {
-        configId?: string
+        config?: string
         source: string[]
         author?: string
         days?: number
@@ -219,7 +279,7 @@ export function registerSession(program: Command): void {
         await runAction(async () => {
           const api = new ApiClient()
           const sessions = await api.listAgentSessions({
-            config_id: opts.configId,
+            config_id: opts.config,
             source: opts.source.length ? (opts.source as AgentSessionSource[]) : undefined,
             author_id: opts.author ? await resolveAuthorId(api, opts.author) : undefined,
             days: opts.days,
@@ -254,7 +314,7 @@ export function registerSession(program: Command): void {
   session
     .command('search <query>')
     .description(
-      'Search sessions by transcript text, recap text, created PR, or similarity (GET /v1/sessions/search)',
+      'Search sessions by step text, recap text, created PR, or similarity (GET /v1/sessions/search)',
     )
     .addHelpText(
       'after',
@@ -267,7 +327,7 @@ export function registerSession(program: Command): void {
       '-a, --author <login>',
       'only sessions attributed to this developer (a GitHub login, see `agent github members`)',
     )
-    .option('--agent <config-id>', 'only sessions run by this agent config (repeatable)', collect, [] as string[])
+    .option('-c, --config <id>', 'only sessions run by this saved config (repeatable)', collect, [] as string[])
     .option('-s, --source <source>', 'filter by source (repeatable)', collectSource, [] as string[])
     .option('-r, --repo <name>', 'only sessions on this repository ("owner/name" or a bare name)')
     .option('--status <status>', 'filter by session status (repeatable)', collectStatus, [] as string[])
@@ -282,7 +342,7 @@ export function registerSession(program: Command): void {
         query: string,
         opts: {
           author?: string
-          agent: string[]
+          config: string[]
           source: string[]
           repo?: string
           status: string[]
@@ -302,7 +362,7 @@ export function registerSession(program: Command): void {
             scope: opts.scope as SessionSearchScope,
             source: opts.source.length ? (opts.source as AgentSessionSource[]) : undefined,
             author_id: authorId === undefined ? undefined : [authorId],
-            agent_config_id: opts.agent.length ? opts.agent : undefined,
+            agent_config_id: opts.config.length ? opts.config : undefined,
             session_ids: opts.session.length ? opts.session : undefined,
             repo: opts.repo,
             status: opts.status.length ? (opts.status as AgentSessionStatus[]) : undefined,
@@ -332,7 +392,7 @@ export function registerSession(program: Command): void {
 
   session
     .command('steps <sessionId>')
-    .description("Read a session's stored transcript (GET /v1/sessions/{id}/steps)")
+    .description("Read a session's steps (GET /v1/sessions/{id}/steps)")
     .option('--json', 'output raw JSON (full step payloads)')
     .action(async (sessionId: string, opts: { json?: boolean }) => {
       await runAction(async () => {
@@ -426,16 +486,28 @@ export function registerSession(program: Command): void {
   session
     .command('get <sessionId>')
     .description('Get a single agent session (GET /v1/sessions/{id})')
-    .option('-w, --watch', 'stream the session live until it reaches a terminal status')
+    .option(
+      '-w, --watch',
+      'block until the session reaches a terminal status, streaming live output',
+    )
+    .option('--quiet', 'with --watch, wait without streaming — print only the final result')
     .option('--json', 'output raw JSON')
-    .action(async (sessionId: string, opts: { watch?: boolean; json?: boolean }) => {
-      await runAction(async () => {
-        const api = new ApiClient()
-        if (opts.watch) {
-          if (!opts.json) await printSessionUrl(api, sessionId)
-          await watchSessionStreaming(api, sessionId, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
-          return
-        }
+    .action(
+      async (sessionId: string, opts: { watch?: boolean; quiet?: boolean; json?: boolean }) => {
+        await runAction(async () => {
+          const api = new ApiClient()
+          if (opts.quiet && !opts.watch) {
+            throw new Error('--quiet only applies with --watch')
+          }
+          if (opts.watch) {
+            if (!opts.json) await printSessionUrl(api, sessionId)
+            if (opts.quiet) {
+              await watchSession(api, sessionId, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+            } else {
+              await watchSessionStreaming(api, sessionId, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+            }
+            return
+          }
         if (opts.json) {
           printJson(await api.getAgentSession(sessionId))
           return
@@ -451,7 +523,7 @@ export function registerSession(program: Command): void {
     .command('replay <sessionId>')
     .description("Re-run an existing session's trigger input (POST /v1/sessions/{id}/replay)")
     .option(
-      '-c, --config-id <id>',
+      '-c, --config <id>',
       "run against a different saved config instead of the original session's snapshot",
     )
     .option(
@@ -464,25 +536,33 @@ export function registerSession(program: Command): void {
     )
     .option(
       '-p, --prompt <text>',
-      "per-session instructions; omit to inherit the original session's prompt, pass '' to clear it",
+      "the session prompt; omit to inherit the original session's prompt, pass '' to clear it",
     )
-    .option('-w, --watch', 'stream the session live until it reaches a terminal status')
+    .option(
+      '-w, --watch',
+      'block until the session reaches a terminal status, streaming live output',
+    )
+    .option('--quiet', 'with --watch, wait without streaming — print only the final result')
     .option('--json', 'output raw JSON')
     .action(
       async (
         sessionId: string,
         opts: {
-          configId?: string
+          config?: string
           configOverride?: string
           configOverrideFile?: string
           prompt?: string
           watch?: boolean
+          quiet?: boolean
           json?: boolean
         },
       ) => {
         await runAction(async () => {
+          if (opts.quiet && !opts.watch) {
+            throw new Error('--quiet only applies with --watch')
+          }
           const req: ReplayAgentSessionRequest = {}
-          if (opts.configId) req.config_id = opts.configId
+          if (opts.config) req.config_id = opts.config
           applyConfigOverride(req, opts)
           // Distinguish "flag omitted" (inherit the original prompt) from
           // `--prompt ''` (clear it): only set the field when the flag was passed.
@@ -496,7 +576,11 @@ export function registerSession(program: Command): void {
               console.log(`✓ started replay ${session.id} (from ${sessionId})`)
               await printSessionUrl(api, session.id)
             }
-            await watchSessionStreaming(api, session.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+            if (opts.quiet) {
+              await watchSession(api, session.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+            } else {
+              await watchSessionStreaming(api, session.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+            }
             return
           }
           if (opts.json) {
@@ -513,10 +597,10 @@ export function registerSession(program: Command): void {
   // Laptop → cloud handoff (design: LOCAL_CLAUDE_CODE.md §7.2): snapshot the
   // dirty working tree as a commit (without disturbing it), push it to
   // refs/ellipsis/handoff/<short>, and start a fresh cloud session on the
-  // built-in handoff config with the instructions as its prompt — never a
+  // built-in handoff config with that prompt as its query — never a
   // literal `claude --resume` of the local session.
   session
-    .command('handoff <instructions>')
+    .command('handoff <prompt>')
     .description('Hand the current repo + a synced session off to a cloud agent')
     .requiredOption(
       '-p, --parent <sessionId>',
@@ -526,7 +610,7 @@ export function registerSession(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(
       async (
-        instructions: string,
+        prompt: string,
         opts: { parent: string; cwd?: string; json?: boolean },
       ) => {
         await runAction(async () => {
@@ -547,7 +631,7 @@ export function registerSession(program: Command): void {
           const api = new ApiClient()
           const session = await api.startAgentSession({
             handoff: { parent_session_id: opts.parent, repo, sha, ref },
-            prompt: instructions,
+            prompt,
           })
           if (opts.json) {
             printJson(session)
@@ -810,6 +894,7 @@ export async function watchSession(
         console.log('')
         printSessionSummary(s)
       }
+      if (exitCodeForStatus(s.status) !== 0) process.exitCode = 1
       return
     }
     await sleep(intervalMs)
@@ -858,6 +943,86 @@ export function applyConfigOverride(
   if (opts.configOverrideFile) {
     req.config_override = readMappingFile(opts.configOverrideFile, 'config override')
   }
+}
+
+// Build the single structured config override for `session start`. The raw
+// --config-override / --config-override-file supplies the base mapping (any
+// field); the sugar flags (--model, --system, --repo, --cpu, --memory,
+// --timeout, --budget) are assembled into a partial config and deep-merged on
+// top, so an explicit flag wins over the same field in a raw override. Returns
+// undefined when nothing was set (no override sent). The result is applied onto
+// the chosen (or default) config and re-validated server-side.
+export function buildStartOverride(opts: {
+  configOverride?: string
+  configOverrideFile?: string
+  model?: string
+  system?: string
+  repo?: string[]
+  cpu?: number
+  memory?: string
+  timeout?: string
+  budget?: number
+}): Record<string, unknown> | undefined {
+  if (opts.configOverride && opts.configOverrideFile) {
+    throw new Error('provide only one of --config-override / --config-override-file')
+  }
+  let base: Record<string, unknown> = {}
+  if (opts.configOverrideFile) {
+    base = readMappingFile(opts.configOverrideFile, 'config override')
+  } else if (opts.configOverride) {
+    const parsed = parseYaml(opts.configOverride)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('config override must be a mapping of fields')
+    }
+    base = parsed as Record<string, unknown>
+  }
+
+  const sugar: Record<string, unknown> = {}
+  const claude: Record<string, unknown> = {}
+  if (opts.model !== undefined) claude.model = opts.model
+  if (opts.system !== undefined) claude.system = opts.system
+  if (Object.keys(claude).length) sugar.claude = claude
+
+  const compute: Record<string, unknown> = {}
+  if (opts.cpu !== undefined) compute.cpu = opts.cpu
+  if (opts.memory !== undefined) compute.memory = opts.memory
+  if (opts.timeout !== undefined) compute.timeout = opts.timeout
+  const sandbox: Record<string, unknown> = {}
+  if (Object.keys(compute).length) sandbox.compute = compute
+  if (opts.repo && opts.repo.length) sandbox.repositories = opts.repo.map(parseRepo)
+  if (Object.keys(sandbox).length) sugar.sandbox = sandbox
+
+  if (opts.budget !== undefined) sugar.limits = { run: opts.budget }
+
+  const merged = deepMerge(base, sugar)
+  return Object.keys(merged).length ? merged : undefined
+}
+
+// Parse a --repo value into a sandbox.repositories entry. "owner/name" sets
+// both; a bare "name" omits owner so the server defaults it to the account.
+function parseRepo(value: string): { name: string; owner?: string } {
+  const parts = value.split('/')
+  if (parts.length === 1 && parts[0]) return { name: parts[0] }
+  if (parts.length === 2 && parts[0] && parts[1]) return { owner: parts[0], name: parts[1] }
+  throw new Error(`--repo must be "name" or "owner/name", got "${value}"`)
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+// Recursively merge `over` onto `base`: nested objects merge, everything else
+// (including arrays) is replaced by `over`.
+function deepMerge(
+  base: Record<string, unknown>,
+  over: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base }
+  for (const [k, v] of Object.entries(over)) {
+    const b = out[k]
+    out[k] = isPlainObject(b) && isPlainObject(v) ? deepMerge(b, v) : v
+  }
+  return out
 }
 
 // Parse an inline agent config from disk, choosing the parser by file

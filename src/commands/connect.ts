@@ -71,34 +71,47 @@ export function registerConnect(session: Command): void {
     .description(
       'Connect to a cloud session: view the conversation, follow it live, and send messages',
     )
-    .option('--no-backlog', 'skip printing the stored transcript on open')
+    .option('--no-steps', 'skip replaying prior steps on open')
+    .option(
+      '--no-input',
+      'follow read-only: never open the composer, even on a keyed session (for non-interactive callers)',
+    )
     .addHelpText(
       'after',
       `\nMessage mode: render the conversation, follow it live, and send lines through
-the session inbox — single-writer-safe and usable headless / inside a sandbox.`,
+the session inbox — single-writer-safe and usable headless / inside a sandbox.
+Pass --no-input to follow read-only from a script or agent (no TTY needed).`,
     )
-    .action(async (sessionId: string | undefined, opts: { backlog: boolean }) => {
+    .action(async (sessionId: string | undefined, opts: { steps: boolean; input: boolean }) => {
       await runAction(async () => {
         const id = resolveConnectSessionId(sessionId)
-        await runConnect(id, opts.backlog)
+        await runConnect(id, opts.steps, !opts.input)
       })
     })
 }
 
-export async function runConnect(sessionId: string, backlog: boolean): Promise<void> {
+export async function runConnect(
+  sessionId: string,
+  showSteps: boolean,
+  readOnly = false,
+): Promise<void> {
   const api = new ApiClient()
   const token = requireToken()
   const wsBase = resolveWsBase(resolveApiBase())
 
   const [session, me] = await Promise.all([api.getAgentSession(sessionId), api.whoami()])
-  const { canSend, reason } = connectability(session)
+  const c = connectability(session)
+  // --no-input forces watch-only even when the session would accept messages.
+  const canSend = readOnly ? false : c.canSend
+  const reason =
+    readOnly && c.canSend ? 'read-only (--no-input) — following without the composer' : c.reason
 
   console.log(`session:  ${session.id} (${session.status})`)
   if (session.agent_config_id) console.log(`config:   ${session.agent_config_id}`)
   console.log(`url:      ${sessionUrl(resolveAppBase(), me.customer_login, sessionId)}`)
   if (reason) console.log(reason)
 
-  if (backlog) {
+  if (showSteps) {
     const steps = await api.getAgentSessionSteps(sessionId)
     if (steps.length > 0) {
       const ordered = [...steps].sort(
