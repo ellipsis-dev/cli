@@ -1,17 +1,14 @@
 import type { Command } from 'commander'
-import { createInterface } from 'node:readline'
-import { ApiClient, ApiError } from '../lib/api'
+import React from 'react'
+import { render } from 'ink'
+import { ApiClient } from '../lib/api'
 import { requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
 import { runAction } from '../lib/output'
-import { formatStepLine } from '../lib/steps'
+import { eventToItems, type CCEvent, type TranscriptItem } from '../lib/events'
 import { sessionUrl } from '../lib/urls'
-import {
-  resolveWsBase,
-  streamSession,
-  StreamUnavailableError,
-  type StreamFrame,
-} from '../lib/ws'
-import type { AgentSession } from '../lib/types'
+import { resolveWsBase } from '../lib/ws'
+import { ConnectApp } from '../ui/ConnectApp'
+import type { AgentSession, AgentStep } from '../lib/types'
 
 // `agent session connect [sessionId]` — the terminal window into a cloud
 // session (documents/eng/SESSION_IDE.md §2.6, in the ellipsis monorepo).
@@ -106,160 +103,52 @@ export async function runConnect(
   const reason =
     readOnly && c.canSend ? 'read-only (--no-input) — following without the composer' : c.reason
 
-  console.log(`session:  ${session.id} (${session.status})`)
-  if (session.agent_config_id) console.log(`config:   ${session.agent_config_id}`)
-  console.log(`url:      ${sessionUrl(resolveAppBase(), me.customer_login, sessionId)}`)
+  // A compact header printed once above the live transcript.
+  console.log(`${session.id} · ${session.status}`)
+  console.log(sessionUrl(resolveAppBase(), me.customer_login, sessionId))
+  if (session.agent_config_id) console.log(`config ${session.agent_config_id}`)
   if (reason) console.log(reason)
-
-  if (showSteps) {
-    const steps = await api.getAgentSessionSteps(sessionId)
-    if (steps.length > 0) {
-      const ordered = [...steps].sort(
-        (a, b) => a.created_at.localeCompare(b.created_at) || a.step_index - b.step_index,
-      )
-      console.log('')
-      for (const step of ordered) console.log(formatStepLine(step))
-    }
+  if (canSend) {
+    console.log('type to send · /stop ends the turn · /exit or Ctrl+C detaches')
   }
 
-  if (!canSend) {
-    // Watch-only: follow the live stream to its terminal frame and exit.
-    console.log('')
-    await followOnce(token, sessionId, wsBase, 0, (line) => console.log(line))
-    return
-  }
+  // Fetch the stored steps to seed the transcript (unless --no-steps) and to
+  // set the live-refresh cursor, so the live updates only append what's new.
+  // The step `data` is the same Claude Code event shape the UI renders live.
+  const steps = await api.getAgentSessionSteps(sessionId)
+  const initialMaxStepIndex = steps.reduce((m, s) => Math.max(m, s.step_index), -1)
+  const initialItems = showSteps ? stepsToItems(steps) : []
 
-  console.log('')
-  console.log(
-    '── connected: type to send (delivered at the next turn boundary), ' +
-      '/stop ends the current turn, Ctrl+C detaches ──',
+  const app = render(
+    React.createElement(ConnectApp, {
+      api,
+      token,
+      sessionId,
+      wsBase,
+      canSend,
+      initialItems,
+      // Always advance the cursor past existing steps: --no-steps skips
+      // *rendering* history, not re-streaming it live.
+      initialMaxStepIndex,
+      initialStatus: session.status,
+    }),
   )
+  await app.waitUntilExit()
 
-  const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: '> ' })
-  const abort = new AbortController()
-  // The live-output cursor, carried across stream re-attaches so an idle→wake
-  // transition (the previous execution's stream ends with `done`) resumes
-  // without dropping or repeating frames.
-  let afterSeq = 0
-  let streaming = false
-
-  // Print a line "above" the composer: clear the prompt line, write, redraw
-  // the prompt with whatever the user had typed.
-  const printAbove = (line: string): void => {
-    process.stdout.write('\r\x1b[K')
-    console.log(line)
-    rl.prompt(true)
-  }
-
-  // Follow the session's live output until the current execution finishes.
-  // A keyed session going terminal is NOT the end of the conversation — it
-  // idles out between turns — so we report it quietly and re-attach on the
-  // next send instead of exiting.
-  const pump = (): void => {
-    if (streaming) return
-    streaming = true
-    void followOnce(token, sessionId, wsBase, afterSeq, printAbove, abort.signal, (seq) => {
-      afterSeq = Math.max(afterSeq, seq)
-    })
-      .then((ended) => {
-        if (ended && !abort.signal.aborted) {
-          printAbove('· agent idle — a message wakes it')
-        }
-      })
-      .catch((err: unknown) => {
-        if (err instanceof StreamUnavailableError) {
-          printAbove(`· live stream unavailable (${err.message}) — messages still send`)
-        } else {
-          printAbove(`✗ stream error: ${(err as Error).message}`)
-        }
-      })
-      .finally(() => {
-        streaming = false
-      })
-  }
-  pump()
-
-  const detach = (): void => {
-    abort.abort()
-    rl.close()
+  if (canSend) {
     console.log('\ndetached — the session keeps running (reconnect with the same command)')
   }
-
-  rl.on('SIGINT', detach)
-  rl.on('line', (raw) => {
-    const text = raw.trim()
-    if (!text) {
-      rl.prompt()
-      return
-    }
-    if (text === '/exit' || text === '/quit') {
-      detach()
-      return
-    }
-    void (async () => {
-      try {
-        if (text === '/stop') {
-          const s = await api.stopAgentSession(sessionId)
-          printAbove(`✓ stop requested (${s.status}) — the conversation survives`)
-          return
-        }
-        await api.sendSessionMessage(sessionId, text)
-        printAbove('· sent — delivered at the next turn boundary')
-        pump() // re-attach if the previous execution had ended
-      } catch (err) {
-        // 409s carry human-readable reasons (closed, budget floor); show as-is.
-        printAbove(`✗ ${err instanceof ApiError ? err.detail : (err as Error).message}`)
-      }
-    })()
-  })
-  rl.prompt()
-
-  // Keep the process alive until the user detaches.
-  await new Promise<void>((resolve) => rl.on('close', resolve))
 }
 
-// One streaming attach: renders frames as display lines until the current
-// execution's terminal frame. Resolves true when the stream ended normally
-// (terminal `done`), false on abort. Collapses repeated status frames (the
-// server's keepalive) exactly like `session get --watch`.
-async function followOnce(
-  token: string,
-  sessionId: string,
-  wsBase: string,
-  afterSeq: number,
-  print: (line: string) => void,
-  signal?: AbortSignal,
-  onSeq?: (seq: number) => void,
-): Promise<boolean> {
-  let lastStatus: string | undefined
-  const onFrame = (frame: StreamFrame): void => {
-    if (typeof frame.seq === 'number') onSeq?.(frame.seq)
-    switch (frame.type) {
-      case 'status':
-        if (frame.status !== lastStatus) {
-          lastStatus = frame.status
-          print(`· ${frame.status}`)
-        }
-        break
-      case 'stdout':
-      case 'stderr':
-        if (frame.data) {
-          for (const line of frame.data.split('\n')) {
-            if (line.trim()) print(line)
-          }
-        }
-        break
-      case 'error':
-        print(`✗ ${frame.message ?? frame.data ?? 'stream error'}`)
-        break
-      case 'done':
-        break // reported by the caller
-    }
+// Flatten stored steps into transcript items, in chronological order — the
+// stored `data` is the same Claude Code event shape as the live stream.
+function stepsToItems(steps: AgentStep[]): TranscriptItem[] {
+  const ordered = [...steps].sort(
+    (a, b) => a.created_at.localeCompare(b.created_at) || a.step_index - b.step_index,
+  )
+  const items: TranscriptItem[] = []
+  for (const step of ordered) {
+    items.push(...eventToItems(step.data as CCEvent, `s${step.step_index}`))
   }
-  const outcome = await streamSession({ token, sessionId, wsBase, afterSeq, onFrame, signal })
-  if (outcome.type === 'error') {
-    print(`✗ ${outcome.message}`)
-    return true
-  }
-  return outcome.type === 'done'
+  return items
 }

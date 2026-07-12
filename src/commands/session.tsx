@@ -219,9 +219,7 @@ export function registerSession(program: Command): void {
           const session = await api.startAgentSession(req)
 
           if (opts.connect) {
-            console.log(`✓ started session ${session.id} (${session.status})`)
-            await printSessionUrl(api, session.id)
-            await startConnect(api, session.id)
+            await startConnect(api, session)
             return
           }
 
@@ -754,31 +752,60 @@ export function registerSession(program: Command): void {
 // so there is nothing to connect to.
 const CONNECT_READY_TIMEOUT_SECONDS = 120
 
-export async function startConnect(api: ApiClient, sessionId: string): Promise<void> {
-  process.stdout.write('waiting for the sandbox')
-  const deadline = Date.now() + CONNECT_READY_TIMEOUT_SECONDS * 1000
-  for (;;) {
-    const s = await api.getAgentSession(sessionId)
-    if (s.status === 'running') break
-    if (TERMINAL_STATUSES.has(s.status)) {
-      const reason = s.status_reason ? ` — ${s.status_reason}` : ''
-      console.log(`\nsession ${s.status} before it became connectable${reason}`)
-      process.exitCode = 1
-      return
+export async function startConnect(api: ApiClient, session: AgentSession): Promise<void> {
+  const sessionId = session.id
+  // The sandbox may already be live for a warm session; otherwise show an
+  // animated wait (the transient line clears before the connect UI takes over,
+  // so the session id/url aren't printed twice). A terminal status before
+  // RUNNING means the session never got a sandbox (preflight/budget gate).
+  if (session.status !== 'running') {
+    const stop = startWaitSpinner(`starting ${sessionId} — waiting for the sandbox`)
+    const deadline = Date.now() + CONNECT_READY_TIMEOUT_SECONDS * 1000
+    for (;;) {
+      const s = await api.getAgentSession(sessionId)
+      if (s.status === 'running') break
+      if (TERMINAL_STATUSES.has(s.status)) {
+        const reason = s.status_reason ? ` — ${s.status_reason}` : ''
+        stop(`session ${s.status} before it became connectable${reason}`)
+        process.exitCode = 1
+        return
+      }
+      if (Date.now() > deadline) {
+        stop(
+          `timed out waiting for the sandbox; once it is running, connect with:\n` +
+            `  agent session connect ${sessionId}`,
+        )
+        process.exitCode = 1
+        return
+      }
+      await sleep(1000)
     }
-    if (Date.now() > deadline) {
-      console.log(
-        `\ntimed out waiting for the sandbox; once it is running, connect with:\n` +
-          `  agent session connect ${sessionId}`,
-      )
-      process.exitCode = 1
-      return
-    }
-    process.stdout.write('.')
-    await sleep(1000)
+    stop()
   }
-  process.stdout.write(' ready\n')
   await runConnect(sessionId, true)
+}
+
+// A single-line braille spinner for a pre-connect wait. `stop(final?)` clears
+// the animated line and optionally prints a final message in its place. On a
+// non-TTY (piped/CI) it prints one static line instead of animating.
+function startWaitSpinner(label: string): (final?: string) => void {
+  if (!process.stdout.isTTY) {
+    console.log(`${label}…`)
+    return (final) => {
+      if (final) console.log(final)
+    }
+  }
+  const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+  let i = 0
+  process.stdout.write('\x1b[?25l') // hide cursor
+  const draw = () => process.stdout.write(`\r\x1b[K${frames[i++ % frames.length]} ${label}…`)
+  draw()
+  const timer = setInterval(draw, 80)
+  return (final) => {
+    clearInterval(timer)
+    process.stdout.write('\r\x1b[K\x1b[?25h') // clear the line, restore cursor
+    if (final) console.log(final)
+  }
 }
 
 // `--watch` entry point: stream the session's output live over WebSocket, and
