@@ -21,6 +21,16 @@ export function toInt(value: string): number {
   return n
 }
 
+// Parse a decimal number (allows fractions, e.g. cpu 0.5 or a 0.50 budget),
+// rejecting non-numeric input up front.
+export function toNumber(value: string): number {
+  const n = value.trim() === '' ? NaN : Number(value)
+  if (!Number.isFinite(n)) {
+    throw new InvalidArgumentError(`expected a number, got "${value}"`)
+  }
+  return n
+}
+
 // Values the server accepts for the session facets, mirrored here so a typo
 // fails fast with the full list instead of a server-side 422.
 export const SESSION_SOURCES = [

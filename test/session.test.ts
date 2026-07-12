@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   applyConfigOverride,
+  buildStartOverride,
   fetchTranscript,
   readConfigFile,
   watchSession,
@@ -72,6 +73,24 @@ describe('watchSession', () => {
       await watchSession(api, 'session_1', 5, true)
       expect(get).toHaveBeenCalledTimes(1)
     }
+  })
+
+  it('sets a failure exit code on a non-completed terminal status (for --wait)', async () => {
+    process.exitCode = 0
+    const get = vi.fn().mockResolvedValueOnce(session('error'))
+    const api = { getAgentSession: get } as unknown as ApiClient
+    await watchSession(api, 'session_1', 5, true)
+    expect(process.exitCode).toBe(1)
+    process.exitCode = 0
+  })
+
+  it('leaves the exit code clean on a completed status', async () => {
+    process.exitCode = 0
+    const get = vi.fn().mockResolvedValueOnce(session('completed'))
+    const api = { getAgentSession: get } as unknown as ApiClient
+    await watchSession(api, 'session_1', 5, true)
+    expect(process.exitCode).toBe(0)
+    process.exitCode = 0
   })
 })
 
@@ -163,6 +182,76 @@ describe('applyConfigOverride', () => {
     expect(() => applyConfigOverride({}, { configOverrideFile: path })).toThrow(
       /could not parse YAML config override file/,
     )
+  })
+})
+
+describe('buildStartOverride', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-start-override-'))
+  const write = (name: string, body: string): string => {
+    const path = join(dir, name)
+    writeFileSync(path, body)
+    return path
+  }
+
+  it('returns undefined when nothing is set', () => {
+    expect(buildStartOverride({})).toBeUndefined()
+  })
+
+  it('maps each sugar flag to its config path', () => {
+    expect(
+      buildStartOverride({
+        model: 'claude-opus-4-8',
+        system: 'do the thing',
+        repo: ['ellipsis-dev/ellipsis', 'solo'],
+        cpu: 2,
+        memory: '8GB',
+        timeout: '30m',
+        budget: 0.5,
+      }),
+    ).toEqual({
+      claude: { model: 'claude-opus-4-8', system: 'do the thing' },
+      sandbox: {
+        compute: { cpu: 2, memory: '8GB', timeout: '30m' },
+        repositories: [{ owner: 'ellipsis-dev', name: 'ellipsis' }, { name: 'solo' }],
+      },
+      limits: { run: 0.5 },
+    })
+  })
+
+  it('deep-merges sugar flags on top of a raw inline override (flags win)', () => {
+    expect(
+      buildStartOverride({
+        configOverride: 'claude:\n  model: claude-haiku-4-5-20251001\n  system: base\nenabled: false',
+        model: 'claude-opus-4-8',
+      }),
+    ).toEqual({
+      claude: { model: 'claude-opus-4-8', system: 'base' },
+      enabled: false,
+    })
+  })
+
+  it('uses a file override as the base', () => {
+    const path = write('base.yaml', 'limits:\n  run: 1\n')
+    expect(buildStartOverride({ configOverrideFile: path, budget: 5 })).toEqual({
+      limits: { run: 5 },
+    })
+  })
+
+  it('rejects both inline and file override forms', () => {
+    const path = write('both.yaml', 'enabled: false\n')
+    expect(() =>
+      buildStartOverride({ configOverride: 'enabled: false', configOverrideFile: path }),
+    ).toThrow(/only one of --config-override \/ --config-override-file/)
+  })
+
+  it('rejects a non-mapping inline override', () => {
+    expect(() => buildStartOverride({ configOverride: '- a\n- b\n' })).toThrow(
+      /config override must be a mapping/,
+    )
+  })
+
+  it('rejects a malformed --repo value', () => {
+    expect(() => buildStartOverride({ repo: ['a/b/c'] })).toThrow(/--repo must be/)
   })
 })
 
