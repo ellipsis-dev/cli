@@ -57,7 +57,7 @@ import {
   type SyncOutcome,
 } from '../lib/laptop'
 import { openBrowser } from '../lib/auth'
-import { registerConnect, runConnectRaw } from './connect'
+import { registerConnect, runConnect } from './connect'
 import { formatStepLine, oneLine, stepText } from '../lib/steps'
 import { ApiError } from '../lib/api'
 import { resolveToken } from '../lib/config'
@@ -114,7 +114,7 @@ export function registerSession(program: Command): void {
     .option('-w, --watch', 'stream the session live until it reaches a terminal status')
     .option(
       '--connect',
-      "after starting, wait for the sandbox and attach a raw PTY to the agent's live terminal (needs an interactive terminal)",
+      'after starting, wait for the sandbox and connect: view the conversation, follow it live, and send messages',
     )
     .option('--json', 'output raw JSON')
     .action(
@@ -663,10 +663,11 @@ export function registerSession(program: Command): void {
     )
 }
 
-// `start --connect`: wait for the session's sandbox to come live, then attach a
-// raw PTY (the same bridge as `session connect --raw`). A terminal status before
+// `start --connect`: wait for the session's sandbox to come live, then drop into
+// the semantic connect (render the conversation, follow it live, send messages
+// through the inbox — the same as `session connect`). A terminal status before
 // RUNNING means the session never got a sandbox (e.g. a preflight/budget gate),
-// so there is nothing to attach to.
+// so there is nothing to connect to.
 const CONNECT_READY_TIMEOUT_SECONDS = 120
 
 export async function startConnect(api: ApiClient, sessionId: string): Promise<void> {
@@ -683,8 +684,8 @@ export async function startConnect(api: ApiClient, sessionId: string): Promise<v
     }
     if (Date.now() > deadline) {
       console.log(
-        `\ntimed out waiting for the sandbox; once it is running, attach with:\n` +
-          `  agent session connect --raw ${sessionId}`,
+        `\ntimed out waiting for the sandbox; once it is running, connect with:\n` +
+          `  agent session connect ${sessionId}`,
       )
       process.exitCode = 1
       return
@@ -693,7 +694,7 @@ export async function startConnect(api: ApiClient, sessionId: string): Promise<v
     await sleep(1000)
   }
   process.stdout.write(' ready\n')
-  await runConnectRaw(sessionId)
+  await runConnect(sessionId, true)
 }
 
 // `--watch` entry point: stream the session's output live over WebSocket, and

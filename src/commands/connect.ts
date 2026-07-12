@@ -11,7 +11,6 @@ import {
   StreamUnavailableError,
   type StreamFrame,
 } from '../lib/ws'
-import { attachTerminal, describeTerminalClose, isCleanClose } from '../lib/terminal'
 import type { AgentSession } from '../lib/types'
 
 // `agent session connect [sessionId]` — the terminal window into a cloud
@@ -73,48 +72,20 @@ export function registerConnect(session: Command): void {
       'Connect to a cloud session: view the conversation, follow it live, and send messages',
     )
     .option('--no-backlog', 'skip printing the stored transcript on open')
-    .option(
-      '--raw',
-      "attach a raw PTY to the agent's live terminal (the pixel-perfect TUI; needs an interactive terminal)",
-    )
     .addHelpText(
       'after',
-      `\nDefault (message mode): render the conversation, follow it live, and send lines
-through the session inbox — single-writer-safe and usable headless / inside a
-sandbox. --raw takes over your terminal and drives the agent's live TUI
-directly (detach with ${'Ctrl-]'}); it needs a running sandbox and a real TTY.`,
+      `\nMessage mode: render the conversation, follow it live, and send lines through
+the session inbox — single-writer-safe and usable headless / inside a sandbox.`,
     )
-    .action(async (sessionId: string | undefined, opts: { backlog: boolean; raw?: boolean }) => {
+    .action(async (sessionId: string | undefined, opts: { backlog: boolean }) => {
       await runAction(async () => {
         const id = resolveConnectSessionId(sessionId)
-        if (opts.raw) {
-          await runConnectRaw(id)
-          return
-        }
         await runConnect(id, opts.backlog)
       })
     })
 }
 
-// The raw-PTY attach: take over the terminal and bridge it to the session's
-// live ttyd (documents/eng/INTERACTIVE_SESSIONS.md §5). Shared by `connect
-// --raw` and `session start --connect`. Assumes the sandbox is live; the
-// backend closes with a curated reason (surfaced below) when it isn't.
-export async function runConnectRaw(sessionId: string): Promise<void> {
-  const token = requireToken()
-  const wsBase = resolveWsBase(resolveApiBase())
-  const result = await attachTerminal({ token, sessionId, wsBase })
-  // The bridge has restored the terminal; report on a fresh line.
-  process.stdout.write('\r\n')
-  if (isCleanClose(result.code)) {
-    console.log('detached — the session keeps running (reconnect with the same command)')
-    return
-  }
-  console.log(`✗ ${describeTerminalClose(result.code, result.reason)}`)
-  process.exitCode = 1
-}
-
-async function runConnect(sessionId: string, backlog: boolean): Promise<void> {
+export async function runConnect(sessionId: string, backlog: boolean): Promise<void> {
   const api = new ApiClient()
   const token = requireToken()
   const wsBase = resolveWsBase(resolveApiBase())
