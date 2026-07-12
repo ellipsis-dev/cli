@@ -313,7 +313,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     [items, expanded],
   )
   const hasCollapsible = useMemo(
-    () => items.some((it) => it.kind === 'tool_result' && it.text.split('\n').length > COLLAPSE_LINES),
+    () => items.some((it) => isCollapsible(it)),
     [items],
   )
 
@@ -351,15 +351,24 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           </Box>
         )}
         {inputActive && hasCollapsible && (
-          <Text dimColor>ctrl+r to {expanded ? 'collapse' : 'expand'} tool output</Text>
+          <Text dimColor>ctrl+r to {expanded ? 'collapse' : 'expand'} long output</Text>
         )}
       </Box>
     </Box>
   )
 }
 
-// Tool-result bodies collapse to this many lines until ctrl+r expands them.
+// Long bodies collapse to this many lines until ctrl+r expands them.
 const COLLAPSE_LINES = 6
+
+// Which items collapse when long: tool results and user turns (the latter carry
+// the re-injected run context, which is bulky). Assistant prose stays full.
+function isCollapsible(item: TranscriptItem): boolean {
+  return (
+    (item.kind === 'tool_result' || item.kind === 'user') &&
+    item.text.split('\n').length > COLLAPSE_LINES
+  )
+}
 
 // Colour + weight for each transcript item kind, matched loosely to Claude Code.
 function styleFor(item: TranscriptItem): {
@@ -409,10 +418,10 @@ const TranscriptLine = React.memo(function TranscriptLine({
     )
   }
 
-  // Tool results can be long; collapse to a compact body with a "+N lines"
-  // marker unless ctrl+r has expanded the transcript.
+  // Long tool results and user turns collapse to a compact body with a
+  // "+N lines" marker unless ctrl+r has expanded the transcript.
   const clamped =
-    item.kind === 'tool_result' && !expanded
+    !expanded && isCollapsible(item)
       ? clampLines(item.text, COLLAPSE_LINES)
       : { body: item.text, more: 0 }
 
