@@ -4,11 +4,11 @@ import { render } from 'ink'
 import { ApiClient } from '../lib/api'
 import { requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
 import { runAction } from '../lib/output'
-import { eventToItems, type CCEvent, type TranscriptItem } from '../lib/events'
+import { eventToItems, foldCosts, type CCEvent } from '../lib/events'
 import { sessionUrl } from '../lib/urls'
 import { resolveWsBase } from '../lib/ws'
 import { ConnectApp } from '../ui/ConnectApp'
-import type { AgentSession, AgentStep } from '../lib/types'
+import type { AgentSession } from '../lib/types'
 
 // `agent session connect [sessionId]` — the terminal window into a cloud
 // session (documents/eng/SESSION_IDE.md §2.6, in the ellipsis monorepo).
@@ -102,22 +102,31 @@ export async function runConnect(
   const canSend = readOnly ? false : c.canSend
   const reason =
     readOnly && c.canSend ? 'read-only (--no-input) — following without the composer' : c.reason
+  const url = sessionUrl(resolveAppBase(), me.customer_login, sessionId)
 
-  // A compact header printed once above the live transcript.
+  // A compact header printed once above the live transcript. The live footer
+  // keeps the id/url, status, and spend on screen; this is the scrollback record.
   console.log(`${session.id} · ${session.status}`)
-  console.log(sessionUrl(resolveAppBase(), me.customer_login, sessionId))
+  console.log(url)
   if (session.agent_config_id) console.log(`config ${session.agent_config_id}`)
   if (reason) console.log(reason)
   if (canSend) {
     console.log('type to send · /stop ends the turn · /exit or Ctrl+C detaches')
   }
 
-  // Fetch the stored steps to seed the transcript (unless --no-steps) and to
-  // set the live-refresh cursor, so the live updates only append what's new.
-  // The step `data` is the same Claude Code event shape the UI renders live.
+  // Fetch the stored steps to seed the transcript (unless --no-steps), the
+  // live-refresh cursor (so live updates only append what's new), and the
+  // opening spend. The step `data` is the same Claude Code event shape the UI
+  // renders live.
   const steps = await api.getAgentSessionSteps(sessionId)
-  const initialMaxStepIndex = steps.reduce((m, s) => Math.max(m, s.step_index), -1)
-  const initialItems = showSteps ? stepsToItems(steps) : []
+  const ordered = [...steps].sort(
+    (a, b) => a.created_at.localeCompare(b.created_at) || a.step_index - b.step_index,
+  )
+  const initialMaxStepIndex = ordered.reduce((m, s) => Math.max(m, s.step_index), -1)
+  const initialItems = showSteps
+    ? ordered.flatMap((st) => eventToItems(st.data as CCEvent, `s${st.step_index}`))
+    : []
+  const initialCost = foldCosts(ordered.map((st) => st.data as CCEvent))
 
   const app = render(
     React.createElement(ConnectApp, {
@@ -131,6 +140,8 @@ export async function runConnect(
       // *rendering* history, not re-streaming it live.
       initialMaxStepIndex,
       initialStatus: session.status,
+      sessionUrl: url,
+      initialCost,
     }),
   )
   await app.waitUntilExit()
@@ -138,17 +149,4 @@ export async function runConnect(
   if (canSend) {
     console.log('\ndetached — the session keeps running (reconnect with the same command)')
   }
-}
-
-// Flatten stored steps into transcript items, in chronological order — the
-// stored `data` is the same Claude Code event shape as the live stream.
-function stepsToItems(steps: AgentStep[]): TranscriptItem[] {
-  const ordered = [...steps].sort(
-    (a, b) => a.created_at.localeCompare(b.created_at) || a.step_index - b.step_index,
-  )
-  const items: TranscriptItem[] = []
-  for (const step of ordered) {
-    items.push(...eventToItems(step.data as CCEvent, `s${step.step_index}`))
-  }
-  return items
 }

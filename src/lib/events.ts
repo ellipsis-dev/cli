@@ -249,3 +249,57 @@ export function clampLines(text: string, maxLines: number): { body: string; more
   if (lines.length <= maxLines) return { body: text, more: 0 }
   return { body: lines.slice(0, maxLines).join('\n'), more: lines.length - maxLines }
 }
+
+// The cumulative session cost (USD) a Claude Code `result` event carries: each
+// result caps a turn and reports the running total for the whole session (not
+// the turn alone). null for non-result events or a result without a cost.
+export function resultCostUsd(event: CCEvent): number | null {
+  if (event.type !== 'result') return null
+  return typeof event.total_cost_usd === 'number' ? event.total_cost_usd : null
+}
+
+// Fold a chronological event list into the spend the footer shows: `total` is
+// the latest result's cumulative cost; `lastStep` is the delta from the result
+// before it — i.e. the cost of the most recent completed turn. Both null until
+// the first result lands; for the first result, lastStep equals total.
+export function foldCosts(events: CCEvent[]): {
+  total: number | null
+  lastStep: number | null
+} {
+  let prev: number | null = null
+  let total: number | null = null
+  for (const event of events) {
+    const cost = resultCostUsd(event)
+    if (cost == null) continue
+    prev = total
+    total = cost
+  }
+  const lastStep = total != null && prev != null ? Math.max(0, total - prev) : total
+  return { total, lastStep }
+}
+
+// A dim, Claude-Code-style one-liner for a session lifecycle status, shown in
+// the transcript when the status changes ("creating sandbox", "spawning agent
+// process", …). null for statuses that don't warrant their own line.
+export function statusSystemLine(status: string): string | null {
+  switch (status) {
+    case 'scheduled':
+      return 'scheduled · waiting for a worker'
+    case 'creating_sandbox':
+      return 'creating sandbox'
+    case 'running':
+      return 'sandbox ready · spawning agent process'
+    case 'retrying':
+      return 'retrying after a transient error'
+    case 'completed':
+      return 'session complete'
+    case 'error':
+      return 'session errored'
+    case 'cancelled':
+      return 'session cancelled'
+    case 'stopped':
+      return 'session stopped'
+    default:
+      return null
+  }
+}

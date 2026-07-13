@@ -22,3 +22,13 @@ export function configUrl(appBase: string, accountLogin: string, configId: strin
 export function cliAuthUrl(appBase: string, userCode: string): string {
   return `${appBase}/cli-auth?code=${encodeURIComponent(userCode)}`
 }
+
+// Wrap `label` in an OSC 8 hyperlink so it opens `url` on click in terminals
+// that support it (iTerm2, VS Code, WezTerm, kitty, GNOME); degrades to plain
+// text elsewhere. Only emitted to a TTY — piped output stays free of escapes.
+export function hyperlink(url: string, label: string, isTty = process.stdout.isTTY): string {
+  if (!isTty) return label
+  const OSC = ']8;;'
+  const ST = '\\'
+  return `${OSC}${url}${ST}${label}${OSC}${ST}`
+}
