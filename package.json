@@ -5,17 +5,10 @@
   "license": "MIT",
   "type": "module",
   "packageManager": "bun@1.3.14",
-  "bin": {
-    "agent": "dist/cli.js"
-  },
-  "files": [
-    "dist"
-  ],
+  "//": "Not an npm package. The CLI ships only as a Bun-compiled single binary via the Homebrew tap (see .github/workflows/release.yml). `private` blocks accidental `npm publish`; there is deliberately no `bin` so `npm i -g .` can't install a stale global that shadows the brew binary.",
+  "private": true,
   "engines": {
     "node": ">=18"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "dev": "tsx src/cli.tsx",
