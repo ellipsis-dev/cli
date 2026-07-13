@@ -7,3 +7,6 @@ agent
 # Use bun — keep only bun.lock
 package-lock.json
 pnpm-lock.yaml
+
+# local dev worktrees
+.worktrees/
