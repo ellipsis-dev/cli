@@ -111,6 +111,15 @@ export interface AgentSession {
   // the cloud session loop and accepts /messages; null = single-shot.
   session_key?: string | null
   session_state?: 'idle' | 'running' | 'closed' | null
+  // Customer-facing status surface (session_surface.py). `status` is the derived
+  // single word to display (working/waiting/sleeping/starting/…); `session` +
+  // `run` are the two raw axes. null for un-keyed (laptop) sessions and on list
+  // rows that don't populate it. Prefer surface.status over the raw `status`.
+  surface?: {
+    session: 'alive' | 'sleeping' | 'closed' | null
+    run: string | null
+    status: string | null
+  } | null
   cost_tokens: number
   cost_sandbox_cpu: number
   cost_sandbox_memory: number

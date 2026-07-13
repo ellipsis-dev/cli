@@ -281,20 +281,27 @@ export function foldCosts(events: CCEvent[]): {
 // A dim, Claude-Code-style one-liner for a session lifecycle status, shown in
 // the transcript when the status changes ("creating sandbox", "spawning agent
 // process", …). null for statuses that don't warrant their own line.
+// Maps the server's derived `status` word (session_surface) to a transcript
+// system line. The words are the customer-facing surface, not the raw
+// per-execution status.
 export function statusSystemLine(status: string): string | null {
   switch (status) {
     case 'scheduled':
-      return 'scheduled · waiting for a worker'
-    case 'creating_sandbox':
-      return 'creating sandbox'
-    case 'running':
-      return 'sandbox ready · spawning agent process'
+      return 'queued · waiting for a worker'
+    case 'starting':
+      return 'starting sandbox'
+    case 'working':
+      return 'agent working'
+    case 'waiting':
+      return 'waiting for your reply'
+    case 'sleeping':
+      return 'sleeping · your next message wakes it'
     case 'retrying':
       return 'retrying after a transient error'
-    case 'completed':
-      return 'session complete'
-    case 'error':
-      return 'session errored'
+    case 'closed':
+      return 'conversation closed'
+    case 'failed':
+      return 'session failed'
     case 'cancelled':
       return 'session cancelled'
     case 'stopped':
