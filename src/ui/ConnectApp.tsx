@@ -50,9 +50,12 @@ export interface ConnectAppProps {
   initialCost: { total: number | null; lastStep: number | null }
 }
 
-// Statuses in which the agent is actively producing output — drives the spinner.
+// Surface statuses in which something is actively happening — drives the
+// spinner. `waiting` (turn done, warm, your move) and `sleeping` (parked) are
+// deliberately NOT here: the spinner stops and the footer reads the calm state
+// instead of a misleading "running".
 function isWorkingStatus(status: string): boolean {
-  return ['scheduled', 'creating_sandbox', 'running', 'retrying'].includes(status)
+  return ['scheduled', 'starting', 'working', 'retrying'].includes(status)
 }
 
 export function ConnectApp(props: ConnectAppProps): React.ReactElement {
@@ -211,7 +214,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         lastStatus.current = frame.status
         setStatus(frame.status)
         setWorking(isWorkingStatus(frame.status))
-        if (frame.status === 'running') everRunning.current = true
+        // Box-up states (working/waiting) mean the session became connectable;
+        // used to tell a preflight failure from a mid-conversation one.
+        if (['working', 'waiting'].includes(frame.status)) everRunning.current = true
         emitStatusLine(frame.status)
       }
       if (frame.type === 'error') {
@@ -258,7 +263,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         if (
           outcome.type === 'done' &&
           !everRunning.current &&
-          ['error', 'cancelled', 'stopped'].includes(outcome.status)
+          ['failed', 'cancelled', 'stopped'].includes(outcome.status)
         ) {
           setNotice(`session ${outcome.status} before it became connectable`)
           process.exitCode = 1
@@ -287,19 +292,22 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       })
   }, [canSend, exit, handleFrame, refreshSteps, sessionId, token, wsBase])
 
-  // A status backstop that doesn't depend on the socket: the lifecycle frames
-  // (creating_sandbox → running) may arrive before the socket attaches, so poll
-  // the session too and drive the same transition handling. `lastStatus`
-  // dedupes against socket frames so a transition is only announced once.
+  // A status backstop that doesn't depend on the socket: the lifecycle
+  // transitions may arrive before the socket attaches, so poll the session too
+  // and drive the same transition handling. Use the derived surface word so this
+  // matches the stream's `frame.status` exactly (the raw `status` is a different
+  // vocabulary); fall back to raw for un-keyed sessions. `lastStatus` dedupes
+  // against socket frames so a transition is only announced once.
   const pollStatus = useCallback(async (): Promise<void> => {
     try {
       const s = await api.getAgentSession(sessionId)
-      if (s.status !== lastStatus.current) {
-        lastStatus.current = s.status
-        setStatus(s.status)
-        setWorking(isWorkingStatus(s.status))
-        if (s.status === 'running') everRunning.current = true
-        emitStatusLine(s.status)
+      const word = s.surface?.status ?? s.status
+      if (word !== lastStatus.current) {
+        lastStatus.current = word
+        setStatus(word)
+        setWorking(isWorkingStatus(word))
+        if (['working', 'waiting'].includes(word)) everRunning.current = true
+        emitStatusLine(word)
       }
     } catch {
       // Transient fetch failure — the next tick retries.

@@ -106,7 +106,7 @@ export async function runConnect(
 
   // A compact header printed once above the live transcript. The live footer
   // keeps the id/url, status, and spend on screen; this is the scrollback record.
-  console.log(`${session.id} · ${session.status}`)
+  console.log(`${session.id} · ${session.surface?.status ?? session.status}`)
   console.log(url)
   if (session.agent_config_id) console.log(`config ${session.agent_config_id}`)
   if (reason) console.log(reason)
@@ -139,7 +139,7 @@ export async function runConnect(
       // Always advance the cursor past existing steps: --no-steps skips
       // *rendering* history, not re-streaming it live.
       initialMaxStepIndex,
-      initialStatus: session.status,
+      initialStatus: session.surface?.status ?? session.status,
       sessionUrl: url,
       initialCost,
     }),

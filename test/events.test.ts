@@ -196,10 +196,13 @@ describe('foldCosts', () => {
 })
 
 describe('statusSystemLine', () => {
-  it('maps lifecycle statuses to Claude-Code-style lines', () => {
-    expect(statusSystemLine('creating_sandbox')).toBe('creating sandbox')
-    expect(statusSystemLine('running')).toBe('sandbox ready · spawning agent process')
-    expect(statusSystemLine('completed')).toBe('session complete')
+  it('maps surface statuses to Claude-Code-style lines', () => {
+    expect(statusSystemLine('starting')).toBe('starting sandbox')
+    expect(statusSystemLine('working')).toBe('agent working')
+    expect(statusSystemLine('waiting')).toBe('waiting for your reply')
+    expect(statusSystemLine('sleeping')).toBe('sleeping · your next message wakes it')
+    expect(statusSystemLine('closed')).toBe('conversation closed')
+    expect(statusSystemLine('failed')).toBe('session failed')
   })
 
   it('is null for an unknown status', () => {
