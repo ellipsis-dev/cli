@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   clampLines,
   eventToItems,
+  foldCosts,
   LineBuffer,
   parseEventLine,
+  resultCostUsd,
+  statusSystemLine,
   summarizeToolInput,
   type CCEvent,
 } from '../src/lib/events'
@@ -141,5 +144,65 @@ describe('clampLines', () => {
     const { body, more } = clampLines(text, 6)
     expect(body.split('\n')).toHaveLength(6)
     expect(more).toBe(4)
+  })
+})
+
+describe('resultCostUsd', () => {
+  it('returns the total_cost_usd of a result event', () => {
+    expect(resultCostUsd({ type: 'result', total_cost_usd: 0.4381 })).toBe(0.4381)
+  })
+
+  it('is null for non-result events and results without a cost', () => {
+    expect(resultCostUsd({ type: 'assistant' })).toBeNull()
+    expect(resultCostUsd({ type: 'result' })).toBeNull()
+  })
+})
+
+describe('foldCosts', () => {
+  it('is all-null with no result events', () => {
+    expect(foldCosts([{ type: 'assistant' }, { type: 'user' }])).toEqual({
+      total: null,
+      lastStep: null,
+    })
+  })
+
+  it('makes the first turn cost the whole cumulative total', () => {
+    expect(foldCosts([{ type: 'result', total_cost_usd: 0.32 }])).toEqual({
+      total: 0.32,
+      lastStep: 0.32,
+    })
+  })
+
+  it('takes the latest total and the delta from the previous result as the last step', () => {
+    // The cumulative result totals from the "u up" prod session: 0.41 then 0.44
+    // → total 0.44, last turn 0.03.
+    const events: CCEvent[] = [
+      { type: 'result', total_cost_usd: 0.3224 },
+      { type: 'result', total_cost_usd: 0.41 },
+      { type: 'result', total_cost_usd: 0.4381 },
+    ]
+    const { total, lastStep } = foldCosts(events)
+    expect(total).toBeCloseTo(0.4381, 4)
+    expect(lastStep).toBeCloseTo(0.0281, 4)
+  })
+
+  it('never reports a negative last step if a total regresses', () => {
+    const events: CCEvent[] = [
+      { type: 'result', total_cost_usd: 0.5 },
+      { type: 'result', total_cost_usd: 0.4 },
+    ]
+    expect(foldCosts(events).lastStep).toBe(0)
+  })
+})
+
+describe('statusSystemLine', () => {
+  it('maps lifecycle statuses to Claude-Code-style lines', () => {
+    expect(statusSystemLine('creating_sandbox')).toBe('creating sandbox')
+    expect(statusSystemLine('running')).toBe('sandbox ready · spawning agent process')
+    expect(statusSystemLine('completed')).toBe('session complete')
+  })
+
+  it('is null for an unknown status', () => {
+    expect(statusSystemLine('nonsense')).toBeNull()
   })
 })

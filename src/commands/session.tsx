@@ -219,7 +219,7 @@ export function registerSession(program: Command): void {
           const session = await api.startAgentSession(req)
 
           if (opts.connect) {
-            await startConnect(api, session)
+            await startConnect(session)
             return
           }
 
@@ -745,67 +745,14 @@ export function registerSession(program: Command): void {
     )
 }
 
-// `start --connect`: wait for the session's sandbox to come live, then drop into
-// the semantic connect (render the conversation, follow it live, send messages
-// through the inbox — the same as `session connect`). A terminal status before
-// RUNNING means the session never got a sandbox (e.g. a preflight/budget gate),
-// so there is nothing to connect to.
-const CONNECT_READY_TIMEOUT_SECONDS = 120
-
-export async function startConnect(api: ApiClient, session: AgentSession): Promise<void> {
-  const sessionId = session.id
-  // The sandbox may already be live for a warm session; otherwise show an
-  // animated wait (the transient line clears before the connect UI takes over,
-  // so the session id/url aren't printed twice). A terminal status before
-  // RUNNING means the session never got a sandbox (preflight/budget gate).
-  if (session.status !== 'running') {
-    const stop = startWaitSpinner(`starting ${sessionId} — waiting for the sandbox`)
-    const deadline = Date.now() + CONNECT_READY_TIMEOUT_SECONDS * 1000
-    for (;;) {
-      const s = await api.getAgentSession(sessionId)
-      if (s.status === 'running') break
-      if (TERMINAL_STATUSES.has(s.status)) {
-        const reason = s.status_reason ? ` — ${s.status_reason}` : ''
-        stop(`session ${s.status} before it became connectable${reason}`)
-        process.exitCode = 1
-        return
-      }
-      if (Date.now() > deadline) {
-        stop(
-          `timed out waiting for the sandbox; once it is running, connect with:\n` +
-            `  agent session connect ${sessionId}`,
-        )
-        process.exitCode = 1
-        return
-      }
-      await sleep(1000)
-    }
-    stop()
-  }
-  await runConnect(sessionId, true)
-}
-
-// A single-line braille spinner for a pre-connect wait. `stop(final?)` clears
-// the animated line and optionally prints a final message in its place. On a
-// non-TTY (piped/CI) it prints one static line instead of animating.
-function startWaitSpinner(label: string): (final?: string) => void {
-  if (!process.stdout.isTTY) {
-    console.log(`${label}…`)
-    return (final) => {
-      if (final) console.log(final)
-    }
-  }
-  const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
-  let i = 0
-  process.stdout.write('\x1b[?25l') // hide cursor
-  const draw = () => process.stdout.write(`\r\x1b[K${frames[i++ % frames.length]} ${label}…`)
-  draw()
-  const timer = setInterval(draw, 80)
-  return (final) => {
-    clearInterval(timer)
-    process.stdout.write('\r\x1b[K\x1b[?25h') // clear the line, restore cursor
-    if (final) console.log(final)
-  }
+// `start --connect`: drop straight into the semantic connect (render the
+// conversation, follow it live, send messages through the inbox — the same as
+// `session connect`). The connect UI itself renders the sandbox lifecycle
+// (creating sandbox → spawning agent process) as it happens and reports a
+// terminal status reached before the sandbox ever ran (a preflight/budget gate),
+// so there is nothing to wait for out here.
+export async function startConnect(session: AgentSession): Promise<void> {
+  await runConnect(session.id, true)
 }
 
 // `--watch` entry point: stream the session's output live over WebSocket, and

@@ -3,7 +3,17 @@ import { Box, Text, useApp, useInput, useStdin } from 'ink'
 import Spinner from 'ink-spinner'
 import { ApiClient, ApiError } from '../lib/api'
 import { streamSession, StreamUnavailableError, type StreamFrame } from '../lib/ws'
-import { clampLines, eventToItems, type CCEvent, type ItemKind, type TranscriptItem } from '../lib/events'
+import {
+  clampLines,
+  eventToItems,
+  foldCosts,
+  resultCostUsd,
+  statusSystemLine,
+  type CCEvent,
+  type ItemKind,
+  type TranscriptItem,
+} from '../lib/events'
+import { hyperlink } from '../lib/urls'
 
 // The interactive `agent session connect` UI, modelled on Claude Code: a
 // committed transcript that groups tool calls with their results and spaces
@@ -33,6 +43,11 @@ export interface ConnectAppProps {
   // only append steps newer than what's on screen.
   initialMaxStepIndex: number
   initialStatus: string
+  // The clickable dashboard link for this session (app.ellipsis.dev/…/sessions/{id}),
+  // shown in the footer status line.
+  sessionUrl: string
+  // Spend seeded from the stored steps: cumulative total + the last turn's cost.
+  initialCost: { total: number | null; lastStep: number | null }
 }
 
 // Statuses in which the agent is actively producing output — drives the spinner.
@@ -64,6 +79,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // the turn settles.
   const [liveText, setLiveText] = useState('')
   const [liveTokens, setLiveTokens] = useState<number | null>(null)
+  // Running spend for the footer: `total` is the cumulative session cost from
+  // the latest Claude Code result; `lastStep` is the cost of the most recent
+  // turn (the delta between the last two results).
+  const [cost, setCost] = useState(props.initialCost)
 
   // Live-flow state that must survive re-renders without triggering them.
   const afterSeq = useRef(0)
@@ -74,6 +93,11 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // The highest step_index committed to the transcript, and the refresh
   // in-flight / re-run guards so overlapping wakes don't double-append.
   const maxStep = useRef(props.initialMaxStepIndex)
+  // The cumulative cost last committed, so a new result's delta = the turn cost.
+  const costTotal = useRef(props.initialCost.total)
+  // Whether the sandbox ever reached `running`, so a terminal status *before*
+  // that (a preflight/budget gate) is reported as a failure, not idle.
+  const everRunning = useRef(props.initialStatus === 'running')
   const refreshing = useRef(false)
   const pendingRefresh = useRef(false)
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -109,6 +133,29 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     if (commit.length) setItems((prev) => [...prev, ...commit])
   }, [])
 
+  // Fold a committed event into the footer spend: a result carries the running
+  // total, so the turn cost is its delta from the previous total.
+  const applyCost = useCallback((event: CCEvent): void => {
+    const total = resultCostUsd(event)
+    if (total == null) return
+    const prev = costTotal.current
+    costTotal.current = total
+    setCost({ total, lastStep: prev != null ? Math.max(0, total - prev) : total })
+  }, [])
+
+  // Append a dim, Claude-Code-style lifecycle line ("creating sandbox", …) when
+  // the session status changes.
+  const emitStatusLine = useCallback(
+    (next: string): void => {
+      const line = statusSystemLine(next)
+      if (!line) return
+      append([
+        { key: `st${keyCounter.current++}`, kind: 'system', gutter: '●', text: line, spaceBefore: true },
+      ])
+    },
+    [append],
+  )
+
   // Pull the structured steps and append any newer than what's on screen. This
   // is the sole source of transcript content — the socket only decides *when*
   // to call it. Guarded so concurrent wakes coalesce into one trailing refresh.
@@ -125,7 +172,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       )
       const fresh = ordered.filter((st) => st.step_index > maxStep.current)
       if (fresh.length) {
-        for (const st of fresh) maxStep.current = Math.max(maxStep.current, st.step_index)
+        for (const st of fresh) {
+          maxStep.current = Math.max(maxStep.current, st.step_index)
+          applyCost(st.data as CCEvent)
+        }
         append(fresh.flatMap((st) => eventToItems(st.data as CCEvent, `s${st.step_index}`)))
         // A committed step landed — the streamed overlay is now part of the
         // transcript (or the turn advanced), so drop the live overlay.
@@ -141,7 +191,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         void refreshSteps()
       }
     }
-  }, [api, append, sessionId])
+  }, [api, append, applyCost, sessionId])
 
   // Coalesce bursts of wakes into one refresh a beat later.
   const scheduleRefresh = useCallback((): void => {
@@ -161,6 +211,8 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         lastStatus.current = frame.status
         setStatus(frame.status)
         setWorking(isWorkingStatus(frame.status))
+        if (frame.status === 'running') everRunning.current = true
+        emitStatusLine(frame.status)
       }
       if (frame.type === 'error') {
         setNotice(frame.message ?? frame.data ?? 'stream error')
@@ -176,7 +228,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       }
       scheduleRefresh()
     },
-    [scheduleRefresh],
+    [emitStatusLine, scheduleRefresh],
   )
 
   // Keep the socket attached across reconnects/resume. A keyed session going
@@ -201,6 +253,18 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         setLiveTokens(null)
         setWorking(false)
         if (outcome.type === 'error') setNotice(`stream error: ${outcome.message}`)
+        // A terminal failure before the sandbox ever ran is a preflight/budget
+        // gate — there's no conversation to attend, so report it and exit.
+        if (
+          outcome.type === 'done' &&
+          !everRunning.current &&
+          ['error', 'cancelled', 'stopped'].includes(outcome.status)
+        ) {
+          setNotice(`session ${outcome.status} before it became connectable`)
+          process.exitCode = 1
+          exit()
+          return
+        }
         if (canSend) {
           if (outcome.type === 'done') setNotice('agent idle — send a message to wake it')
         } else {
@@ -223,20 +287,46 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       })
   }, [canSend, exit, handleFrame, refreshSteps, sessionId, token, wsBase])
 
+  // A status backstop that doesn't depend on the socket: the lifecycle frames
+  // (creating_sandbox → running) may arrive before the socket attaches, so poll
+  // the session too and drive the same transition handling. `lastStatus`
+  // dedupes against socket frames so a transition is only announced once.
+  const pollStatus = useCallback(async (): Promise<void> => {
+    try {
+      const s = await api.getAgentSession(sessionId)
+      if (s.status !== lastStatus.current) {
+        lastStatus.current = s.status
+        setStatus(s.status)
+        setWorking(isWorkingStatus(s.status))
+        if (s.status === 'running') everRunning.current = true
+        emitStatusLine(s.status)
+      }
+    } catch {
+      // Transient fetch failure — the next tick retries.
+    }
+  }, [api, emitStatusLine, sessionId])
+
   useEffect(() => {
+    // Announce the phase we connected during (creating a sandbox, retrying) so
+    // the lifecycle reads top-to-bottom even when we attach mid-startup.
+    const s0 = lastStatus.current
+    if (s0 === 'scheduled' || s0 === 'creating_sandbox' || s0 === 'retrying') emitStatusLine(s0)
     pump()
     scheduleRefresh() // catch steps created between the initial fetch and connect
     // A slow poll backs up the socket wake (and covers a socket that never
     // connected, so following still updates). The socket wake is the fast path;
     // this is just a safety net, so it can be gentle.
     const poll = setInterval(scheduleRefresh, 3000)
+    const statusPoll = setInterval(() => void pollStatus(), 3000)
     const controller = abort.current
     return () => {
       controller.abort()
       clearInterval(poll)
+      clearInterval(statusPoll)
       if (refreshTimer.current) clearTimeout(refreshTimer.current)
     }
-  }, [pump, scheduleRefresh])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pump, scheduleRefresh, pollStatus])
 
   // Tick an elapsed-seconds counter while the agent works — a steady progress
   // read alongside the live token counter, and the sole liveness cue during a
@@ -339,6 +429,15 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     [items],
   )
 
+  // The persistent footer status line, Claude-Code-style: the (clickable)
+  // session id, the current status, and the running spend — cumulative total
+  // plus the cost of the last turn.
+  const idLink = hyperlink(props.sessionUrl, sessionId)
+  const totalStr = `$${(cost.total ?? 0).toFixed(2)}`
+  const lastStepStr =
+    cost.lastStep != null ? ` (Last step: $${cost.lastStep.toFixed(2)})` : ''
+  const metaLine = `${idLink} · ${status} · ${totalStr} total${lastStepStr}`
+
   return (
     <Box flexDirection="column">
       {lines}
@@ -357,20 +456,21 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
               <Spinner type="dots" />
             </Text>{' '}
             <Text dimColor>
-              {status} · {elapsed}s
+              working · {elapsed}s
               {liveTokens != null ? ` · ${formatTokens(liveTokens)} tokens` : ''}
               {inputActive ? ' · esc to interrupt · type to queue a message' : ''}
             </Text>
           </Text>
         )}
-        {inputActive ? (
-          <Box>
+        {/* The composer, framed by a full-width rule above and below (Claude
+            Code-style): the › prompt sits between the two lines. Only the top and
+            bottom borders are drawn, so the rules span the terminal width. */}
+        {inputActive && (
+          <Box borderStyle="single" borderLeft={false} borderRight={false} borderDimColor>
             <Text color="cyan">› </Text>
             <Text>{input}</Text>
             <Text inverse> </Text>
           </Box>
-        ) : (
-          !working && <Text dimColor>· {canSend ? status : `following ${status}`}</Text>
         )}
         {queued.length > 0 && (
           <Box flexDirection="column">
@@ -381,9 +481,12 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             ))}
           </Box>
         )}
-        {inputActive && hasCollapsible && (
-          <Text dimColor>ctrl+r to {expanded ? 'collapse' : 'expand'} long output</Text>
-        )}
+        <Text dimColor>
+          {metaLine}
+          {inputActive && hasCollapsible
+            ? ` · ctrl+r to ${expanded ? 'collapse' : 'expand'}`
+            : ''}
+        </Text>
       </Box>
     </Box>
   )
