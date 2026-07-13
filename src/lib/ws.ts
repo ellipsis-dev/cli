@@ -6,18 +6,25 @@ import { DEFAULT_WS_BASE, USER_AGENT } from './constants'
 // JSON object per message. Mirrors session_stream.py in the backend.
 //   status: { type, status, ts }
 //   stdout/stderr: { type, data, seq, ts }
+//   delta:  { type, text?, output_tokens? }
 //   done: { type, status, exit_status }
 //   error: { type, message }
 // `seq` is a monotonic per-session cursor; the client resumes from the last seq
-// it saw via `?after_seq=` so a dropped socket loses nothing.
+// it saw via `?after_seq=` so a dropped socket loses nothing. `delta` is the
+// EPHEMERAL live-streaming frame (partial assistant text + running token count);
+// it has no seq — not resumable, rendered live and superseded by the committed
+// step that follows.
 export interface StreamFrame {
-  type: 'stdout' | 'stderr' | 'status' | 'done' | 'error'
+  type: 'stdout' | 'stderr' | 'status' | 'delta' | 'done' | 'error'
   data?: string
   status?: string
   seq?: number
   ts?: string
   message?: string
   exit_status?: string | null
+  // delta frames only:
+  text?: string | null
+  output_tokens?: number | null
 }
 
 // How streamSession() finished. `done`/`error` are normal terminal outcomes;

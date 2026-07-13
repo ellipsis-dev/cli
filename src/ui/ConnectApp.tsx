@@ -11,12 +11,14 @@ import { clampLines, eventToItems, type CCEvent, type ItemKind, type TranscriptI
 // composer that echoes what you send. Rendering shape lives in lib/events.ts
 // (pure); this component owns the data flow, the composer, and the colours.
 //
-// Data flow: the session WebSocket relays plain *text* (not structured events),
-// so it can't be grouped into tool calls / results. Instead we render from the
-// structured steps API (GET /v1/sessions/{id}/steps, whose `data` is the full
-// Claude Code event), and use the socket only as a low-latency "something
-// changed" wake plus status source. A slow poll backs it up when the socket is
-// unavailable. This mirrors how the dashboard re-reads steps on a notify.
+// Data flow: the committed transcript comes from the structured steps API
+// (GET /v1/sessions/{id}/steps, whose `data` is the full Claude Code event) —
+// grouped into tool calls / results — with the socket as a low-latency
+// "something changed" wake plus status source, backed by a slow poll. On top of
+// that, the socket also carries EPHEMERAL `delta` frames (partial assistant text
+// + a running output-token count) that render as a live, in-progress line and a
+// footer token counter — the token-by-token feel of local Claude Code — until
+// the committed assistant step lands and supersedes it.
 
 export interface ConnectAppProps {
   api: ApiClient
@@ -56,6 +58,12 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // the transcript when the backend relays it as a user turn, or when the turn
   // idles (whichever first), so a send is never lost.
   const [queued, setQueued] = useState<string[]>([])
+  // Ephemeral live-streaming overlay for the CURRENT assistant response, driven
+  // by `delta` frames: the prose so far and the running output-token count. Both
+  // clear when the committed assistant step lands (it supersedes the overlay) or
+  // the turn settles.
+  const [liveText, setLiveText] = useState('')
+  const [liveTokens, setLiveTokens] = useState<number | null>(null)
 
   // Live-flow state that must survive re-renders without triggering them.
   const afterSeq = useRef(0)
@@ -119,6 +127,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       if (fresh.length) {
         for (const st of fresh) maxStep.current = Math.max(maxStep.current, st.step_index)
         append(fresh.flatMap((st) => eventToItems(st.data as CCEvent, `s${st.step_index}`)))
+        // A committed step landed — the streamed overlay is now part of the
+        // transcript (or the turn advanced), so drop the live overlay.
+        setLiveText('')
+        setLiveTokens(null)
       }
     } catch {
       // Transient fetch failure — the next wake/poll retries.
@@ -154,6 +166,14 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         setNotice(frame.message ?? frame.data ?? 'stream error')
         return
       }
+      // Ephemeral streaming delta: update the live overlay in place. NOT a
+      // committed-steps wake, so it must not trigger a steps refresh (that would
+      // poll the API several times a second during generation).
+      if (frame.type === 'delta') {
+        if (frame.text) setLiveText((t) => t + frame.text)
+        if (typeof frame.output_tokens === 'number') setLiveTokens(frame.output_tokens)
+        return
+      }
       scheduleRefresh()
     },
     [scheduleRefresh],
@@ -177,6 +197,8 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       .then(async (outcome) => {
         if (abort.current.signal.aborted) return
         await refreshSteps() // pull the final steps of the turn before settling
+        setLiveText('')
+        setLiveTokens(null)
         setWorking(false)
         if (outcome.type === 'error') setNotice(`stream error: ${outcome.message}`)
         if (canSend) {
@@ -216,9 +238,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     }
   }, [pump, scheduleRefresh])
 
-  // Tick an elapsed-seconds counter while the agent works, so a long turn (the
-  // stream delivers a whole message at once, not token-by-token) reads as live
-  // progress rather than a frozen spinner. Reset at the start of each turn.
+  // Tick an elapsed-seconds counter while the agent works — a steady progress
+  // read alongside the live token counter, and the sole liveness cue during a
+  // long tool call (which streams no assistant deltas). Reset each turn.
   useEffect(() => {
     if (!working) return
     setElapsed(0)
@@ -320,6 +342,13 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   return (
     <Box flexDirection="column">
       {lines}
+      {/* The in-progress assistant response, streamed token-by-token from delta
+          frames; replaced by the committed step when it lands. */}
+      {liveText && (
+        <Box marginTop={1}>
+          <Text>{liveText}</Text>
+        </Box>
+      )}
       <Box flexDirection="column" marginTop={1}>
         {notice && <Text dimColor>· {notice}</Text>}
         {working && (
@@ -328,7 +357,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
               <Spinner type="dots" />
             </Text>{' '}
             <Text dimColor>
-              {status} · {elapsed}s{inputActive ? ' · esc to interrupt · type to queue a message' : ''}
+              {status} · {elapsed}s
+              {liveTokens != null ? ` · ${formatTokens(liveTokens)} tokens` : ''}
+              {inputActive ? ' · esc to interrupt · type to queue a message' : ''}
             </Text>
           </Text>
         )}
@@ -356,6 +387,11 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       </Box>
     </Box>
   )
+}
+
+// Compact token count for the live footer: 1400 -> "1.4k", 900 -> "900".
+function formatTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 }
 
 // Long bodies collapse to this many lines until ctrl+r expands them.
