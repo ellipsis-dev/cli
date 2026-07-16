@@ -43,4 +43,12 @@ registerUsage(program)
 registerAnalytics(program)
 registerPing(program)
 
+// Bare `agent` (no args at all) drops into a fresh connected session, as a
+// shorthand for `agent session start --connect`. Everything else parses
+// untouched — `agent --help`/`--version` still print the full top-level help,
+// and every subcommand dispatches normally.
+if (process.argv.length === 2) {
+  process.argv.push('session', 'start', '--connect')
+}
+
 await program.parseAsync(process.argv)
