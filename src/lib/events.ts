@@ -10,7 +10,8 @@
 // is pure (no ANSI, no Ink) so it can be unit-tested directly; colours and
 // layout live in the UI component.
 
-import { oneLine } from './steps'
+import { lifecycleText, oneLine } from './steps'
+import type { SessionRecord } from './types'
 
 // A loosely-typed content block of a Claude Code message. We only read the
 // fields we display and never interpret the rest of the payload.
@@ -240,6 +241,18 @@ export function eventToItems(event: CCEvent, keyBase: string): TranscriptItem[] 
     }
   }
   return items
+}
+
+// Render one native session_record into transcript items. A claude_code
+// record's payload is a CCEvent (assistant/user/result — expanded by
+// eventToItems); a lifecycle record becomes a single dim notice line (the
+// spawn/respawn/idle notifications). `keyBase` makes React keys unique.
+export function recordToItems(record: SessionRecord, keyBase: string): TranscriptItem[] {
+  if (record.source === 'lifecycle') {
+    const text = lifecycleText(record.record_type, record.payload)
+    return text ? [{ key: keyBase, kind: 'notice', text, spaceBefore: true }] : []
+  }
+  return eventToItems(record.payload as CCEvent, keyBase)
 }
 
 // Clamp a multi-line body to `maxLines`, appending a dim "+N lines" marker when

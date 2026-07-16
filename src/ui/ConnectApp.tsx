@@ -5,8 +5,8 @@ import { ApiClient, ApiError } from '../lib/api'
 import { streamSession, StreamUnavailableError, type StreamFrame } from '../lib/ws'
 import {
   clampLines,
-  eventToItems,
   foldCosts,
+  recordToItems,
   resultCostUsd,
   statusSystemLine,
   type CCEvent,
@@ -39,9 +39,10 @@ export interface ConnectAppProps {
   // closed / --no-input sessions follow read-only and exit when the stream ends.
   canSend: boolean
   initialItems: TranscriptItem[]
-  // The highest step_index already rendered into initialItems, so live refreshes
-  // only append steps newer than what's on screen.
-  initialMaxStepIndex: number
+  // The highest feed_seq already rendered into initialItems, so live refreshes
+  // only append records newer than what's on screen (feed_seq is the shared
+  // per-session order across transcript + lifecycle records).
+  initialMaxFeedSeq: number
   initialStatus: string
   // The clickable dashboard link for this session (app.ellipsis.dev/…/sessions/{id}),
   // shown in the footer status line.
@@ -93,9 +94,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const abort = useRef(new AbortController())
   const lastStatus = useRef(props.initialStatus)
   const keyCounter = useRef(0)
-  // The highest step_index committed to the transcript, and the refresh
+  // The highest feed_seq committed to the transcript, and the refresh
   // in-flight / re-run guards so overlapping wakes don't double-append.
-  const maxStep = useRef(props.initialMaxStepIndex)
+  const maxFeed = useRef(props.initialMaxFeedSeq)
   // The cumulative cost last committed, so a new result's delta = the turn cost.
   const costTotal = useRef(props.initialCost.total)
   // Whether the sandbox ever reached `running`, so a terminal status *before*
@@ -169,17 +170,15 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     }
     refreshing.current = true
     try {
-      const steps = await api.getAgentSessionSteps(sessionId)
-      const ordered = [...steps].sort(
-        (a, b) => a.created_at.localeCompare(b.created_at) || a.step_index - b.step_index,
-      )
-      const fresh = ordered.filter((st) => st.step_index > maxStep.current)
+      const records = await api.getAgentSessionSteps(sessionId)
+      const ordered = [...records].sort((a, b) => a.feed_seq - b.feed_seq)
+      const fresh = ordered.filter((st) => st.feed_seq > maxFeed.current)
       if (fresh.length) {
         for (const st of fresh) {
-          maxStep.current = Math.max(maxStep.current, st.step_index)
-          applyCost(st.data as CCEvent)
+          maxFeed.current = Math.max(maxFeed.current, st.feed_seq)
+          applyCost(st.payload as CCEvent)
         }
-        append(fresh.flatMap((st) => eventToItems(st.data as CCEvent, `s${st.step_index}`)))
+        append(fresh.flatMap((st) => recordToItems(st, `s${st.feed_seq}`)))
         // A committed step landed — the streamed overlay is now part of the
         // transcript (or the turn advanced), so drop the live overlay.
         setLiveText('')

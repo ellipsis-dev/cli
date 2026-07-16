@@ -2,7 +2,6 @@ import { resolveApiBase, resolveToken } from './config'
 import { USER_AGENT } from './constants'
 import type {
   AgentSession,
-  AgentStep,
   AgentTemplate,
   AnalyticsMetricsQuery,
   AnalyticsPullRequestsQuery,
@@ -43,6 +42,7 @@ import type {
   SandboxVariableSummary,
   SearchSessionsQuery,
   SearchSessionsResponse,
+  SessionRecord,
   SyncAgentSessionRequest,
   SyncAgentSessionResponse,
   SavedAgentConfig,
@@ -195,13 +195,14 @@ export class ApiClient {
     )
   }
 
-  // The session's full stored transcript, ordered by created_at then step_index.
-  async getAgentSessionSteps(sessionId: string): Promise<AgentStep[]> {
+  // The session's full stored transcript as native session_records (transcript
+  // + lifecycle), ordered by feed_seq.
+  async getAgentSessionSteps(sessionId: string): Promise<SessionRecord[]> {
     const res = await this.request<ListSessionStepsResponse>(
       'GET',
       `/v1/sessions/${encodeURIComponent(sessionId)}/steps`,
     )
-    return res.steps
+    return res.records
   }
 
   // The session's raw transcripts — one .jsonl.gz per process — each with a
