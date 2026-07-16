@@ -43,12 +43,24 @@ registerUsage(program)
 registerAnalytics(program)
 registerPing(program)
 
-// Bare `agent` (no args at all) drops into a fresh connected session, as a
-// shorthand for `agent session start --connect`. Everything else parses
-// untouched — `agent --help`/`--version` still print the full top-level help,
-// and every subcommand dispatches normally.
-if (process.argv.length === 2) {
-  process.argv.push('session', 'start', '--connect')
+// Any invocation that isn't a known subcommand or a top-level help/version
+// request is shorthand for `agent session start --connect ...`. So a bare
+// `agent`, and `agent "fix the tests" --model ...`, both forward the prompt
+// and every trailing flag through to a fresh connected session. `agent --help`,
+// `agent --version`, `agent help`, and every subcommand dispatch unchanged.
+const topLevelCommands = new Set([
+  'help',
+  ...program.commands.flatMap((c) => [c.name(), ...c.aliases()]),
+])
+const first = process.argv[2]
+const isTopLevel =
+  first === '-h' ||
+  first === '--help' ||
+  first === '-V' ||
+  first === '--version' ||
+  (first !== undefined && topLevelCommands.has(first))
+if (!isTopLevel) {
+  process.argv.splice(2, 0, 'session', 'start', '--connect')
 }
 
 await program.parseAsync(process.argv)
