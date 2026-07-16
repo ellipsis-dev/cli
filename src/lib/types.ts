@@ -287,20 +287,42 @@ export interface ListAgentSessionsQuery {
 // ------------------------------ session steps ----------------------------
 
 // One stored transcript event, from GET /v1/sessions/{id}/steps. Loosely
-// typed: `data` is the raw Claude Code stream event (assistant turn, tool
-// call, tool result, final result); the CLI only extracts display text.
-export interface AgentStep {
+// The render switch on a session_record (session_records.source). The CLI
+// renders claude_code records natively and lifecycle records as system lines.
+export type RecordSource = 'claude_code' | 'lifecycle'
+
+// session_records.record_type for source==='lifecycle' rows: the
+// spawn/respawn/idle notifications the transcript itself does not carry.
+export type LifecycleRecordType =
+  | 'sandbox_starting'
+  | 'sandbox_ready'
+  | 'session_resumed'
+  | 'session_paused'
+  | 'session_closed'
+  | 'session_cancelled'
+
+// One native session_record from GET /v1/sessions/{id}/steps. `payload` is the
+// harness's verbatim line — for claude_code, a Claude Code stream event
+// (assistant turn, tool call/result, result); for lifecycle, a small blob. The
+// CLI switches on `source` and only extracts display text. `feed_seq` is the
+// shared per-session order (transcript + lifecycle merged); `stream_seq` is the
+// per-execution native index (NEGATIVE for lifecycle records).
+export interface SessionRecord {
   id: string
+  agent_session_id: string
+  session_execution_id: string
   created_at: string
-  step_index: number
-  step_type: string
-  step_subtype: string | null
-  data: Record<string, unknown>
+  feed_seq: number
+  stream_seq: number
+  source: RecordSource
+  record_type: string
+  record_format: string
+  payload: Record<string, unknown>
   [key: string]: unknown
 }
 
 export interface ListSessionStepsResponse {
-  steps: AgentStep[]
+  records: SessionRecord[]
 }
 
 // One process's raw transcript from GET /v1/sessions/{id}/transcripts: the

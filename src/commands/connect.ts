@@ -4,7 +4,7 @@ import { render } from 'ink'
 import { ApiClient } from '../lib/api'
 import { requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
 import { runAction } from '../lib/output'
-import { eventToItems, foldCosts, type CCEvent } from '../lib/events'
+import { foldCosts, recordToItems, type CCEvent } from '../lib/events'
 import { sessionUrl } from '../lib/urls'
 import { resolveWsBase } from '../lib/ws'
 import { ConnectApp } from '../ui/ConnectApp'
@@ -114,19 +114,18 @@ export async function runConnect(
     console.log('type to send · /stop ends the turn · /exit or Ctrl+C detaches')
   }
 
-  // Fetch the stored steps to seed the transcript (unless --no-steps), the
+  // Fetch the stored records to seed the transcript (unless --no-steps), the
   // live-refresh cursor (so live updates only append what's new), and the
-  // opening spend. The step `data` is the same Claude Code event shape the UI
-  // renders live.
-  const steps = await api.getAgentSessionSteps(sessionId)
-  const ordered = [...steps].sort(
-    (a, b) => a.created_at.localeCompare(b.created_at) || a.step_index - b.step_index,
-  )
-  const initialMaxStepIndex = ordered.reduce((m, s) => Math.max(m, s.step_index), -1)
+  // opening spend. Records are ordered by feed_seq (the shared transcript +
+  // lifecycle feed); a claude_code record's payload is the Claude Code event
+  // the UI renders live, a lifecycle record renders as a notice line.
+  const records = await api.getAgentSessionSteps(sessionId)
+  const ordered = [...records].sort((a, b) => a.feed_seq - b.feed_seq)
+  const initialMaxFeedSeq = ordered.reduce((m, s) => Math.max(m, s.feed_seq), 0)
   const initialItems = showSteps
-    ? ordered.flatMap((st) => eventToItems(st.data as CCEvent, `s${st.step_index}`))
+    ? ordered.flatMap((st) => recordToItems(st, `s${st.feed_seq}`))
     : []
-  const initialCost = foldCosts(ordered.map((st) => st.data as CCEvent))
+  const initialCost = foldCosts(ordered.map((st) => st.payload as CCEvent))
 
   const app = render(
     React.createElement(ConnectApp, {
@@ -136,9 +135,9 @@ export async function runConnect(
       wsBase,
       canSend,
       initialItems,
-      // Always advance the cursor past existing steps: --no-steps skips
+      // Always advance the cursor past existing records: --no-steps skips
       // *rendering* history, not re-streaming it live.
-      initialMaxStepIndex,
+      initialMaxFeedSeq,
       initialStatus: session.surface?.status ?? session.status,
       sessionUrl: url,
       initialCost,
