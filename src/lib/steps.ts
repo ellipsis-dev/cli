@@ -1,7 +1,7 @@
 import { formatTs } from './output'
 import type { SessionRecord } from './types'
 
-// Step-rendering helpers shared by `session steps` and `session connect`
+// Record-rendering helpers shared by `session records` and `session connect`
 // (moved out of commands/session.tsx so connect.ts can use them without an
 // import cycle; session.tsx re-exports them for compatibility).
 

@@ -61,7 +61,7 @@ agent session search "webhook retries"   # search session history: transcripts, 
 agent session search "acme/api#512" --author tony --since "3 days ago"   # PR-shaped queries and facets
 agent session get <session-id>        # inspect one session (prints a dashboard link)
 agent session get <session-id> --watch  # follow a session until it finishes
-agent session steps <session-id>      # read a session's stored transcript, one line per step
+agent session records <session-id>    # read a session's stored transcript, one line per record
 agent session connect <session-id>    # connect to a session: transcript + live output + send messages
 agent session connect                 # inside an Ellipsis sandbox: connects to the running session
 agent session stop <session-id>       # stop an in-flight session
