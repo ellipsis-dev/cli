@@ -50,6 +50,11 @@ import type {
   StartAgentSessionRequest,
   UsageDashboard,
   WhoAmI,
+  GetSandboxBuildLogsResponse,
+  ListSandboxBuildsResponse,
+  SandboxBuild,
+  SandboxBuildLogLine,
+  StartSandboxBuildRequest,
 } from './types'
 
 // Thin REST client over the public `/v1` API. The typed request/response
@@ -350,6 +355,42 @@ export class ApiClient {
       `/v1/sandboxes/variables/${encodeURIComponent(name)}`,
     )
     return res.variables
+  }
+
+  // ----------------------------- sandbox builds ---------------------------
+  // "docker build" for the Ellipsis sandbox (test a config's environment
+  // definition, streamed logs, cache pre-warm on success).
+
+  startSandboxBuild(request: StartSandboxBuildRequest): Promise<SandboxBuild> {
+    return this.request('POST', '/v1/sandboxes/builds', request)
+  }
+
+  async listSandboxBuilds(limit?: number): Promise<SandboxBuild[]> {
+    const res = await this.request<ListSandboxBuildsResponse>(
+      'GET',
+      '/v1/sandboxes/builds',
+      undefined,
+      { limit },
+    )
+    return res.builds
+  }
+
+  getSandboxBuild(buildId: string): Promise<SandboxBuild> {
+    return this.request('GET', `/v1/sandboxes/builds/${encodeURIComponent(buildId)}`)
+  }
+
+  async getSandboxBuildLogs(
+    buildId: string,
+    afterSeq?: number,
+    limit?: number,
+  ): Promise<SandboxBuildLogLine[]> {
+    const res = await this.request<GetSandboxBuildLogsResponse>(
+      'GET',
+      `/v1/sandboxes/builds/${encodeURIComponent(buildId)}/logs`,
+      undefined,
+      { after_seq: afterSeq, limit },
+    )
+    return res.lines
   }
 
   // ---------------------------- agent templates ---------------------------
