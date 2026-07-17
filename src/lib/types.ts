@@ -580,6 +580,58 @@ export interface ListSentryOrganizationsResponse {
   organizations: SentryOrganizationSummary[]
 }
 
+// ---------------------------- sandbox builds -----------------------------
+// "docker build" for the Ellipsis sandbox: run a config's environment
+// definition (dockerfile_append + clone + image.setup [+ hooks]) with
+// streamed logs and no agent, pre-warming the image cache on success.
+
+export type SandboxBuildStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+export type SandboxBuildPhase = 'image' | 'clone' | 'setup' | 'snapshot' | 'hooks'
+export type SandboxBuildCacheTier = 'exact' | 'incremental' | 'full'
+
+export interface SandboxBuild {
+  id: string
+  created_at: string
+  updated_at: string
+  config_id: string | null
+  config_sha: string
+  hooks_requested: boolean
+  status: SandboxBuildStatus
+  phase: SandboxBuildPhase | null
+  cache_tier: SandboxBuildCacheTier | null
+  phase_timings: Record<string, number>
+  failing_phase: SandboxBuildPhase | null
+  exit_code: number | null
+  status_reason: string | null
+  sandbox_id: string | null
+  result_image_id: string | null
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface StartSandboxBuildRequest {
+  config_yaml?: string
+  config_id?: string
+  hooks?: boolean
+}
+
+export interface ListSandboxBuildsResponse {
+  builds: SandboxBuild[]
+}
+
+export interface SandboxBuildLogLine {
+  build_id: string
+  seq: number
+  ts: string
+  phase: SandboxBuildPhase
+  line: string
+}
+
+export interface GetSandboxBuildLogsResponse {
+  build_id: string
+  lines: SandboxBuildLogLine[]
+}
+
 // -------------------------- sandbox variables ---------------------------
 // Customer-scoped environment variables injected into a sandbox when an agent
 // config names them. Values are write-only: the API accepts them but never
