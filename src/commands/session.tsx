@@ -35,7 +35,6 @@ import type {
   AgentSession,
   AgentSessionSource,
   AgentSessionStatus,
-  AgentStep,
   GithubAccountSnippet,
   ReplayAgentSessionRequest,
   SessionSearchResult,
@@ -59,7 +58,7 @@ import {
 } from '../lib/laptop'
 import { openBrowser } from '../lib/auth'
 import { registerConnect, runConnect } from './connect'
-import { formatStepLine, oneLine, stepText } from '../lib/steps'
+import { formatStepLine, oneLine, recordText } from '../lib/steps'
 import { ApiError } from '../lib/api'
 import { resolveToken } from '../lib/config'
 
@@ -382,32 +381,31 @@ export function registerSession(program: Command): void {
             }
           }
           console.log(
-            '\nInspect one: agent session get <id>; full transcript: agent session steps <id>',
+            '\nInspect one: agent session get <id>; full transcript: agent session records <id>',
           )
         })
       },
     )
 
   session
-    .command('steps <sessionId>')
-    .description("Read a session's steps (GET /v1/sessions/{id}/steps)")
-    .option('--json', 'output raw JSON (full step payloads)')
+    .command('records <sessionId>')
+    .description("Read a session's records (GET /v1/sessions/{id}/records)")
+    .option('--json', 'output raw JSON (full record payloads)')
     .action(async (sessionId: string, opts: { json?: boolean }) => {
       await runAction(async () => {
-        const steps = await new ApiClient().getAgentSessionSteps(sessionId)
+        const records = await new ApiClient().getAgentSessionRecords(sessionId)
         if (opts.json) {
-          printJson(steps)
+          printJson(records)
           return
         }
-        if (steps.length === 0) {
-          console.log('No steps recorded for this session.')
+        if (records.length === 0) {
+          console.log('No records stored for this session.')
           return
         }
-        // Chronological, one line per step; --json has the full payloads.
-        const ordered = [...steps].sort(
-          (a, b) => a.created_at.localeCompare(b.created_at) || a.step_index - b.step_index,
-        )
-        for (const step of ordered) console.log(formatStepLine(step))
+        // Feed order (transcript + lifecycle merged), one line per record;
+        // --json has the full payloads.
+        const ordered = [...records].sort((a, b) => a.feed_seq - b.feed_seq)
+        for (const record of ordered) console.log(formatStepLine(record))
       })
     })
 
@@ -1069,9 +1067,9 @@ export function formatSearchResult(
   return lines
 }
 
-// formatStepLine / stepText moved to lib/steps.ts (shared with `session
+// formatStepLine / recordText moved to lib/steps.ts (shared with `session
 // connect`); re-exported here for existing importers and tests.
-export { formatStepLine, stepText }
+export { formatStepLine, recordText }
 
 // Pull a transcript from its presigned S3 URL (bare fetch — the signature in
 // the URL is the credential) and gunzip unless the caller wants the raw

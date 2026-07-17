@@ -3,13 +3,13 @@ import { ApiClient } from '../src/lib/api'
 import {
   formatSearchResult,
   formatStepLine,
+  recordText,
   resolveAuthorId,
-  stepText,
 } from '../src/commands/session'
 import type {
   AgentSession,
-  AgentStep,
   GithubAccountSnippet,
+  SessionRecord,
   SessionSearchResult,
 } from '../src/lib/types'
 
@@ -61,18 +61,18 @@ describe('searchSessions', () => {
   })
 })
 
-describe('getAgentSessionSteps', () => {
+describe('getAgentSessionRecords', () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it('unwraps the steps array from the session-scoped path (encoded)', async () => {
+  it('unwraps the records array from the session-scoped path (encoded)', async () => {
     const fetchMock = vi.fn(
-      async () => new Response(JSON.stringify({ steps: [{ id: 'step_1' }] }), { status: 200 }),
+      async () => new Response(JSON.stringify({ records: [{ id: 'rec_1' }] }), { status: 200 }),
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const out = await new ApiClient('http://api.test', 't').getAgentSessionSteps('session/1')
-    expect(out.map((s) => s.id)).toEqual(['step_1'])
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/sessions/session%2F1/steps')
+    const out = await new ApiClient('http://api.test', 't').getAgentSessionRecords('session/1')
+    expect(out.map((s) => s.id)).toEqual(['rec_1'])
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/sessions/session%2F1/records')
   })
 })
 
@@ -176,23 +176,32 @@ describe('formatSearchResult', () => {
   })
 })
 
-describe('stepText / formatStepLine', () => {
-  const step = (data: Record<string, unknown>, overrides: Partial<AgentStep> = {}): AgentStep => ({
-    id: 'step_1',
+describe('recordText / formatStepLine', () => {
+  const record = (
+    payload: Record<string, unknown>,
+    overrides: Partial<SessionRecord> = {},
+  ): SessionRecord => ({
+    id: 'rec_1',
+    agent_session_id: 'session_1',
+    session_execution_id: 'exec_1',
     created_at: '2026-07-03T12:00:00+00:00',
-    step_index: 3,
-    step_type: 'assistant',
-    step_subtype: null,
-    data,
+    feed_seq: 3,
+    stream_seq: 3,
+    source: 'claude_code',
+    record_type: (payload.type as string) ?? 'assistant',
+    record_format: 'claude_stream_json@2.0',
+    payload,
     ...overrides,
   })
 
-  it('reads a result step', () => {
-    expect(stepText(step({ type: 'result', result: 'All tests pass.' }))).toBe('All tests pass.')
+  it('reads a result record', () => {
+    expect(recordText(record({ type: 'result', result: 'All tests pass.' }))).toBe(
+      'All tests pass.',
+    )
   })
 
   it('reads string message content', () => {
-    expect(stepText(step({ message: { content: 'plain text' } }))).toBe('plain text')
+    expect(recordText(record({ message: { content: 'plain text' } }))).toBe('plain text')
   })
 
   it('joins text/thinking blocks and summarizes tool calls', () => {
@@ -205,7 +214,7 @@ describe('stepText / formatStepLine', () => {
         ],
       },
     }
-    expect(stepText(step(data))).toBe(
+    expect(recordText(record(data))).toBe(
       'check the auth flow Reading the file. [tool: Read] {"file_path":"src/auth.ts"}',
     )
   })
@@ -216,25 +225,33 @@ describe('stepText / formatStepLine', () => {
         content: [{ type: 'tool_result', content: [{ type: 'text', text: 'file contents' }] }],
       },
     }
-    expect(stepText(step(data))).toBe('file contents')
+    expect(recordText(record(data))).toBe('file contents')
   })
 
   it('falls back to the raw JSON for unknown payloads', () => {
-    expect(stepText(step({ subtype: 'init' }))).toBe('{"subtype":"init"}')
+    expect(recordText(record({ subtype: 'init' }))).toBe('{"subtype":"init"}')
   })
 
   it('formats one line with index, timestamp, type, and truncated text', () => {
+    // record_type + payload.subtype drive the type column; stream_seq the index.
     const line = formatStepLine(
-      step(
-        { message: { content: 'line one\nline two' } },
-        { step_type: 'system', step_subtype: 'init' },
+      record(
+        { subtype: 'init', message: { content: 'line one\nline two' } },
+        { record_type: 'system' },
       ),
     )
     expect(line).toBe('   3  2026-07-03 12:00  system/init       line one line two')
   })
 
+  it('renders a lifecycle record as its notification line', () => {
+    const line = formatStepLine(
+      record({}, { source: 'lifecycle', record_type: 'sandbox_ready', stream_seq: -2 }),
+    )
+    expect(line).toBe('  -2  2026-07-03 12:00  sandbox_ready     Sandbox ready')
+  })
+
   it('truncates long text to about 120 characters', () => {
-    const line = formatStepLine(step({ message: { content: 'x'.repeat(500) } }))
+    const line = formatStepLine(record({ message: { content: 'x'.repeat(500) } }))
     expect(line.endsWith('...')).toBe(true)
     // 4 (index) + 16 (timestamp) + 16 (type) + separators + 120 of text.
     expect(line.length).toBe(42 + 120)

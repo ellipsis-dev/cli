@@ -43,4 +43,24 @@ registerUsage(program)
 registerAnalytics(program)
 registerPing(program)
 
+// Any invocation that isn't a known subcommand or a top-level help/version
+// request is shorthand for `agent session start --connect ...`. So a bare
+// `agent`, and `agent "fix the tests" --model ...`, both forward the prompt
+// and every trailing flag through to a fresh connected session. `agent --help`,
+// `agent --version`, `agent help`, and every subcommand dispatch unchanged.
+const topLevelCommands = new Set([
+  'help',
+  ...program.commands.flatMap((c) => [c.name(), ...c.aliases()]),
+])
+const first = process.argv[2]
+const isTopLevel =
+  first === '-h' ||
+  first === '--help' ||
+  first === '-V' ||
+  first === '--version' ||
+  (first !== undefined && topLevelCommands.has(first))
+if (!isTopLevel) {
+  process.argv.splice(2, 0, 'session', 'start', '--connect')
+}
+
 await program.parseAsync(process.argv)
