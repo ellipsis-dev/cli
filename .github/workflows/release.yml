@@ -17,7 +17,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -65,7 +65,7 @@ jobs:
           sha256sum *.tar.gz > checksums.txt
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.version.outputs.version }}
           files: |
@@ -73,7 +73,7 @@ jobs:
             dist/checksums.txt
 
       - name: Check out the Homebrew tap
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ellipsis-dev/homebrew-cli
           # Write-scoped deploy key for the tap repo only (the workflow's own
