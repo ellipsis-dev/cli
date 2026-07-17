@@ -72,6 +72,12 @@ function isWorkingStatus(status: string): boolean {
   return ['scheduled', 'starting', 'working', 'retrying'].includes(status)
 }
 
+// One local send awaiting server acknowledgement: postSeq is null while the
+// POST is in flight, then the monotonic order in which it resolved — used to
+// retire the chip once an inbox fetch is guaranteed to cover it (see
+// refreshSteps).
+type QueuedSend = { text: string; postSeq: number | null }
+
 export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const { api, token, sessionId, wsBase, canSend } = props
   const { exit } = useApp()
@@ -101,10 +107,19 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // ctrl+r toggles full vs. collapsed tool output across the whole transcript.
   const [expanded, setExpanded] = useState(false)
   // Messages you've sent that the agent hasn't picked up yet — shown as a
-  // queued region below the composer, exactly like Claude Code. Each moves into
-  // the transcript when the backend relays it as a user turn, or when the turn
-  // idles (whichever first), so a send is never lost.
-  const [queued, setQueued] = useState<string[]>([])
+  // queued region below the composer, exactly like Claude Code. A send renders
+  // as a LOCAL chip only until a records/turns refresh that started after its
+  // POST resolved confirms the server has the message (postSeq, see
+  // refreshSteps); from then on the server's own pending rows (serverQueued)
+  // are the queued truth. That keeps the region honest even when the agent
+  // consumes messages in ways local text-matching can't follow (the server once
+  // coalesced two queued sends into one "a\nb" user turn, stranding both chips
+  // forever). Chips also leave via the transcript: when the backend relays a
+  // send as a user turn, or when the turn idles (whichever first), so a send is
+  // never lost.
+  const [queued, setQueued] = useState<QueuedSend[]>([])
+  // Bodies of the server's PENDING inbox messages — the durable queued signal.
+  const [serverQueued, setServerQueued] = useState<string[]>([])
   // Ephemeral live-streaming overlay for the CURRENT assistant response, driven
   // by `delta` frames: the prose so far and the running output-token count. Both
   // clear when the committed assistant step lands (it supersedes the overlay) or
@@ -138,11 +153,19 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // A mirror of `queued` for async callbacks, and the texts already committed
   // locally so the backend's later echo of the same send is dropped.
-  const queuedRef = useRef<string[]>([])
+  const queuedRef = useRef<QueuedSend[]>([])
   const flushed = useRef<string[]>([])
   useEffect(() => {
     queuedRef.current = queued
   }, [queued])
+  // Mirror of serverQueued for the refresh gate, and the monotonic counter
+  // stamped onto a chip when its POST resolves (see refreshSteps).
+  const serverQueuedRef = useRef<string[]>([])
+  useEffect(() => {
+    serverQueuedRef.current = serverQueued
+  }, [serverQueued])
+  const postSeqCounter = useRef(0)
+  const fetchedTurnsOnce = useRef(false)
 
   // Append items, promoting a queued send when its user turn arrives and
   // dropping the backend's echo of a send we already committed locally.
@@ -150,9 +173,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     const commit: TranscriptItem[] = []
     for (const it of incoming) {
       if (it.kind === 'user') {
-        if (queuedRef.current.includes(it.text)) {
+        if (queuedRef.current.some((q) => q.text === it.text)) {
           setQueued((prev) => {
-            const j = prev.indexOf(it.text)
+            const j = prev.findIndex((q) => q.text === it.text)
             return j < 0 ? prev : [...prev.slice(0, j), ...prev.slice(j + 1)]
           })
         } else {
@@ -191,7 +214,30 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     }
     refreshing.current = true
     try {
+      // Reconcile the queued region against the server's inbox whenever there
+      // is anything to reconcile (plus once at startup, to pick up messages
+      // already pending on reconnect). A chip whose POST resolved BEFORE this
+      // fetch started (postSeq < startSeq) is guaranteed to be in the fetched
+      // list, so the server rows take over as its representation and the chip
+      // retires — delivered messages vanish, still-pending ones re-render from
+      // serverQueued with identical text.
+      const wantTurns =
+        !fetchedTurnsOnce.current ||
+        queuedRef.current.length > 0 ||
+        serverQueuedRef.current.length > 0
+      const startSeq = postSeqCounter.current
+      const turnsPromise = wantTurns
+        ? api.getAgentSessionTurns(sessionId).catch(() => null)
+        : Promise.resolve(null)
       const records = await api.getAgentSessionRecords(sessionId)
+      const turns = await turnsPromise
+      if (turns !== null) {
+        fetchedTurnsOnce.current = true
+        setServerQueued(
+          turns.messages.filter((m) => m.status === 'pending').map((m) => m.body),
+        )
+        setQueued((prev) => prev.filter((q) => q.postSeq === null || q.postSeq >= startSeq))
+      }
       const ordered = [...records].sort((a, b) => a.feed_seq - b.feed_seq)
       const fresh = ordered.filter((st) => st.feed_seq > maxFeed.current)
       if (fresh.length) {
@@ -393,6 +439,20 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // transcript — see pendingToolCalls), with a per-burst seconds ticker so a
   // long Bash call reads "Running Bash(pytest…)… (34s)" instead of dead air.
   const pendingTools = useMemo(() => pendingToolCalls(items), [items])
+  // The queued region: the server's pending inbox rows are the truth; a local
+  // chip shows only while the server doesn't yet cover it (multiset-subtracted
+  // by text so a send never renders twice during the handoff window).
+  const queuedDisplay = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const b of serverQueued) counts.set(b, (counts.get(b) ?? 0) + 1)
+    const extras: string[] = []
+    for (const q of queued) {
+      const n = counts.get(q.text) ?? 0
+      if (n > 0) counts.set(q.text, n - 1)
+      else extras.push(q.text)
+    }
+    return [...serverQueued, ...extras]
+  }, [serverQueued, queued])
   const [toolElapsed, setToolElapsed] = useState(0)
   const pendingToolKey = pendingTools.length > 0 ? pendingTools[0].key : null
   useEffect(() => {
@@ -408,12 +468,12 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // flushes immediately — it starts a fresh turn rather than queueing.
   useEffect(() => {
     if (working || queued.length === 0) return
-    flushed.current.push(...queued)
-    const items = queued.map<TranscriptItem>((text) => ({
+    flushed.current.push(...queued.map((q) => q.text))
+    const items = queued.map<TranscriptItem>((q) => ({
       key: `q${keyCounter.current++}`,
       kind: 'user',
       gutter: '›',
-      text,
+      text: q.text,
       spaceBefore: true,
     }))
     setItems((prev) => [...prev, ...items])
@@ -437,15 +497,29 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             return
           }
           // Show the message as queued (or, if idle, it flushes to the
-          // transcript at once), then post it and wait for the turn.
-          setQueued((prev) => [...prev, text])
+          // transcript at once), then post it and wait for the turn. Once the
+          // POST resolves the server owns the message: stamp the chip with the
+          // next postSeq so the first inbox fetch that starts after this point
+          // retires it in favour of the server's own pending row.
+          setQueued((prev) => [...prev, { text, postSeq: null }])
           setNotice(null)
           await api.sendSessionMessage(sessionId, text)
+          const seq = ++postSeqCounter.current
+          setQueued((prev) => {
+            let stamped = false
+            return prev.map((q) => {
+              if (!stamped && q.text === text && q.postSeq === null) {
+                stamped = true
+                return { text: q.text, postSeq: seq }
+              }
+              return q
+            })
+          })
           setWorking(true)
           pump()
         } catch (err) {
           setQueued((prev) => {
-            const j = prev.indexOf(text)
+            const j = prev.findIndex((q) => q.text === text && q.postSeq === null)
             return j < 0 ? prev : [...prev.slice(0, j), ...prev.slice(j + 1)]
           })
           setNotice(`✗ ${err instanceof ApiError ? err.detail : (err as Error).message}`)
@@ -595,9 +669,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             <Text inverse> </Text>
           </Box>
         )}
-        {queued.length > 0 && (
+        {queuedDisplay.length > 0 && (
           <Box flexDirection="column">
-            {queued.map((text, i) => (
+            {queuedDisplay.map((text, i) => (
               <Text key={`q${i}`} dimColor>
                 ⏳ queued · {text}
               </Text>

@@ -324,6 +324,40 @@ export interface ListSessionRecordsResponse {
   records: SessionRecord[]
 }
 
+// One exchange within a keyed session (a single Claude Code turn), from
+// GET /v1/sessions/{id}/turns.
+export interface SessionTurn {
+  id: string
+  agent_session_id: string
+  turn_index: number
+  status: string
+  created_at: string
+  completed_at: string | null
+  [key: string]: unknown
+}
+
+// One entry in a keyed session's inbox: a message posted into the conversation,
+// `pending` until a turn consumes it (the server-side "queued" signal),
+// `delivered` once it reached the agent. `body` is the raw text as sent.
+export interface SessionMessage {
+  id: string
+  agent_session_id: string
+  body: string
+  status: 'pending' | 'delivered'
+  feed_seq: number | null
+  created_at: string
+  delivered_at: string | null
+  delivered_turn_id: string | null
+  [key: string]: unknown
+}
+
+// GET /v1/sessions/{id}/turns: the conversation structure of a keyed session —
+// empty lists for single-shot sessions.
+export interface ListSessionTurnsResponse {
+  turns: SessionTurn[]
+  messages: SessionMessage[]
+}
+
 // One process's raw transcript from GET /v1/sessions/{id}/transcripts: the
 // pointer metadata plus a short-lived presigned S3 GET for the .jsonl.gz
 // object itself (expires after expires_in seconds — fetch it immediately).
