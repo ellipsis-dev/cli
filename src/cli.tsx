@@ -46,8 +46,11 @@ registerPing(program)
 // Any invocation that isn't a known subcommand or a top-level help/version
 // request is shorthand for `agent session start --connect ...`. So a bare
 // `agent`, and `agent "fix the tests" --model ...`, both forward the prompt
-// and every trailing flag through to a fresh connected session. `agent --help`,
-// `agent --version`, `agent help`, and every subcommand dispatch unchanged.
+// and every trailing flag through to a fresh connected session. A bare
+// `agent` starts the session idle (idle_start): the sandbox spins up and
+// Claude Code waits for the first thing typed into the composer, like a
+// local `claude`. `agent --help`, `agent --version`, `agent help`, and every
+// subcommand dispatch unchanged.
 const topLevelCommands = new Set([
   'help',
   ...program.commands.flatMap((c) => [c.name(), ...c.aliases()]),

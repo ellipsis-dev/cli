@@ -220,6 +220,12 @@ export function registerSession(program: Command): void {
           // Appended to the initial user query at build time; gives this
           // session instructions on top of the config's shared system prompt.
           if (promptText) req.prompt = promptText
+          // A promptless connect (a bare `agent`) starts the session idle:
+          // no fabricated kickoff message, Claude Code waits at the prompt
+          // for whatever is typed into the composer, like a local `claude`.
+          // A promptless --watch/--detach start still runs the config's
+          // workflow, so this only applies to the interactive open.
+          if (opts.connect && !promptText) req.idle_start = true
 
           const api = new ApiClient()
           const session = await api.startAgentSession(req)
