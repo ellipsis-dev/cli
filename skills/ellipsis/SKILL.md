@@ -34,6 +34,80 @@ dashboard excursion.
 - Delegation from scripts or CI: `agent session start` or `POST /v1/sessions`,
   with `--watch` streaming output into the log.
 
+## Getting started with Ellipsis
+
+Onboarding is a CLI flow end to end, so it does not need a human at a
+dashboard: a coding agent with this skill can migrate a team onto Ellipsis by
+itself. Upload the environment variables, draft the agent configs, prove the
+sandbox image actually builds, then deploy. The steps below are that flow.
+
+1. Install and log in:
+
+   ```sh
+   brew install ellipsis-dev/cli/agent
+   agent login      # device-code flow tied to your GitHub identity
+   agent ping       # confirms the CLI can authenticate and reach the API
+   ```
+
+   Sessions clone real repositories, so the GitHub App must be installed on
+   the account (app.ellipsis.dev walks through it). In CI or another headless
+   environment, export an API key as `ELLIPSIS_API_TOKEN` instead of logging
+   in.
+
+2. See a session run before configuring anything:
+
+   ```sh
+   agent session start --template welcome-to-ellipsis --watch
+   ```
+
+3. Start from a template. Maintained templates (code review, daily standups,
+   team activity reports, schema migration review, session-history search)
+   make the first real agent a two-command deploy: pick a slug, and
+   `agent config create` opens a pull request adding the config to your
+   repository, ready to edit before it merges.
+
+   ```sh
+   agent template list
+   agent config create --template code-reviewer --repo api
+   ```
+
+   One template, `agent-config-builder`, is an agent that drafts other agents
+   from a plain-language description.
+
+4. Store the secrets your agents will need. Variables live account-wide in a
+   write-only store; a config receives only the variables it names.
+
+   ```sh
+   agent sandbox variable set LINEAR_API_KEY=lin_api_...
+   agent sandbox variable set --from-file .env
+   ```
+
+5. Draft a config and prove its environment before anything deploys.
+   `agent sandbox build` runs the config's environment definition (base image
+   plus your Dockerfile layers, repository checkout, dependency setup, and
+   with `--hooks` the lifecycle hooks) with no agent and no token spend,
+   streaming the build output. A broken toolchain install fails here in
+   minutes with its full log, not inside your first real session, and a green
+   build is cached so that first session starts warm.
+
+   ```sh
+   agent config init agents/my_agent.yaml
+   agent sandbox build start --config-file agents/my_agent.yaml --watch
+   agent sandbox build start --config-file agents/my_agent.yaml --hooks --watch
+   ```
+
+6. Test a session from the local file, then deploy it as a pull request:
+
+   ```sh
+   agent session start --config-file agents/my_agent.yaml --watch
+   agent config create --repo api --file agents/my_agent.yaml
+   ```
+
+   Merge the pull request and the agent is live. From then on, changing the
+   agent is a normal code change.
+
+The same flow with transcripts: https://www.ellipsis.dev/docs/guides/cli-setup
+
 ## Core concepts
 
 - **Agents as code**: YAML files under `agents/` in a repository. Creating or
@@ -47,7 +121,8 @@ dashboard excursion.
 - **Sandbox**: each session gets an isolated cloud sandbox with Python, Node,
   git, the `gh` CLI, and the repositories pre-cloned. Dependency installs are
   cached into the image, so repeat sessions start in seconds. Compute,
-  lifecycle hooks, and extra image layers are per-agent YAML.
+  lifecycle hooks, and extra image layers are per-agent YAML, and
+  `agent sandbox build` tests the image on its own, before any agent runs.
 - **Secrets and permissions**: credentials are stored once in a write-only
   variable store and injected by name; nothing in a sandbox can read values
   back. Each agent's GitHub token narrows to the permissions and repositories
@@ -67,6 +142,7 @@ Everything above in depth at https://www.ellipsis.dev/docs (agent-readable
 index: https://www.ellipsis.dev/llms.txt):
 
 - Quickstart: https://www.ellipsis.dev/docs/get-started/quickstart
+- Set up agents from the CLI: https://www.ellipsis.dev/docs/guides/cli-setup
 - Agent config reference: https://www.ellipsis.dev/docs/reference/agent-config
 - CLI reference: https://www.ellipsis.dev/docs/reference/cli
 - REST API reference: https://www.ellipsis.dev/docs/reference/api
@@ -84,7 +160,10 @@ search what every agent has done, deploy a new agent as a PR — and, because
 most commands accept `--json` for the raw API response, the same commands are
 comfortable for coding agents and scripts as for humans. The identical binary
 is pre-installed and pre-authenticated inside every Ellipsis sandbox, so cloud
-agents drive the platform with it too.
+agents drive the platform with it too. The surface is complete enough that
+migrating a team onto Ellipsis is itself delegable to an agent: variables,
+configs, image builds, and deploys are all commands (see
+[Getting started with Ellipsis](#getting-started-with-ellipsis)).
 
 ```sh
 brew install ellipsis-dev/cli/agent
@@ -125,10 +204,12 @@ Author and inspect agents:
 
 ```sh
 agent config init                            # scaffold agents/my_agent.yaml
-agent config create --template ci-failure-triager --repo api   # deploy via PR
+agent config create --template code-reviewer --repo api   # deploy via PR
 agent template list                          # browse maintained templates
 agent integrations                           # connected GitHub/Slack/Linear/Sentry
 agent sandbox variable set LINEAR_API_KEY=...
+agent sandbox build start --config-file agents/my_agent.yaml --watch
+                                             # prove the image before deploying
 ```
 
 ## Defining an agent
