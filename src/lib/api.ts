@@ -33,6 +33,7 @@ import type {
   ListLinearTeamsResponse,
   ListSentryOrganizationsResponse,
   ListSessionRecordsResponse,
+  ListSessionTurnsResponse,
   ListSessionTranscriptsResponse,
   ListSlackChannelsResponse,
   ListSlackMembersResponse,
@@ -203,6 +204,13 @@ export class ApiClient {
       `/v1/sessions/${encodeURIComponent(sessionId)}/records`,
     )
     return res.records
+  }
+
+  // The session's conversation structure — turns and inbox messages, each
+  // message carrying its pending/delivered status (the server-side "queued"
+  // truth). Empty lists for single-shot sessions.
+  getAgentSessionTurns(sessionId: string): Promise<ListSessionTurnsResponse> {
+    return this.request('GET', `/v1/sessions/${encodeURIComponent(sessionId)}/turns`)
   }
 
   // The session's raw transcripts — one .jsonl.gz per process — each with a
