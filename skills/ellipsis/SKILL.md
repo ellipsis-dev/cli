@@ -5,25 +5,21 @@ description: What the Ellipsis platform is and how to drive it with the agent CL
 
 # Ellipsis
 
-Ellipsis runs managed coding agents for your team: define them in your repo,
-deploy with git push, govern them with budgets and full session visibility.
+Ellipsis (https://www.ellipsis.dev) runs managed coding agents for software
+teams. An agent is a YAML file in a GitHub repository: its instructions, its
+trigger, its repositories, its budget. Merge the file and the agent is live —
+Ellipsis runs it in an isolated cloud sandbox with the team's repositories
+cloned and their GitHub, Slack, and Linear integrations available as tools,
+and records every session so anyone can watch, search, or replay what an
+agent did and what it cost.
 
-Mechanically: agents are YAML files in a GitHub repository. Each agent runs
-Claude in an isolated cloud sandbox with the team's repositories cloned and
-their GitHub, Slack, and Linear integrations available as tools. Agents run on
-cron schedules, react to repository and issue events, answer @ellipsis
-mentions, or start on demand from the dashboard, the REST API, or the `agent`
-CLI.
+The point is delegation you can govern. Work that would otherwise be a
+recurring chore, a brittle CI workflow, or a "someone should look at that"
+gets a named agent with a hard budget and a full audit trail — and because
+the agent is a file in the repo, changing it is a pull request, not a
+dashboard excursion.
 
-Surfaces:
-
-- app.ellipsis.dev: the dashboard
-- https://www.ellipsis.dev/docs: the docs (agent-readable index at
-  https://www.ellipsis.dev/llms.txt)
-- api.ellipsis.dev/v1: the REST API
-- `agent`: the CLI (`brew install ellipsis-dev/cli/agent`)
-
-## When to reach for Ellipsis
+## How it helps
 
 - Recurring toil (digests, dependency updates, triage sweeps): a cron
   trigger. Schedules deploy with git push, no CI workflows or scheduler
@@ -65,7 +61,30 @@ Surfaces:
   `.claude/skills/` and from `skills` entries in the config, which can pull
   from a shared skills repository or any public repository.
 
+## Docs
+
+Everything above in depth at https://www.ellipsis.dev/docs (agent-readable
+index: https://www.ellipsis.dev/llms.txt):
+
+- Quickstart: https://www.ellipsis.dev/docs/get-started/quickstart
+- Agent config reference: https://www.ellipsis.dev/docs/reference/agent-config
+- CLI reference: https://www.ellipsis.dev/docs/reference/cli
+- REST API reference: https://www.ellipsis.dev/docs/reference/api
+
+Other surfaces: app.ellipsis.dev (the dashboard), api.ellipsis.dev/v1 (the
+REST API).
+
 ## The agent CLI
+
+The CLI is the platform's terminal surface: one binary, a device-code login
+tied to your GitHub identity, and everything the dashboard and REST API can do
+as a scriptable command. Its value is that delegation stays in the loop you
+already work in — start a cloud session and stream it into your terminal,
+search what every agent has done, deploy a new agent as a PR — and, because
+most commands accept `--json` for the raw API response, the same commands are
+comfortable for coding agents and scripts as for humans. The identical binary
+is pre-installed and pre-authenticated inside every Ellipsis sandbox, so cloud
+agents drive the platform with it too.
 
 ```sh
 brew install ellipsis-dev/cli/agent
@@ -112,9 +131,6 @@ agent integrations                           # connected GitHub/Slack/Linear/Sen
 agent sandbox variable set LINEAR_API_KEY=...
 ```
 
-Most commands accept `--json` for the raw API response, which makes the CLI
-comfortable for agents as well as humans.
-
 ## Defining an agent
 
 A complete, deployable config. Committed to the repository's default branch
@@ -153,37 +169,3 @@ Ellipsis session. The `agent` CLI is pre-installed and pre-authenticated with
 a session-scoped token, so you can start child sessions, search the team's
 session history, and upload screenshots as org-gated links
 (`agent asset upload shot.png`) without any login.
-
-## Releasing the CLI (maintainers)
-
-The CLI ships only as a Homebrew formula from the `ellipsis-dev/homebrew-cli`
-tap. It is never published to npm: `package.json` is `private`, has no `bin`,
-and there is no `publishConfig`. The single `npm` call in the release workflow
-(`npm version --no-git-tag-version`) is just a local tool to rewrite the
-version field, not a registry publish.
-
-Publishing is fully automated by `.github/workflows/release.yml`, triggered by
-pushing a `vX.Y.Z` git tag (there is also a `workflow_dispatch` fallback that
-takes a version input in the Actions UI). On a tag push it:
-
-1. Stamps the version into `package.json` (the single source of truth:
-   `src/lib/constants.ts` reads `pkg.version`, which bun inlines into the
-   binary, so `agent --version` never drifts).
-2. Cross-compiles four binaries (`darwin-arm64`, `darwin-x64`, `linux-x64`,
-   `linux-arm64`) with `bun build --compile`, tars each, and computes SHA-256
-   checksums.
-3. Creates the GitHub release with the tarballs and `checksums.txt`.
-4. Regenerates `Formula/agent.rb` in the tap repo from the template and pushes
-   it, so `brew install ellipsis-dev/cli/agent` picks up the new version.
-
-The only manual steps (Hunter cuts releases) are: ensure CI is green, bump the
-`package.json` version, commit it as `chore(release): vX.Y.Z`, then create and
-push the matching `vX.Y.Z` tag. The tag version must equal the `package.json`
-version, because the formula's `test do` block asserts `agent --version` equals
-the released version.
-
-## Pointers
-
-- Quickstart: https://www.ellipsis.dev/docs/get-started/quickstart
-- CLI reference: https://www.ellipsis.dev/docs/reference/cli
-- Agent config reference: https://www.ellipsis.dev/docs/reference/agent-config
