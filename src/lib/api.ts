@@ -32,7 +32,7 @@ import type {
   ListGithubRepositoriesResponse,
   ListLinearTeamsResponse,
   ListSentryOrganizationsResponse,
-  ListSessionStepsResponse,
+  ListSessionRecordsResponse,
   ListSessionTranscriptsResponse,
   ListSlackChannelsResponse,
   ListSlackMembersResponse,
@@ -197,10 +197,10 @@ export class ApiClient {
 
   // The session's full stored transcript as native session_records (transcript
   // + lifecycle), ordered by feed_seq.
-  async getAgentSessionSteps(sessionId: string): Promise<SessionRecord[]> {
-    const res = await this.request<ListSessionStepsResponse>(
+  async getAgentSessionRecords(sessionId: string): Promise<SessionRecord[]> {
+    const res = await this.request<ListSessionRecordsResponse>(
       'GET',
-      `/v1/sessions/${encodeURIComponent(sessionId)}/steps`,
+      `/v1/sessions/${encodeURIComponent(sessionId)}/records`,
     )
     return res.records
   }

@@ -381,30 +381,30 @@ export function registerSession(program: Command): void {
             }
           }
           console.log(
-            '\nInspect one: agent session get <id>; full transcript: agent session steps <id>',
+            '\nInspect one: agent session get <id>; full transcript: agent session records <id>',
           )
         })
       },
     )
 
   session
-    .command('steps <sessionId>')
-    .description("Read a session's steps (GET /v1/sessions/{id}/steps)")
-    .option('--json', 'output raw JSON (full step payloads)')
+    .command('records <sessionId>')
+    .description("Read a session's records (GET /v1/sessions/{id}/records)")
+    .option('--json', 'output raw JSON (full record payloads)')
     .action(async (sessionId: string, opts: { json?: boolean }) => {
       await runAction(async () => {
-        const steps = await new ApiClient().getAgentSessionSteps(sessionId)
+        const records = await new ApiClient().getAgentSessionRecords(sessionId)
         if (opts.json) {
-          printJson(steps)
+          printJson(records)
           return
         }
-        if (steps.length === 0) {
-          console.log('No steps recorded for this session.')
+        if (records.length === 0) {
+          console.log('No records stored for this session.')
           return
         }
         // Feed order (transcript + lifecycle merged), one line per record;
         // --json has the full payloads.
-        const ordered = [...steps].sort((a, b) => a.feed_seq - b.feed_seq)
+        const ordered = [...records].sort((a, b) => a.feed_seq - b.feed_seq)
         for (const record of ordered) console.log(formatStepLine(record))
       })
     })

@@ -61,7 +61,7 @@ describe('searchSessions', () => {
   })
 })
 
-describe('getAgentSessionSteps', () => {
+describe('getAgentSessionRecords', () => {
   afterEach(() => vi.unstubAllGlobals())
 
   it('unwraps the records array from the session-scoped path (encoded)', async () => {
@@ -70,9 +70,9 @@ describe('getAgentSessionSteps', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const out = await new ApiClient('http://api.test', 't').getAgentSessionSteps('session/1')
+    const out = await new ApiClient('http://api.test', 't').getAgentSessionRecords('session/1')
     expect(out.map((s) => s.id)).toEqual(['rec_1'])
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/sessions/session%2F1/steps')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/sessions/session%2F1/records')
   })
 })
 

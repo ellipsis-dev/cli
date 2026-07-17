@@ -21,8 +21,8 @@ import { hyperlink } from '../lib/urls'
 // composer that echoes what you send. Rendering shape lives in lib/events.ts
 // (pure); this component owns the data flow, the composer, and the colours.
 //
-// Data flow: the committed transcript comes from the structured steps API
-// (GET /v1/sessions/{id}/steps, whose `data` is the full Claude Code event) —
+// Data flow: the committed transcript comes from the structured records API
+// (GET /v1/sessions/{id}/records, whose payload is the full native event) —
 // grouped into tool calls / results — with the socket as a low-latency
 // "something changed" wake plus status source, backed by a slow poll. On top of
 // that, the socket also carries EPHEMERAL `delta` frames (partial assistant text
@@ -170,7 +170,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     }
     refreshing.current = true
     try {
-      const records = await api.getAgentSessionSteps(sessionId)
+      const records = await api.getAgentSessionRecords(sessionId)
       const ordered = [...records].sort((a, b) => a.feed_seq - b.feed_seq)
       const fresh = ordered.filter((st) => st.feed_seq > maxFeed.current)
       if (fresh.length) {

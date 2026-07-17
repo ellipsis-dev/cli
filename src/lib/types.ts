@@ -284,9 +284,8 @@ export interface ListAgentSessionsQuery {
   author_id?: number
 }
 
-// ------------------------------ session steps ----------------------------
+// ----------------------------- session records ---------------------------
 
-// One stored transcript event, from GET /v1/sessions/{id}/steps. Loosely
 // The render switch on a session_record (session_records.source). The CLI
 // renders claude_code records natively and lifecycle records as system lines.
 export type RecordSource = 'claude_code' | 'lifecycle'
@@ -301,7 +300,7 @@ export type LifecycleRecordType =
   | 'session_closed'
   | 'session_cancelled'
 
-// One native session_record from GET /v1/sessions/{id}/steps. `payload` is the
+// One native session_record from GET /v1/sessions/{id}/records. `payload` is the
 // harness's verbatim line — for claude_code, a Claude Code stream event
 // (assistant turn, tool call/result, result); for lifecycle, a small blob. The
 // CLI switches on `source` and only extracts display text. `feed_seq` is the
@@ -321,7 +320,7 @@ export interface SessionRecord {
   [key: string]: unknown
 }
 
-export interface ListSessionStepsResponse {
+export interface ListSessionRecordsResponse {
   records: SessionRecord[]
 }
 

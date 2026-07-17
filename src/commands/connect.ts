@@ -68,7 +68,7 @@ export function registerConnect(session: Command): void {
     .description(
       'Connect to a cloud session: view the conversation, follow it live, and send messages',
     )
-    .option('--no-steps', 'skip replaying prior steps on open')
+    .option('--no-records', 'skip replaying prior records on open')
     .option(
       '--no-input',
       'follow read-only: never open the composer, even on a keyed session (for non-interactive callers)',
@@ -79,17 +79,19 @@ export function registerConnect(session: Command): void {
 the session inbox — single-writer-safe and usable headless / inside a sandbox.
 Pass --no-input to follow read-only from a script or agent (no TTY needed).`,
     )
-    .action(async (sessionId: string | undefined, opts: { steps: boolean; input: boolean }) => {
-      await runAction(async () => {
-        const id = resolveConnectSessionId(sessionId)
-        await runConnect(id, opts.steps, !opts.input)
-      })
-    })
+    .action(
+      async (sessionId: string | undefined, opts: { records: boolean; input: boolean }) => {
+        await runAction(async () => {
+          const id = resolveConnectSessionId(sessionId)
+          await runConnect(id, opts.records, !opts.input)
+        })
+      },
+    )
 }
 
 export async function runConnect(
   sessionId: string,
-  showSteps: boolean,
+  showRecords: boolean,
   readOnly = false,
 ): Promise<void> {
   const api = new ApiClient()
@@ -114,15 +116,15 @@ export async function runConnect(
     console.log('type to send · /stop ends the turn · /exit or Ctrl+C detaches')
   }
 
-  // Fetch the stored records to seed the transcript (unless --no-steps), the
+  // Fetch the stored records to seed the transcript (unless --no-records), the
   // live-refresh cursor (so live updates only append what's new), and the
   // opening spend. Records are ordered by feed_seq (the shared transcript +
   // lifecycle feed); a claude_code record's payload is the Claude Code event
   // the UI renders live, a lifecycle record renders as a notice line.
-  const records = await api.getAgentSessionSteps(sessionId)
+  const records = await api.getAgentSessionRecords(sessionId)
   const ordered = [...records].sort((a, b) => a.feed_seq - b.feed_seq)
   const initialMaxFeedSeq = ordered.reduce((m, s) => Math.max(m, s.feed_seq), 0)
-  const initialItems = showSteps
+  const initialItems = showRecords
     ? ordered.flatMap((st) => recordToItems(st, `s${st.feed_seq}`))
     : []
   const initialCost = foldCosts(ordered.map((st) => st.payload as CCEvent))
@@ -135,7 +137,7 @@ export async function runConnect(
       wsBase,
       canSend,
       initialItems,
-      // Always advance the cursor past existing records: --no-steps skips
+      // Always advance the cursor past existing records: --no-records skips
       // *rendering* history, not re-streaming it live.
       initialMaxFeedSeq,
       initialStatus: session.surface?.status ?? session.status,
