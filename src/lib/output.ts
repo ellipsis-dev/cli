@@ -57,6 +57,12 @@ export function usdFromMillicents(millicents: number): string {
   return `$${(millicents / 100_000).toFixed(2)}`
 }
 
+// Millicents -> USD as a number, for callers that do math/compare before
+// formatting (e.g. the connect footer's monotonic live cost).
+export function usdNumberFromMillicents(millicents: number): number {
+  return millicents / 100_000
+}
+
 export function usd(amount: number): string {
   return `$${amount.toFixed(2)}`
 }

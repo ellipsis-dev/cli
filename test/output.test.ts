@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { relativeAge, usd, usdFromMillicents } from '../src/lib/output'
+import { relativeAge, usd, usdFromMillicents, usdNumberFromMillicents } from '../src/lib/output'
 
 describe('usdFromMillicents', () => {
   it('converts millicents to dollars (1 cent = 1000 millicents)', () => {
     expect(usdFromMillicents(0)).toBe('$0.00')
     expect(usdFromMillicents(100_000)).toBe('$1.00') // 100 cents
     expect(usdFromMillicents(12_345_000)).toBe('$123.45')
+  })
+})
+
+describe('usdNumberFromMillicents', () => {
+  it('converts millicents to a USD number for math before formatting', () => {
+    expect(usdNumberFromMillicents(0)).toBe(0)
+    expect(usdNumberFromMillicents(100_000)).toBe(1)
+    expect(usdNumberFromMillicents(12_345_000)).toBeCloseTo(123.45)
   })
 })
 
