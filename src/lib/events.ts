@@ -135,6 +135,13 @@ export function summarizeToolInput(name: string, input: unknown): string {
   return oneLine(JSON.stringify(args), 100)
 }
 
+// Human-readable duration from seconds, Claude Code style: "42s" under a
+// minute, then "3m 21s". Whole seconds only ("200.7s" reads as noise).
+export function formatDuration(seconds: number): string {
+  const s = Math.round(seconds)
+  return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`
+}
+
 // Flatten a message's `content` to a block list (a bare string becomes one
 // text block), so assistant and user turns share one iteration path.
 function blocksOf(content: unknown): CCContentBlock[] {
@@ -174,7 +181,7 @@ export function eventToItems(event: CCEvent, keyBase: string): TranscriptItem[] 
   // A final result event: a dim one-liner capping the turn (cost + duration).
   if (type === 'result') {
     const bits: string[] = []
-    if (typeof event.duration_ms === 'number') bits.push(`${(event.duration_ms / 1000).toFixed(1)}s`)
+    if (typeof event.duration_ms === 'number') bits.push(formatDuration(event.duration_ms / 1000))
     if (typeof event.total_cost_usd === 'number') bits.push(`$${event.total_cost_usd.toFixed(2)}`)
     const label = event.is_error ? 'turn ended with an error' : 'turn complete'
     push({

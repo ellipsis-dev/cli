@@ -6,6 +6,7 @@ import {
   clampLines,
   collapseToolRuns,
   foldCosts,
+  formatDuration,
   isConnectVisibleRecord,
   pendingToolCalls,
   recordToItems,
@@ -20,8 +21,9 @@ import { VERSION } from '../lib/constants'
 
 // The interactive `agent session connect` UI, modelled on Claude Code: a
 // committed transcript that groups tool calls with their results and spaces
-// messages apart, above a live footer with an animated status spinner and a
-// composer that echoes what you send. Rendering shape lives in lib/events.ts
+// messages apart — live activity (✻ Running/Generating) rendered on the
+// transcript block it describes — above a footer with a composer that echoes
+// what you send. Rendering shape lives in lib/events.ts
 // (pure); this component owns the data flow, the composer, and the colours.
 //
 // Data flow: the committed transcript comes from the structured records API
@@ -251,10 +253,20 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         append(
           fresh.filter(isConnectVisibleRecord).flatMap((st) => recordToItems(st, `s${st.feed_seq}`)),
         )
-        // A committed step landed — the streamed overlay is now part of the
-        // transcript (or the turn advanced), so drop the live overlay.
-        setLiveText('')
-        setLiveTokens(null)
+        // Drop the live overlay only when a committed ASSISTANT step (or the
+        // turn's result) lands — those supersede the streamed prose. Other
+        // records (lifecycle rows, your own relayed message) arrive mid-
+        // generation; clearing on them would lose the streamed prefix for
+        // good, since later deltas append to the now-empty overlay.
+        const supersedes = fresh.some((st) => {
+          if (st.source === 'lifecycle') return false
+          const t = (st.payload as CCEvent).type
+          return t === 'assistant' || t === 'result'
+        })
+        if (supersedes) {
+          setLiveText('')
+          setLiveTokens(null)
+        }
       }
     } catch {
       // Transient fetch failure — the next wake/poll retries.
@@ -558,12 +570,28 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // committed blocks. Collapsed (the default), runs of consecutive tool
   // activity fold into one "Ran N shell commands" line, Claude-Code-app-style;
   // ctrl+r restores the full ● call / ⎿ result blocks (and un-clamps long
-  // bodies). The list is memoized on [items, expanded], so the elapsed-second
+  // bodies). In-flight calls are excluded from the collapsed fold — they render
+  // as the live "Running …" line appended right below (see runningTool), so the
+  // fold only counts what actually ran. The pieces are memoized on
+  // [items, expanded] (pendingTools derives from items), so the elapsed-second
   // ticks reuse the same elements and don't re-lay-out the transcript.
-  const lines = useMemo(() => {
-    const visible = expanded ? items : collapseToolRuns(items)
-    return visible.map((item) => <TranscriptLine key={item.key} item={item} expanded={expanded} />)
-  }, [items, expanded])
+  const { lines, runningHug } = useMemo(() => {
+    const pendingKeys = new Set(pendingTools.map((t) => t.key))
+    const visible = expanded
+      ? items
+      : collapseToolRuns(pendingKeys.size ? items.filter((i) => !pendingKeys.has(i.key)) : items)
+    const last = visible[visible.length - 1]
+    return {
+      lines: visible.map((item) => (
+        <TranscriptLine key={item.key} item={item} expanded={expanded} />
+      )),
+      // Whether the live "Running …" line should hug the block above it: in
+      // expanded mode the pending ● call itself is the last line; collapsed,
+      // only when the trailing fold ("Ran N …", key grp:*) is the same burst
+      // the pending call belongs to — otherwise the line opens its own block.
+      runningHug: expanded ? pendingKeys.size > 0 : (last?.key.startsWith('grp:') ?? false),
+    }
+  }, [items, expanded, pendingTools])
 
   // The persistent footer status line, kept minimal: the current status and
   // the running spend (cumulative total + the last turn's cost). Session
@@ -571,19 +599,22 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const totalStr = `$${(cost.total ?? 0).toFixed(2)}`
   const lastStepStr = cost.lastStep != null ? ` (Last step: $${cost.lastStep.toFixed(2)})` : ''
   const metaLine = `${status} · ${totalStr} total${lastStepStr}`
-  // Three distinct, factual activity signals — never whimsy:
+  // Three distinct, factual activity signals — never whimsy. All render IN the
+  // transcript, on the block they describe, not above the composer:
   // - `infraActivity`: the sandbox is spawning/waking (scheduled/starting/
   //   retrying). Shown at the TOP, under the banner, where a startup message
-  //   belongs — there's no conversation yet to sit above a composer.
+  //   belongs — there's no conversation yet.
   // - `generating`: the model is streaming tokens (delta frames flowing) —
-  //   the ✻ line above the composer, with elapsed + token count.
-  // - `runningTool`: a committed tool call awaits its result — the same ✻
-  //   slot names the tool and ticks its own timer (generating wins if both
-  //   somehow read true; the model can't stream past an unresolved call).
+  //   the ✻ line under the streamed prose, with elapsed + token count.
+  // - `runningTool`: a committed tool call awaits its result — a ✻ line
+  //   attached to the tool burst it belongs to ("Ran 2 shell commands" then
+  //   the live third), naming the tool and ticking its own timer (generating
+  //   wins if both somehow read true; the model can't stream past an
+  //   unresolved call).
   const infraActivity = statusActivityText(status)
   const generating = status === 'working' && (liveText !== '' || liveTokens != null)
   const generatingBits = [
-    formatElapsed(elapsed),
+    formatDuration(elapsed),
     ...(liveTokens != null ? [`↓ ${formatTokens(liveTokens)} tokens`] : []),
     ...(inputActive ? ['esc to interrupt'] : []),
   ].join(' · ')
@@ -593,7 +624,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       ? `Running ${pendingTools[0].text}${pendingTools[0].detail ?? ''}`
       : `Running ${pendingTools.length} tool calls (${[...new Set(pendingTools.map((t) => t.text))].join(', ')})`
   const runningToolBits = [
-    formatElapsed(toolElapsed),
+    formatDuration(toolElapsed),
     ...(inputActive ? ['esc to interrupt'] : []),
   ].join(' · ')
 
@@ -627,7 +658,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         <Text>
           <Text color="cyan">✻</Text>{' '}
           <Text dimColor>
-            {infraActivity}… ({formatElapsed(elapsed)})
+            {infraActivity}… ({formatDuration(elapsed)})
           </Text>
         </Text>
       )}
@@ -635,30 +666,38 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           composer + meta to the bottom edge (flexGrow fills the slack). */}
       <Box flexDirection="column" flexGrow={1}>
         {lines}
+        {/* The live tool-call status, attached to the burst it belongs to: hugs
+            the collapsed "Ran N …" fold (or the expanded ● call) above it, and
+            disappears into the fold's count once the result lands. */}
+        {runningTool && (
+          <Box marginTop={runningHug ? 0 : 1}>
+            <Text>
+              <Text color="cyan">✻</Text>{' '}
+              <Text dimColor>
+                {runningToolLabel}… ({runningToolBits})
+              </Text>
+            </Text>
+          </Box>
+        )}
         {/* The in-progress assistant response, streamed token-by-token from delta
-            frames; replaced by the committed step when it lands. */}
+            frames, with its live status hugging beneath; replaced by the
+            committed step when it lands. */}
         {liveText && (
           <Box marginTop={1}>
             <Text>{liveText}</Text>
           </Box>
         )}
+        {generating && (
+          <Box marginTop={liveText ? 0 : 1}>
+            <Text>
+              <Text color="cyan">✻</Text>{' '}
+              <Text dimColor>Generating… ({generatingBits})</Text>
+            </Text>
+          </Box>
+        )}
       </Box>
       <Box flexDirection="column" marginTop={1}>
         {notice && <Text dimColor>· {notice}</Text>}
-        {generating && (
-          <Text>
-            <Text color="cyan">✻</Text>{' '}
-            <Text dimColor>Generating… ({generatingBits})</Text>
-          </Text>
-        )}
-        {runningTool && (
-          <Text>
-            <Text color="cyan">✻</Text>{' '}
-            <Text dimColor>
-              {runningToolLabel}… ({runningToolBits})
-            </Text>
-          </Text>
-        )}
         {/* The composer, framed by a full-width rule above and below (Claude
             Code-style): the › prompt sits between the two lines. Only the top and
             bottom borders are drawn, so the rules span the terminal width. */}
@@ -687,11 +726,6 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
 // Compact token count for the live footer: 1400 -> "1.4k", 900 -> "900".
 function formatTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
-}
-
-// Elapsed seconds in Claude Code's style: "42s", then "1m 25s" past a minute.
-function formatElapsed(s: number): string {
-  return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`
 }
 
 // Long bodies collapse to this many lines until ctrl+r expands them.

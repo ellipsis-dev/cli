@@ -5,6 +5,7 @@ import {
   pendingToolCalls,
   eventToItems,
   foldCosts,
+  formatDuration,
   LineBuffer,
   parseEventLine,
   resultCostUsd,
@@ -151,7 +152,12 @@ describe('eventToItems', () => {
     }
     const [item] = eventToItems(event, 's5')
     expect(item.kind).toBe('summary')
-    expect(item.text).toBe('turn complete · 12.3s · $0.04')
+    expect(item.text).toBe('turn complete · 12s · $0.04')
+  })
+
+  it('formats long turn durations human-readably (minutes, not 200.7s)', () => {
+    const [item] = eventToItems({ type: 'result', duration_ms: 200700 }, 's5b')
+    expect(item.text).toBe('turn complete · 3m 21s')
   })
 
   it('renders nothing for system events (CC emits an init per query — noise)', () => {
@@ -161,6 +167,18 @@ describe('eventToItems', () => {
 
   it('produces no items for an empty assistant turn', () => {
     expect(eventToItems({ type: 'assistant', message: { content: [] } }, 's7')).toEqual([])
+  })
+})
+
+describe('formatDuration', () => {
+  it('shows whole seconds under a minute, minutes past it', () => {
+    expect(formatDuration(42.3)).toBe('42s')
+    expect(formatDuration(200.7)).toBe('3m 21s')
+    expect(formatDuration(0)).toBe('0s')
+  })
+
+  it('never shows 60s (rounds up into the minute)', () => {
+    expect(formatDuration(59.7)).toBe('1m 0s')
   })
 })
 
