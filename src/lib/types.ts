@@ -243,6 +243,32 @@ export interface ListAgentConfigsResponse {
   configs: SavedAgentConfig[]
 }
 
+// One rung of the default-config ladder (GET /v1/defaults). Rungs are
+// addressed by `repository`: "owner/name" for a repo default, null for the
+// account-wide default — never by row id.
+export interface AgentDefaultView {
+  id: string
+  repository: string | null
+  config_id: string
+  // The pointed-at config's name; null when the config is gone (see broken).
+  config_name: string | null
+  // Why this rung can't serve sessions (config_deleted | config_disabled |
+  // config_pending_pr | repo_inaccessible); null when healthy.
+  broken: string | null
+  updated_at: string
+}
+
+export interface ListAgentDefaultsResponse {
+  defaults: AgentDefaultView[]
+}
+
+// Body of PUT /v1/defaults: point a rung at a config. `repository` omitted
+// sets the account default; "owner/name" sets that repo's default.
+export interface PutAgentDefaultRequest {
+  repository?: string
+  config_id: string
+}
+
 // Create-config payload for POST /v1/configs. Exactly one of `config` (inline)
 // or `template_id` (a gallery template slug). `repository` is a bare repo name
 // in the caller's account — the owner is always the account.

@@ -205,6 +205,7 @@ Author and inspect agents:
 ```sh
 agent config init                            # scaffold agents/my_agent.yaml
 agent config create --template code-reviewer --repo api   # deploy via PR
+agent config default set <configId>          # the agent a bare start runs (--repo for one repo)
 agent template list                          # browse maintained templates
 agent integrations                           # connected GitHub/Slack/Linear/Sentry
 agent sandbox variable set LINEAR_API_KEY=...
