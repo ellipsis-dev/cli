@@ -4,7 +4,7 @@ import { render } from 'ink'
 import { ApiClient } from '../lib/api'
 import { requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
 import { runAction } from '../lib/output'
-import { foldCosts, recordToItems, type CCEvent } from '../lib/events'
+import { foldCosts, isConnectVisibleRecord, recordToItems, type CCEvent } from '../lib/events'
 import { sessionUrl } from '../lib/urls'
 import { resolveWsBase } from '../lib/ws'
 import { ConnectApp } from '../ui/ConnectApp'
@@ -48,8 +48,7 @@ export function connectability(session: AgentSession): {
   if (!session.session_key) {
     return {
       canSend: false,
-      reason:
-        'this session is single-shot (no durable conversation) — opening watch-only',
+      reason: 'this session is single-shot (no durable conversation) — opening watch-only',
     }
   }
   if (session.session_state === 'closed') {
@@ -79,14 +78,12 @@ export function registerConnect(session: Command): void {
 the session inbox — single-writer-safe and usable headless / inside a sandbox.
 Pass --no-input to follow read-only from a script or agent (no TTY needed).`,
     )
-    .action(
-      async (sessionId: string | undefined, opts: { records: boolean; input: boolean }) => {
-        await runAction(async () => {
-          const id = resolveConnectSessionId(sessionId)
-          await runConnect(id, opts.records, !opts.input)
-        })
-      },
-    )
+    .action(async (sessionId: string | undefined, opts: { records: boolean; input: boolean }) => {
+      await runAction(async () => {
+        const id = resolveConnectSessionId(sessionId)
+        await runConnect(id, opts.records, !opts.input)
+      })
+    })
 }
 
 export async function runConnect(
@@ -106,29 +103,29 @@ export async function runConnect(
     readOnly && c.canSend ? 'read-only (--no-input) — following without the composer' : c.reason
   const url = sessionUrl(resolveAppBase(), me.customer_login, sessionId)
 
-  // A compact header printed once above the live transcript. The live footer
-  // keeps the id/url, status, and spend on screen; this is the scrollback record.
-  console.log(`${session.id} · ${session.surface?.status ?? session.status}`)
-  console.log(url)
-  if (session.agent_config_id) console.log(`config ${session.agent_config_id}`)
-  if (reason) console.log(reason)
-  if (canSend) {
-    console.log('type to send · /stop ends the turn · /exit or Ctrl+C detaches')
-  }
+  // No scrollback preamble: the app owns the whole surface, Claude Code-style.
+  // The banner (brand + version + session link) and the footer carry the
+  // session identity/status; a watch-only reason surfaces as the app's notice.
 
   // Fetch the stored records to seed the transcript (unless --no-records), the
   // live-refresh cursor (so live updates only append what's new), and the
   // opening spend. Records are ordered by feed_seq (the shared transcript +
-  // lifecycle feed); a claude_code record's payload is the Claude Code event
-  // the UI renders live, a lifecycle record renders as a notice line.
+  // lifecycle feed). Lifecycle rows are filtered except the sandbox-ready
+  // conversation note (isConnectVisibleRecord): connect shows the
+  // conversation, and the live activity line + footer carry session state.
   const records = await api.getAgentSessionRecords(sessionId)
   const ordered = [...records].sort((a, b) => a.feed_seq - b.feed_seq)
   const initialMaxFeedSeq = ordered.reduce((m, s) => Math.max(m, s.feed_seq), 0)
   const initialItems = showRecords
-    ? ordered.flatMap((st) => recordToItems(st, `s${st.feed_seq}`))
+    ? ordered
+        .filter(isConnectVisibleRecord)
+        .flatMap((st) => recordToItems(st, `s${st.feed_seq}`))
     : []
   const initialCost = foldCosts(ordered.map((st) => st.payload as CCEvent))
 
+  // Written by the app when it exits because the conversation closed (terminal;
+  // nothing left to reconnect to), so the detach sign-off below stays honest.
+  const exitState = { closed: false }
   const app = render(
     React.createElement(ConnectApp, {
       api,
@@ -143,11 +140,17 @@ export async function runConnect(
       initialStatus: session.surface?.status ?? session.status,
       sessionUrl: url,
       initialCost,
+      initialNotice: reason ?? null,
+      // The session's one model, fixed at creation (backend tokens_model).
+      model: typeof session.tokens_model === 'string' ? session.tokens_model : null,
+      exitState,
     }),
   )
   await app.waitUntilExit()
 
-  if (canSend) {
-    console.log('\ndetached — the session keeps running (reconnect with the same command)')
+  if (canSend && !exitState.closed) {
+    // The session keeps running after a detach; hand back the exact command
+    // that re-opens this conversation.
+    console.log(`\nresume with: agent session connect ${sessionId}`)
   }
 }

@@ -186,16 +186,12 @@ export function eventToItems(event: CCEvent, keyBase: string): TranscriptItem[] 
     return items
   }
 
-  // System init: a compact, dim "session started" line (model / cwd).
+  // System events (the per-query init with model/cwd, and any informational
+  // notices) render NOTHING in connect: Claude Code emits an init for every
+  // user message it processes in stream-json mode, so rendering it printed
+  // "session started" once per turn — pure noise. The model lives in the
+  // banner; the raw records stay visible via `agent session records`.
   if (type === 'system') {
-    const bits: string[] = []
-    if (typeof event.model === 'string') bits.push(event.model)
-    if (typeof event.cwd === 'string') bits.push(event.cwd)
-    push({
-      kind: 'system',
-      text: bits.length ? `session started · ${bits.join(' · ')}` : 'session started',
-      spaceBefore: true,
-    })
     return items
   }
 
@@ -255,6 +251,70 @@ export function recordToItems(record: SessionRecord, keyBase: string): Transcrip
   return eventToItems(record.payload as CCEvent, keyBase)
 }
 
+// Which records the connect transcript renders. Claude Code records are the
+// conversation; lifecycle records are filtered EXCEPT sandbox_ready — the one
+// moment worth a conversation note (the box is up, work can start). The other
+// lifecycle rows (starting, paused, closed, resumed) are carried by the live
+// activity line / footer / exit notice instead.
+export function isConnectVisibleRecord(record: SessionRecord): boolean {
+  return record.source !== 'lifecycle' || record.record_type === 'sandbox_ready'
+}
+
+// The tool calls that are executing RIGHT NOW, inferred from the committed
+// transcript: a `tool` item whose `tool_result` hasn't arrived yet is a tool
+// in flight (CC's headless stream emits nothing between the call committing
+// and its result landing — this inference is the only live signal). Matching
+// is FIFO within the current burst; any non-tool item (prose, thinking, a
+// turn's result summary, a user message) means earlier calls resolved, so the
+// pending set resets — a stale unmatched call from an errored old turn can
+// never read as "running" forever.
+export function pendingToolCalls(items: TranscriptItem[]): TranscriptItem[] {
+  let pending: TranscriptItem[] = []
+  for (const item of items) {
+    if (item.kind === 'tool') pending.push(item)
+    else if (item.kind === 'tool_result') pending.shift()
+    else pending = []
+  }
+  return pending
+}
+
+// Collapse each maximal run of consecutive tool activity (tool calls + their
+// results) into one dim summary line — the Claude-Code-app treatment ("Ran 8
+// shell commands") — so a burst of shell work reads as one beat of the
+// conversation. ctrl+r (the caller's `expanded` state) renders the original
+// items instead, restoring the full ● call / ⎿ result blocks. Labels: all-Bash
+// runs count shell commands, all-Read runs count files read, mixed runs name
+// the tools involved.
+export function collapseToolRuns(items: TranscriptItem[]): TranscriptItem[] {
+  const out: TranscriptItem[] = []
+  let group: TranscriptItem[] = []
+  const flush = (): void => {
+    if (group.length === 0) return
+    const names = [...new Set(group.filter((i) => i.kind === 'tool').map((i) => i.text))]
+    const n = group.filter((i) => i.kind === 'tool').length || group.length
+    const plural = n === 1 ? '' : 's'
+    let label: string
+    if (names.length === 1 && names[0] === 'Bash') label = `Ran ${n} shell command${plural}`
+    else if (names.length === 1 && names[0] === 'Read') label = `Read ${n} file${plural}`
+    else if (names.length === 0) label = `Ran ${n} tool call${plural}`
+    else {
+      const shown = names.slice(0, 3).join(', ') + (names.length > 3 ? ', …' : '')
+      label = `Ran ${n} tool call${plural} (${shown})`
+    }
+    out.push({ key: `grp:${group[0].key}`, kind: 'notice', text: label, spaceBefore: true })
+    group = []
+  }
+  for (const item of items) {
+    if (item.kind === 'tool' || item.kind === 'tool_result') group.push(item)
+    else {
+      flush()
+      out.push(item)
+    }
+  }
+  flush()
+  return out
+}
+
 // Clamp a multi-line body to `maxLines`, appending a dim "+N lines" marker when
 // truncated — used for tool-result bodies so a huge file read stays compact.
 export function clampLines(text: string, maxLines: number): { body: string; more: number } {
@@ -291,34 +351,20 @@ export function foldCosts(events: CCEvent[]): {
   return { total, lastStep }
 }
 
-// A dim, Claude-Code-style one-liner for a session lifecycle status, shown in
-// the transcript when the status changes ("creating sandbox", "spawning agent
-// process", …). null for statuses that don't warrant their own line.
-// Maps the server's derived `status` word (session_surface) to a transcript
-// system line. The words are the customer-facing surface, not the raw
-// per-execution status.
-export function statusSystemLine(status: string): string | null {
+// The concrete label for the ✻ activity line during INFRASTRUCTURE phases —
+// the sandbox spawning/waking — where nothing else on screen moves. It
+// re-renders in place as the status changes; statuses never append transcript
+// lines (that was the old, noisy model). null for `working` (the UI shows a
+// whimsical Claude-Code-style gerund there instead) and for calm states
+// (waiting, sleeping, terminal), where the line hides entirely.
+export function statusActivityText(status: string): string | null {
   switch (status) {
     case 'scheduled':
-      return 'queued · waiting for a worker'
+      return 'Waiting for a worker'
     case 'starting':
-      return 'starting sandbox'
-    case 'working':
-      return 'agent working'
-    case 'waiting':
-      return 'waiting for your reply'
-    case 'sleeping':
-      return 'sleeping · your next message wakes it'
+      return 'Starting sandbox'
     case 'retrying':
-      return 'retrying after a transient error'
-    case 'closed':
-      return 'conversation closed'
-    case 'failed':
-      return 'session failed'
-    case 'cancelled':
-      return 'session cancelled'
-    case 'stopped':
-      return 'session stopped'
+      return 'Retrying after a transient error'
     default:
       return null
   }
