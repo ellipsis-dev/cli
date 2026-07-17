@@ -3,15 +3,22 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname } from 'node:path'
 import { ApiClient } from '../lib/api'
 import { resolveAppBase } from '../lib/config'
+import { repoFromCwd } from '../lib/laptop'
 import { formatTs, printJson, printTable, printYaml, runAction } from '../lib/output'
 import { configUrl } from '../lib/urls'
 import { readConfigFile } from './session'
-import type { CreateAgentConfigRequest, SavedAgentConfig } from '../lib/types'
+import type {
+  AgentDefaultView,
+  CreateAgentConfigRequest,
+  SavedAgentConfig,
+} from '../lib/types'
 
 const DEFAULT_CONFIG_PATH = 'agents/my_agent.yaml'
 
 export function registerConfig(program: Command): void {
-  const config = program.command('config').description('Inspect saved agent configurations')
+  const config = program
+    .command('config')
+    .description('Inspect saved agent configurations and manage defaults')
 
   config
     .command('list')
@@ -112,6 +119,125 @@ export function registerConfig(program: Command): void {
       },
     )
 
+  // ------------------------------- defaults --------------------------------
+  // The default-config ladder a bare session start resolves: repo default ->
+  // account default -> the bare platform config. Rung-addressed, never row
+  // ids: writes target the ACCOUNT rung unless --repo names (or detects) a
+  // repository. Reading is context-aware (bare `agent config default` shows
+  // the effective default where you stand); writes never are — a mutation
+  // whose target depends on your cwd would be a footgun, so --repo is always
+  // explicit.
+  const defaults = config
+    .command('default')
+    .alias('defaults')
+    .description('Show and manage default agent configs (account and per-repo)')
+    .option('--json', 'output raw JSON')
+    // Bare `agent config default`: the effective default for the repo you're
+    // standing in, computed locally from GET /v1/defaults + the origin remote
+    // (the same ladder session start resolves server-side).
+    .action(async (opts: { json?: boolean }) => {
+      await runAction(async () => {
+        const rungs = await new ApiClient().listAgentDefaults()
+        const repo = repoFromCwd(process.cwd())
+        const repoRung = repo
+          ? rungs.find((d) => d.repository?.toLowerCase() === repo.toLowerCase())
+          : undefined
+        const accountRung = rungs.find((d) => d.repository === null)
+        const effective = repoRung ?? accountRung
+        if (opts.json) {
+          printJson({ repository: repo ?? null, effective: effective ?? null })
+          return
+        }
+        if (!effective) {
+          console.log(
+            repo
+              ? `no default set for ${repo} or the account (sessions start on the bare config)`
+              : 'no account default set (sessions start on the bare config)',
+          )
+          return
+        }
+        const rung = effective.repository
+          ? `repo default for ${effective.repository}`
+          : 'account default'
+        console.log(`using config "${defaultName(effective)}" (${rung})${brokenSuffix(effective)}`)
+      })
+    })
+
+  defaults
+    .command('list')
+    .alias('ls')
+    .description('List all default-config rungs (GET /v1/defaults)')
+    .option('--json', 'output raw JSON')
+    .action(async (opts: { json?: boolean }) => {
+      await runAction(async () => {
+        const rungs = await new ApiClient().listAgentDefaults()
+        if (opts.json) {
+          printJson(rungs)
+          return
+        }
+        if (rungs.length === 0) {
+          console.log('No defaults set. Sessions start on the bare config.')
+          return
+        }
+        printTable(
+          ['RUNG', 'CONFIG', 'CONFIG ID', 'STATUS', 'UPDATED'],
+          rungs.map((d) => [
+            d.repository ?? 'account',
+            d.config_name ?? '—',
+            d.config_id,
+            d.broken ? `broken: ${d.broken}` : 'ok',
+            formatTs(d.updated_at),
+          ]),
+        )
+      })
+    })
+
+  defaults
+    .command('set <configId>')
+    .description(
+      'Set the account default agent config, or a repo default with --repo (PUT /v1/defaults)',
+    )
+    .option(
+      '--repo [repository]',
+      'target a repo rung: "owner/name", or no value for the repo you are standing in',
+    )
+    .option('--json', 'output raw JSON')
+    .action(async (configId: string, opts: { repo?: string | boolean; json?: boolean }) => {
+      await runAction(async () => {
+        const repository = resolveRepoFlag(opts.repo)
+        const set = await new ApiClient().putAgentDefault({
+          config_id: configId,
+          ...(repository ? { repository } : {}),
+        })
+        if (opts.json) {
+          printJson(set)
+          return
+        }
+        const rung = set.repository ? `default for ${set.repository}` : 'account default'
+        console.log(`✓ set ${rung} to "${defaultName(set)}" (${set.config_id})`)
+      })
+    })
+
+  defaults
+    .command('clear')
+    .alias('rm')
+    .description(
+      'Clear the account default agent config, or a repo default with --repo (DELETE /v1/defaults)',
+    )
+    .option(
+      '--repo [repository]',
+      'target a repo rung: "owner/name", or no value for the repo you are standing in',
+    )
+    .action(async (opts: { repo?: string | boolean }) => {
+      await runAction(async () => {
+        const repository = resolveRepoFlag(opts.repo)
+        await new ApiClient().deleteAgentDefault(repository)
+        console.log(
+          `✓ cleared ${repository ? `default for ${repository}` : 'account default'}`,
+        )
+      })
+    })
+
   config
     .command('init [path]')
     .description(
@@ -174,6 +300,33 @@ export function registerConfig(program: Command): void {
 
 const COMMIT_HINT =
   'Commit it to your default branch. Ellipsis syncs agent configs from GitHub.'
+
+// --repo semantics on defaults mutations: absent -> the account rung; bare
+// --repo -> the repo you're standing in (from the origin remote, an error
+// when there isn't one); --repo owner/name -> that repo.
+function resolveRepoFlag(repo: string | boolean | undefined): string | undefined {
+  if (repo === undefined || repo === false) return undefined
+  if (repo === true) {
+    const detected = repoFromCwd(process.cwd())
+    if (!detected) {
+      throw new Error(
+        'no git repository detected here; pass --repo owner/name or run inside a clone',
+      )
+    }
+    return detected
+  }
+  return repo
+}
+
+function defaultName(d: AgentDefaultView): string {
+  return d.config_name ?? d.config_id
+}
+
+// A set-but-broken rung fails session starts closed (never a silent
+// fall-through), so surface it wherever the rung is shown.
+function brokenSuffix(d: AgentDefaultView): string {
+  return d.broken ? ` (broken: ${d.broken})` : ''
+}
 
 // A minimal valid agent config. `claude.system` is the only required field;
 // everything else has a server-side default. Roots Ellipsis syncs from:

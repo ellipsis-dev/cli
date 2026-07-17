@@ -70,6 +70,9 @@ agent config list                 # list saved agent configs
 agent config get <config-id>      # show one config as YAML (-o json for JSON)
 agent config init [path]          # scaffold a starter config (default: agents/my_agent.yaml)
 agent config create --repo api --file agents/foo.yaml   # create an agent via a pull request (or --template <slug>)
+agent config default              # the effective default agent for the repo you are standing in
+agent config default set <config-id>   # set the account default agent (--repo [owner/name] for one repo)
+agent config default clear        # clear the account default (--repo [owner/name] for one repo)
 
 agent integrations                # every connected integration in one table
 agent github repos                # repositories connected to the GitHub installation

@@ -1,6 +1,7 @@
 import { resolveApiBase, resolveToken } from './config'
 import { USER_AGENT } from './constants'
 import type {
+  AgentDefaultView,
   AgentSession,
   AgentTemplate,
   AnalyticsMetricsQuery,
@@ -23,6 +24,7 @@ import type {
   GetSessionIdeResponse,
   GetSessionPortResponse,
   ListAgentConfigsResponse,
+  ListAgentDefaultsResponse,
   ListAgentSessionsQuery,
   ListAgentSessionsResponse,
   ListAgentTemplatesResponse,
@@ -37,6 +39,7 @@ import type {
   ListSessionTranscriptsResponse,
   ListSlackChannelsResponse,
   ListSlackMembersResponse,
+  PutAgentDefaultRequest,
   ReplayAgentSessionRequest,
   SendSessionMessageRequest,
   SandboxVariableInput,
@@ -325,6 +328,27 @@ export class ApiClient {
 
   getAgentConfig(configId: string): Promise<SavedAgentConfig> {
     return this.request('GET', `/v1/configs/${encodeURIComponent(configId)}`)
+  }
+
+  // ------------------------------ defaults --------------------------------
+  // The default-config ladder (repo default -> account default -> bare),
+  // addressed by rung: `repository` is "owner/name" for a repo default and
+  // null/omitted for the account default — never a row id. Mutations are
+  // refused for sandbox tokens (403).
+
+  async listAgentDefaults(): Promise<AgentDefaultView[]> {
+    const res = await this.request<ListAgentDefaultsResponse>('GET', '/v1/defaults')
+    return res.defaults
+  }
+
+  putAgentDefault(req: PutAgentDefaultRequest): Promise<AgentDefaultView> {
+    return this.request('PUT', '/v1/defaults', req)
+  }
+
+  // Clears a rung: the account default when `repository` is omitted, that
+  // repo's default otherwise. 404 when the rung isn't set.
+  deleteAgentDefault(repository?: string): Promise<void> {
+    return this.request('DELETE', '/v1/defaults', undefined, { repository })
   }
 
   // -------------------------- sandbox variables ---------------------------
