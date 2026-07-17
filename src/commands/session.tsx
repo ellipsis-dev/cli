@@ -686,16 +686,18 @@ export function registerSession(program: Command): void {
     })
 
   // The browser IDE into a live session's sandbox (GET /v1/sessions/{id}/ide).
-  // The URL is minted fresh per open — it dies with the sandbox, so there is
-  // nothing worth storing. 409s (sandbox idle/torn down, pre-IDE sandbox)
-  // carry curated server messages; runAction surfaces them as-is.
+  // The URL is the membership-gated dashboard page for the sandbox — no
+  // credential in it, so it is durable and safe to share with any org member.
+  // 409s (sandbox idle/torn down) carry curated server messages; runAction
+  // surfaces them as-is.
   session
     .command('ide <sessionId>')
     .description("Open the session's browser IDE (GET /v1/sessions/{id}/ide)")
     .addHelpText(
       'after',
-      '\nThe IDE shares the live sandbox\'s working tree with the agent. The URL dies ' +
-        'with the sandbox; if the session is idle, send it a message to wake it first ' +
+      "\nThe IDE shares the live sandbox's working tree with the agent. The URL is the " +
+        'membership-gated dashboard page for the sandbox, so it is safe to share with ' +
+        'org members; if the session is idle, send it a message to wake it first ' +
         '(agent session connect).',
     )
     .option('--no-open', 'print the URL without opening a browser')
@@ -712,15 +714,18 @@ export function registerSession(program: Command): void {
       })
     })
 
-  // A preview port's tunnel URL (GET /v1/sessions/{id}/ports/{port}) — a dev
-  // server the agent or the IDE user started in the sandbox.
+  // A preview port's link (GET /v1/sessions/{id}/ports/{port}) — a dev
+  // server the agent or the IDE user started in the sandbox, opened through
+  // the same membership-gated dashboard page as the IDE.
   session
     .command('port <sessionId> <port>')
     .description("Open a preview port on the session's sandbox (GET /v1/sessions/{id}/ports/{port})")
     .addHelpText(
       'after',
-      '\nExposed preview ports: 3000, 5173, 8000, 8080. The URL only serves while ' +
-        'something in the sandbox listens on that port, and dies with the sandbox.',
+      '\nAny TCP port serves (3000, 5173, 8000, 8080 are just the usual dev-server ' +
+        'picks). The URL is the membership-gated dashboard page deep-linked to the ' +
+        'port — safe to share with org members; the preview renders while something ' +
+        'in the sandbox listens on that port.',
     )
     .option('--no-open', 'print the URL without opening a browser')
     .option('--json', 'output raw JSON')
