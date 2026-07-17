@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   clampLines,
+  collapseToolRuns,
+  pendingToolCalls,
   eventToItems,
   foldCosts,
   LineBuffer,
   parseEventLine,
   resultCostUsd,
-  statusSystemLine,
+  statusActivityText,
   summarizeToolInput,
   type CCEvent,
 } from '../src/lib/events'
@@ -72,14 +74,23 @@ describe('eventToItems', () => {
         content: [
           { type: 'thinking', thinking: 'checking the auth flow' },
           { type: 'text', text: 'Reading the file.' },
-          { type: 'tool_use', name: 'Read', input: { file_path: 'src/auth.ts' } },
+          {
+            type: 'tool_use',
+            name: 'Read',
+            input: { file_path: 'src/auth.ts' },
+          },
         ],
       },
     }
     const items = eventToItems(event, 's1')
     expect(items.map((i) => i.kind)).toEqual(['thinking', 'assistant', 'tool'])
     expect(items[0].gutter).toBe('✻')
-    expect(items[2]).toMatchObject({ kind: 'tool', gutter: '●', text: 'Read', detail: '(src/auth.ts)' })
+    expect(items[2]).toMatchObject({
+      kind: 'tool',
+      gutter: '●',
+      text: 'Read',
+      detail: '(src/auth.ts)',
+    })
     // Unique keys within one event.
     expect(new Set(items.map((i) => i.key)).size).toBe(items.length)
   })
@@ -92,7 +103,12 @@ describe('eventToItems', () => {
       },
     }
     const [item] = eventToItems(event, 's2')
-    expect(item).toMatchObject({ kind: 'tool_result', gutter: '⎿', text: 'file contents', spaceBefore: false })
+    expect(item).toMatchObject({
+      kind: 'tool_result',
+      gutter: '⎿',
+      text: 'file contents',
+      spaceBefore: false,
+    })
   })
 
   it('unwraps nested text blocks in a tool_result and marks errors', () => {
@@ -100,7 +116,11 @@ describe('eventToItems', () => {
       type: 'user',
       message: {
         content: [
-          { type: 'tool_result', is_error: true, content: [{ type: 'text', text: 'boom' }] },
+          {
+            type: 'tool_result',
+            is_error: true,
+            content: [{ type: 'text', text: 'boom' }],
+          },
         ],
       },
     }
@@ -110,23 +130,33 @@ describe('eventToItems', () => {
   })
 
   it('renders a human user message with a › gutter (not as a tool result)', () => {
-    const event: CCEvent = { type: 'user', message: { content: 'please add tests' } }
+    const event: CCEvent = {
+      type: 'user',
+      message: { content: 'please add tests' },
+    }
     const [item] = eventToItems(event, 's4')
-    expect(item).toMatchObject({ kind: 'user', gutter: '›', text: 'please add tests', spaceBefore: true })
+    expect(item).toMatchObject({
+      kind: 'user',
+      gutter: '›',
+      text: 'please add tests',
+      spaceBefore: true,
+    })
   })
 
   it('summarizes a result event with duration and cost', () => {
-    const event: CCEvent = { type: 'result', duration_ms: 12300, total_cost_usd: 0.042 }
+    const event: CCEvent = {
+      type: 'result',
+      duration_ms: 12300,
+      total_cost_usd: 0.042,
+    }
     const [item] = eventToItems(event, 's5')
     expect(item.kind).toBe('summary')
     expect(item.text).toBe('turn complete · 12.3s · $0.04')
   })
 
-  it('renders a system init line', () => {
-    const event: CCEvent = { type: 'system', subtype: 'init', model: 'claude-opus-4-8' }
-    const [item] = eventToItems(event, 's6')
-    expect(item.kind).toBe('system')
-    expect(item.text).toContain('claude-opus-4-8')
+  it('renders nothing for system events (CC emits an init per query — noise)', () => {
+    expect(eventToItems({ type: 'system', subtype: 'init', model: 'claude-opus-4-8' }, 's6')).toEqual([])
+    expect(eventToItems({ type: 'system', subtype: 'status' }, 's6b')).toEqual([])
   })
 
   it('produces no items for an empty assistant turn', () => {
@@ -195,17 +225,119 @@ describe('foldCosts', () => {
   })
 })
 
-describe('statusSystemLine', () => {
-  it('maps surface statuses to Claude-Code-style lines', () => {
-    expect(statusSystemLine('starting')).toBe('starting sandbox')
-    expect(statusSystemLine('working')).toBe('agent working')
-    expect(statusSystemLine('waiting')).toBe('waiting for your reply')
-    expect(statusSystemLine('sleeping')).toBe('sleeping · your next message wakes it')
-    expect(statusSystemLine('closed')).toBe('conversation closed')
-    expect(statusSystemLine('failed')).toBe('session failed')
+describe('collapseToolRuns', () => {
+  const tool = (key: string, name: string): Parameters<typeof collapseToolRuns>[0][number] => ({
+    key,
+    kind: 'tool',
+    text: name,
+    gutter: '●',
+  })
+  const result = (key: string): Parameters<typeof collapseToolRuns>[0][number] => ({
+    key,
+    kind: 'tool_result',
+    text: 'ok',
+    gutter: '⎿',
+  })
+  const prose = (key: string, text: string): Parameters<typeof collapseToolRuns>[0][number] => ({
+    key,
+    kind: 'assistant',
+    text,
   })
 
-  it('is null for an unknown status', () => {
-    expect(statusSystemLine('nonsense')).toBeNull()
+  it('folds a run of Bash calls into one shell-command summary', () => {
+    const out = collapseToolRuns([
+      prose('a', 'Checking.'),
+      tool('t1', 'Bash'),
+      result('r1'),
+      tool('t2', 'Bash'),
+      result('r2'),
+      prose('b', 'Done.'),
+    ])
+    expect(out.map((i) => i.kind)).toEqual(['assistant', 'notice', 'assistant'])
+    expect(out[1].text).toBe('Ran 2 shell commands')
+  })
+
+  it('singular for one call, and names mixed tools', () => {
+    expect(collapseToolRuns([tool('t1', 'Bash'), result('r1')])[0].text).toBe(
+      'Ran 1 shell command',
+    )
+    const mixed = collapseToolRuns([tool('t1', 'Bash'), result('r1'), tool('t2', 'Grep')])
+    expect(mixed[0].text).toBe('Ran 2 tool calls (Bash, Grep)')
+  })
+
+  it('counts files for all-Read runs and splits groups on prose between them', () => {
+    const out = collapseToolRuns([
+      tool('t1', 'Read'),
+      result('r1'),
+      prose('a', 'Now the fix.'),
+      tool('t2', 'Bash'),
+      result('r2'),
+    ])
+    expect(out.map((i) => i.text)).toEqual(['Read 1 file', 'Now the fix.', 'Ran 1 shell command'])
+  })
+
+  it('passes non-tool items through untouched', () => {
+    const items = [prose('a', 'Hello.')]
+    expect(collapseToolRuns(items)).toEqual(items)
+  })
+})
+
+describe('pendingToolCalls', () => {
+  const tool = (key: string, name: string, detail?: string): Parameters<typeof pendingToolCalls>[0][number] => ({
+    key,
+    kind: 'tool',
+    text: name,
+    detail,
+    gutter: '●',
+  })
+  const result = (key: string): Parameters<typeof pendingToolCalls>[0][number] => ({
+    key,
+    kind: 'tool_result',
+    text: 'ok',
+    gutter: '⎿',
+  })
+  const prose = (key: string): Parameters<typeof pendingToolCalls>[0][number] => ({
+    key,
+    kind: 'assistant',
+    text: 'hi',
+  })
+  const summary = (key: string): Parameters<typeof pendingToolCalls>[0][number] => ({
+    key,
+    kind: 'summary',
+    text: 'turn complete',
+  })
+
+  it('reports a call whose result has not arrived', () => {
+    const pending = pendingToolCalls([prose('a'), tool('t1', 'Bash', '(pytest -q)')])
+    expect(pending).toHaveLength(1)
+    expect(pending[0].text).toBe('Bash')
+  })
+
+  it('clears once the result lands, FIFO for parallel calls', () => {
+    expect(pendingToolCalls([tool('t1', 'Bash'), result('r1')])).toHaveLength(0)
+    const two = pendingToolCalls([tool('t1', 'Bash'), tool('t2', 'Grep'), result('r1')])
+    expect(two.map((t) => t.text)).toEqual(['Grep'])
+  })
+
+  it('resets on any non-tool item, so an errored old turn never reads as running', () => {
+    expect(pendingToolCalls([tool('t1', 'Bash'), summary('s1')])).toHaveLength(0)
+    expect(pendingToolCalls([tool('t1', 'Bash'), prose('a')])).toHaveLength(0)
+  })
+})
+
+describe('statusActivityText', () => {
+  it('labels the infrastructure phases for the ✻ activity line', () => {
+    expect(statusActivityText('scheduled')).toBe('Waiting for a worker')
+    expect(statusActivityText('starting')).toBe('Starting sandbox')
+    expect(statusActivityText('retrying')).toBe('Retrying after a transient error')
+  })
+
+  it('is null for working (the whimsy label takes over) and calm states', () => {
+    expect(statusActivityText('working')).toBeNull()
+    expect(statusActivityText('waiting')).toBeNull()
+    expect(statusActivityText('sleeping')).toBeNull()
+    expect(statusActivityText('closed')).toBeNull()
+    expect(statusActivityText('failed')).toBeNull()
+    expect(statusActivityText('nonsense')).toBeNull()
   })
 })

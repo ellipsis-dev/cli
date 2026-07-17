@@ -1,19 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Box, Text, useApp, useInput, useStdin } from 'ink'
-import Spinner from 'ink-spinner'
+import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink'
 import { ApiClient, ApiError } from '../lib/api'
 import { streamSession, StreamUnavailableError, type StreamFrame } from '../lib/ws'
 import {
   clampLines,
+  collapseToolRuns,
   foldCosts,
+  isConnectVisibleRecord,
+  pendingToolCalls,
   recordToItems,
   resultCostUsd,
-  statusSystemLine,
+  statusActivityText,
   type CCEvent,
   type ItemKind,
   type TranscriptItem,
 } from '../lib/events'
 import { hyperlink } from '../lib/urls'
+import { VERSION } from '../lib/constants'
 
 // The interactive `agent session connect` UI, modelled on Claude Code: a
 // committed transcript that groups tool calls with their results and spaces
@@ -49,6 +52,16 @@ export interface ConnectAppProps {
   sessionUrl: string
   // Spend seeded from the stored steps: cumulative total + the last turn's cost.
   initialCost: { total: number | null; lastStep: number | null }
+  // A one-line caveat shown as the app's opening notice (e.g. "watch-only:
+  // this conversation is closed"). null for the normal connect.
+  initialNotice?: string | null
+  // The session's model (backend tokens_model, fixed at creation), shown in
+  // the banner under the dashboard link.
+  model?: string | null
+  // Written (not read) by the app: set true when the app exits because the
+  // conversation closed, so the caller skips the "detached — still running"
+  // sign-off (the session is not still running).
+  exitState?: { closed: boolean }
 }
 
 // Surface statuses in which something is actively happening — drives the
@@ -63,12 +76,27 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const { api, token, sessionId, wsBase, canSend } = props
   const { exit } = useApp()
   const { isRawModeSupported } = useStdin()
+  const { stdout } = useStdout()
+
+  // Terminal height, tracked across resizes, so the app fills the whole
+  // window Claude Code-style: banner at top, composer + meta pinned to the
+  // bottom, the transcript growing through the space between. One row is
+  // left for the shell cursor so the first paint never scrolls.
+  const [termRows, setTermRows] = useState(stdout?.rows ?? 24)
+  useEffect(() => {
+    if (!stdout) return
+    const onResize = (): void => setTermRows(stdout.rows)
+    stdout.on('resize', onResize)
+    return () => {
+      stdout.off('resize', onResize)
+    }
+  }, [stdout])
 
   const [items, setItems] = useState<TranscriptItem[]>(props.initialItems)
   const [status, setStatus] = useState(props.initialStatus)
   const [working, setWorking] = useState(isWorkingStatus(props.initialStatus))
   const [elapsed, setElapsed] = useState(0)
-  const [notice, setNotice] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(props.initialNotice ?? null)
   const [input, setInput] = useState('')
   // ctrl+r toggles full vs. collapsed tool output across the whole transcript.
   const [expanded, setExpanded] = useState(false)
@@ -104,6 +132,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const everRunning = useRef(props.initialStatus === 'running')
   const refreshing = useRef(false)
   const pendingRefresh = useRef(false)
+  // Guard so the closed-conversation teardown (final refresh + exit) runs once
+  // no matter which signal lands first (status frame, poll, stream end).
+  const closingDown = useRef(false)
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // A mirror of `queued` for async callbacks, and the texts already committed
   // locally so the backend's later echo of the same send is dropped.
@@ -144,21 +175,11 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     if (total == null) return
     const prev = costTotal.current
     costTotal.current = total
-    setCost({ total, lastStep: prev != null ? Math.max(0, total - prev) : total })
+    setCost({
+      total,
+      lastStep: prev != null ? Math.max(0, total - prev) : total,
+    })
   }, [])
-
-  // Append a dim, Claude-Code-style lifecycle line ("creating sandbox", …) when
-  // the session status changes.
-  const emitStatusLine = useCallback(
-    (next: string): void => {
-      const line = statusSystemLine(next)
-      if (!line) return
-      append([
-        { key: `st${keyCounter.current++}`, kind: 'system', gutter: '●', text: line, spaceBefore: true },
-      ])
-    },
-    [append],
-  )
 
   // Pull the structured steps and append any newer than what's on screen. This
   // is the sole source of transcript content — the socket only decides *when*
@@ -178,7 +199,12 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           maxFeed.current = Math.max(maxFeed.current, st.feed_seq)
           applyCost(st.payload as CCEvent)
         }
-        append(fresh.flatMap((st) => recordToItems(st, `s${st.feed_seq}`)))
+        // Lifecycle rows stay off the transcript — the activity line + footer
+        // carry session state, closing surfaces as the exit notice — except
+        // the sandbox-ready conversation note (isConnectVisibleRecord).
+        append(
+          fresh.filter(isConnectVisibleRecord).flatMap((st) => recordToItems(st, `s${st.feed_seq}`)),
+        )
         // A committed step landed — the streamed overlay is now part of the
         // transcript (or the turn advanced), so drop the live overlay.
         setLiveText('')
@@ -194,6 +220,18 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       }
     }
   }, [api, append, applyCost, sessionId])
+
+  // A closed conversation is over — nothing can ever be sent or received
+  // again (a send would 409) — so pull the final records, leave one dim
+  // notice as the sign-off, and exit instead of sitting at the composer.
+  const finishClosed = useCallback((): void => {
+    if (closingDown.current) return
+    closingDown.current = true
+    if (props.exitState) props.exitState.closed = true
+    setWorking(false)
+    setNotice('conversation closed')
+    void refreshSteps().finally(() => exit())
+  }, [exit, props.exitState, refreshSteps])
 
   // Coalesce bursts of wakes into one refresh a beat later.
   const scheduleRefresh = useCallback((): void => {
@@ -216,7 +254,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         // Box-up states (working/waiting) mean the session became connectable;
         // used to tell a preflight failure from a mid-conversation one.
         if (['working', 'waiting'].includes(frame.status)) everRunning.current = true
-        emitStatusLine(frame.status)
+        if (frame.status === 'closed') {
+          finishClosed()
+          return
+        }
       }
       if (frame.type === 'error') {
         setNotice(frame.message ?? frame.data ?? 'stream error')
@@ -232,7 +273,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       }
       scheduleRefresh()
     },
-    [emitStatusLine, scheduleRefresh],
+    [finishClosed, scheduleRefresh],
   )
 
   // Keep the socket attached across reconnects/resume. A keyed session going
@@ -269,6 +310,13 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           exit()
           return
         }
+        // The warm loop can end by closing the conversation (a closing event's
+        // final turn, or an ephemeral session finishing): that's terminal, not
+        // an idle nap — tear down instead of inviting a doomed send.
+        if (outcome.type === 'done' && lastStatus.current === 'closed') {
+          finishClosed()
+          return
+        }
         if (canSend) {
           if (outcome.type === 'done') setNotice('agent idle — send a message to wake it')
         } else {
@@ -289,7 +337,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       .finally(() => {
         streaming.current = false
       })
-  }, [canSend, exit, handleFrame, refreshSteps, sessionId, token, wsBase])
+  }, [canSend, exit, finishClosed, handleFrame, refreshSteps, sessionId, token, wsBase])
 
   // A status backstop that doesn't depend on the socket: the lifecycle
   // transitions may arrive before the socket attaches, so poll the session too
@@ -306,18 +354,14 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         setStatus(word)
         setWorking(isWorkingStatus(word))
         if (['working', 'waiting'].includes(word)) everRunning.current = true
-        emitStatusLine(word)
+        if (word === 'closed') finishClosed()
       }
     } catch {
       // Transient fetch failure — the next tick retries.
     }
-  }, [api, emitStatusLine, sessionId])
+  }, [api, finishClosed, sessionId])
 
   useEffect(() => {
-    // Announce the phase we connected during (creating a sandbox, retrying) so
-    // the lifecycle reads top-to-bottom even when we attach mid-startup.
-    const s0 = lastStatus.current
-    if (s0 === 'scheduled' || s0 === 'creating_sandbox' || s0 === 'retrying') emitStatusLine(s0)
     pump()
     scheduleRefresh() // catch steps created between the initial fetch and connect
     // A slow poll backs up the socket wake (and covers a socket that never
@@ -344,6 +388,19 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     const t = setInterval(() => setElapsed((e) => e + 1), 1000)
     return () => clearInterval(t)
   }, [working])
+
+  // The tool calls executing right now (an unmatched tool_use in the committed
+  // transcript — see pendingToolCalls), with a per-burst seconds ticker so a
+  // long Bash call reads "Running Bash(pytest…)… (34s)" instead of dead air.
+  const pendingTools = useMemo(() => pendingToolCalls(items), [items])
+  const [toolElapsed, setToolElapsed] = useState(0)
+  const pendingToolKey = pendingTools.length > 0 ? pendingTools[0].key : null
+  useEffect(() => {
+    if (pendingToolKey == null) return
+    setToolElapsed(0)
+    const t = setInterval(() => setToolElapsed((e) => e + 1), 1000)
+    return () => clearInterval(t)
+  }, [pendingToolKey])
 
   // When the turn goes idle, commit any still-queued messages into the
   // transcript (they weren't relayed) so they never vanish; remember them so a
@@ -424,48 +481,107 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   )
 
   // Render the transcript from state (not <Static>) so ctrl+r can re-expand
-  // committed blocks. The list is memoized on [items, expanded], so the
-  // 80ms spinner ticks reuse the same elements and don't re-lay-out the
-  // transcript — only the footer re-renders.
-  const lines = useMemo(
-    () => items.map((item) => <TranscriptLine key={item.key} item={item} expanded={expanded} />),
-    [items, expanded],
-  )
-  const hasCollapsible = useMemo(
-    () => items.some((it) => isCollapsible(it)),
-    [items],
-  )
+  // committed blocks. Collapsed (the default), runs of consecutive tool
+  // activity fold into one "Ran N shell commands" line, Claude-Code-app-style;
+  // ctrl+r restores the full ● call / ⎿ result blocks (and un-clamps long
+  // bodies). The list is memoized on [items, expanded], so the elapsed-second
+  // ticks reuse the same elements and don't re-lay-out the transcript.
+  const lines = useMemo(() => {
+    const visible = expanded ? items : collapseToolRuns(items)
+    return visible.map((item) => <TranscriptLine key={item.key} item={item} expanded={expanded} />)
+  }, [items, expanded])
 
-  // The persistent footer status line, Claude-Code-style: the (clickable)
-  // session id, the current status, and the running spend — cumulative total
-  // plus the cost of the last turn.
-  const idLink = hyperlink(props.sessionUrl, sessionId)
+  // The persistent footer status line, kept minimal: the current status and
+  // the running spend (cumulative total + the last turn's cost). Session
+  // identity lives in the banner; command hints live in --help.
   const totalStr = `$${(cost.total ?? 0).toFixed(2)}`
-  const lastStepStr =
-    cost.lastStep != null ? ` (Last step: $${cost.lastStep.toFixed(2)})` : ''
-  const metaLine = `${idLink} · ${status} · ${totalStr} total${lastStepStr}`
+  const lastStepStr = cost.lastStep != null ? ` (Last step: $${cost.lastStep.toFixed(2)})` : ''
+  const metaLine = `${status} · ${totalStr} total${lastStepStr}`
+  // Three distinct, factual activity signals — never whimsy:
+  // - `infraActivity`: the sandbox is spawning/waking (scheduled/starting/
+  //   retrying). Shown at the TOP, under the banner, where a startup message
+  //   belongs — there's no conversation yet to sit above a composer.
+  // - `generating`: the model is streaming tokens (delta frames flowing) —
+  //   the ✻ line above the composer, with elapsed + token count.
+  // - `runningTool`: a committed tool call awaits its result — the same ✻
+  //   slot names the tool and ticks its own timer (generating wins if both
+  //   somehow read true; the model can't stream past an unresolved call).
+  const infraActivity = statusActivityText(status)
+  const generating = status === 'working' && (liveText !== '' || liveTokens != null)
+  const generatingBits = [
+    formatElapsed(elapsed),
+    ...(liveTokens != null ? [`↓ ${formatTokens(liveTokens)} tokens`] : []),
+    ...(inputActive ? ['esc to interrupt'] : []),
+  ].join(' · ')
+  const runningTool = status === 'working' && !generating && pendingTools.length > 0
+  const runningToolLabel =
+    pendingTools.length === 1
+      ? `Running ${pendingTools[0].text}${pendingTools[0].detail ?? ''}`
+      : `Running ${pendingTools.length} tool calls (${[...new Set(pendingTools.map((t) => t.text))].join(', ')})`
+  const runningToolBits = [
+    formatElapsed(toolElapsed),
+    ...(inputActive ? ['esc to interrupt'] : []),
+  ].join(' · ')
 
   return (
-    <Box flexDirection="column">
-      {lines}
-      {/* The in-progress assistant response, streamed token-by-token from delta
-          frames; replaced by the committed step when it lands. */}
-      {liveText && (
-        <Box marginTop={1}>
-          <Text>{liveText}</Text>
-        </Box>
+    <Box flexDirection="column" minHeight={termRows - 1}>
+      {/* The banner: brand + version, then the session's dashboard link —
+          Claude Code's header, Ellipsis-flavoured. Session identity lives here
+          and in the footer; nothing is printed to scrollback before the app. */}
+      <Box flexDirection="column" marginTop={1} marginBottom={1}>
+        <Text>
+          <Text color="cyan" bold>
+            {' ●●● '}
+          </Text>
+          <Text bold> Ellipsis</Text>
+          <Text dimColor> v{VERSION}</Text>
+        </Text>
+        <Text dimColor>
+          {'      '}
+          {hyperlink(props.sessionUrl, props.sessionUrl)}
+        </Text>
+        {props.model && (
+          <Text dimColor>
+            {'      '}
+            {props.model}
+          </Text>
+        )}
+      </Box>
+      {/* Sandbox spawn/wake progress, at the top where startup belongs;
+          re-renders in place and disappears once the session is live. */}
+      {infraActivity && (
+        <Text>
+          <Text color="cyan">✻</Text>{' '}
+          <Text dimColor>
+            {infraActivity}… ({formatElapsed(elapsed)})
+          </Text>
+        </Text>
       )}
+      {/* The transcript grows through the middle of the terminal, pinning the
+          composer + meta to the bottom edge (flexGrow fills the slack). */}
+      <Box flexDirection="column" flexGrow={1}>
+        {lines}
+        {/* The in-progress assistant response, streamed token-by-token from delta
+            frames; replaced by the committed step when it lands. */}
+        {liveText && (
+          <Box marginTop={1}>
+            <Text>{liveText}</Text>
+          </Box>
+        )}
+      </Box>
       <Box flexDirection="column" marginTop={1}>
         {notice && <Text dimColor>· {notice}</Text>}
-        {working && (
+        {generating && (
           <Text>
-            <Text color="cyan">
-              <Spinner type="dots" />
-            </Text>{' '}
+            <Text color="cyan">✻</Text>{' '}
+            <Text dimColor>Generating… ({generatingBits})</Text>
+          </Text>
+        )}
+        {runningTool && (
+          <Text>
+            <Text color="cyan">✻</Text>{' '}
             <Text dimColor>
-              working · {elapsed}s
-              {liveTokens != null ? ` · ${formatTokens(liveTokens)} tokens` : ''}
-              {inputActive ? ' · esc to interrupt · type to queue a message' : ''}
+              {runningToolLabel}… ({runningToolBits})
             </Text>
           </Text>
         )}
@@ -488,12 +604,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             ))}
           </Box>
         )}
-        <Text dimColor>
-          {metaLine}
-          {inputActive && hasCollapsible
-            ? ` · ctrl+r to ${expanded ? 'collapse' : 'expand'}`
-            : ''}
-        </Text>
+        <Text dimColor>{metaLine}</Text>
       </Box>
     </Box>
   )
@@ -502,6 +613,11 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
 // Compact token count for the live footer: 1400 -> "1.4k", 900 -> "900".
 function formatTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+}
+
+// Elapsed seconds in Claude Code's style: "42s", then "1m 25s" past a minute.
+function formatElapsed(s: number): string {
+  return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`
 }
 
 // Long bodies collapse to this many lines until ctrl+r expands them.
@@ -528,13 +644,21 @@ function styleFor(item: TranscriptItem): {
     case 'tool':
       return { gutterColor: 'green', bold: true, dim: false }
     case 'tool_result':
-      return { textColor: item.isError ? 'red' : undefined, dim: !item.isError, bold: false }
+      return {
+        textColor: item.isError ? 'red' : undefined,
+        dim: !item.isError,
+        bold: false,
+      }
     case 'user':
       return { gutterColor: 'cyan', textColor: 'cyan', bold: true, dim: false }
     case 'error':
       return { gutterColor: 'red', textColor: 'red', dim: false, bold: false }
     case 'summary':
-      return { textColor: item.isError ? 'red' : undefined, dim: true, bold: false }
+      return {
+        textColor: item.isError ? 'red' : undefined,
+        dim: true,
+        bold: false,
+      }
     case 'thinking':
     case 'system':
     case 'notice':
