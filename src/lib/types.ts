@@ -197,6 +197,12 @@ export interface StartAgentSessionRequest {
   // after the config's shared `claude.system` system prompt. Distinct from the
   // system prompt, which is identical for every session of a config.
   prompt?: string
+  // Start with no initial message: the sandbox spins up, Claude Code sits idle
+  // at the prompt, and the first message sent to the session opens turn 0,
+  // exactly like a local `claude`. Sent for a promptless --connect start (a
+  // bare `agent`). Mutually exclusive with prompt; the server ignores it when
+  // the resolved config is not interactive (that session runs its workflow).
+  idle_start?: boolean
 }
 
 // Replay payload for POST /v1/sessions/{id}/replay. Re-runs an existing
