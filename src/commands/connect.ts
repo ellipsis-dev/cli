@@ -3,7 +3,7 @@ import React from 'react'
 import { render } from 'ink'
 import { ApiClient } from '../lib/api'
 import { requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
-import { runAction } from '../lib/output'
+import { runAction, usdNumberFromMillicents } from '../lib/output'
 import { foldCosts, isConnectVisibleRecord, recordToItems, type CCEvent } from '../lib/events'
 import { sessionUrl } from '../lib/urls'
 import { resolveWsBase } from '../lib/ws'
@@ -122,6 +122,11 @@ export async function runConnect(
         .flatMap((st) => recordToItems(st, `s${st.feed_seq}`))
     : []
   const initialCost = foldCosts(ordered.map((st) => st.payload as CCEvent))
+  // The server's ledger total at connect time; live updates arrive as
+  // cost_millicents on status/done frames.
+  const initialServerCostUsd = usdNumberFromMillicents(
+    session.cost_tokens + session.cost_sandbox_cpu + session.cost_sandbox_memory + session.cost_fee,
+  )
 
   // Written by the app when it exits because the conversation closed (terminal;
   // nothing left to reconnect to), so the detach sign-off below stays honest.
@@ -140,6 +145,7 @@ export async function runConnect(
       initialStatus: session.surface?.status ?? session.status,
       sessionUrl: url,
       initialCost,
+      initialServerCostUsd,
       initialNotice: reason ?? null,
       // The session's one model, fixed at creation (backend tokens_model).
       model: typeof session.tokens_model === 'string' ? session.tokens_model : null,

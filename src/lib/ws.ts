@@ -4,14 +4,17 @@ import { DEFAULT_WS_BASE, USER_AGENT } from './constants'
 
 // The frame protocol spoken over the session WebSocket (server -> client). One
 // JSON object per message. Mirrors session_stream.py in the backend.
-//   status: { type, status, session, run, ts }
+//   status: { type, status, session, run, cost_millicents, ts }
 //   stdout/stderr: { type, data, seq, ts }
 //   delta:  { type, text?, output_tokens? }
-//   done: { type, status, session, run, exit_status }
+//   done: { type, status, session, run, exit_status, cost_millicents }
 //   error: { type, message }
 // `status` is the derived single word (working/waiting/sleeping/starting/…);
 // `session` (alive/sleeping/closed) and `run` are the two raw axes. All three
 // are null for an un-keyed (laptop) session. See session_surface.py.
+// `cost_millicents` is the session's running total cost from the server's spend
+// ledger — the billing authority; it climbs mid-turn as the agent spends, and
+// the server emits a status frame on every change (absent on older backends).
 // `seq` is a monotonic per-session cursor; the client resumes from the last seq
 // it saw via `?after_seq=` so a dropped socket loses nothing. `delta` is the
 // EPHEMERAL live-streaming frame (partial assistant text + running token count);
@@ -24,6 +27,8 @@ export interface StreamFrame {
   // status/done frames: the two raw session-surface axes (null for laptop).
   session?: string | null
   run?: string | null
+  // status/done frames: the session's running total cost (millicents).
+  cost_millicents?: number
   seq?: number
   ts?: string
   message?: string

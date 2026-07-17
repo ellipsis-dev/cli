@@ -17,6 +17,7 @@ import {
   type TranscriptItem,
 } from '../lib/events'
 import { hyperlink } from '../lib/urls'
+import { usdNumberFromMillicents } from '../lib/output'
 import { VERSION } from '../lib/constants'
 
 // The interactive `agent session connect` UI, modelled on Claude Code: a
@@ -54,6 +55,10 @@ export interface ConnectAppProps {
   sessionUrl: string
   // Spend seeded from the stored steps: cumulative total + the last turn's cost.
   initialCost: { total: number | null; lastStep: number | null }
+  // The server-reported session total (USD) at connect time, from the session's
+  // cost columns — the billing authority. Live updates arrive as
+  // `cost_millicents` on status/done frames; null against older backends.
+  initialServerCostUsd?: number | null
   // A one-line caveat shown as the app's opening notice (e.g. "watch-only:
   // this conversation is closed"). null for the normal connect.
   initialNotice?: string | null
@@ -132,6 +137,15 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // the latest Claude Code result; `lastStep` is the cost of the most recent
   // turn (the delta between the last two results).
   const [cost, setCost] = useState(props.initialCost)
+  // The server's authoritative running total (USD), from `cost_millicents` on
+  // status/done frames (and the status poll as backstop). Preferred over the
+  // CC-derived total when present; kept monotonic so the footer never dips.
+  const [serverCostUsd, setServerCostUsd] = useState<number | null>(
+    props.initialServerCostUsd ?? null,
+  )
+  const applyServerCostUsd = useCallback((usd: number): void => {
+    setServerCostUsd((prev) => (prev == null ? usd : Math.max(prev, usd)))
+  }, [])
 
   // Live-flow state that must survive re-renders without triggering them.
   const afterSeq = useRef(0)
@@ -305,6 +319,15 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const handleFrame = useCallback(
     (frame: StreamFrame): void => {
       if (typeof frame.seq === 'number') afterSeq.current = Math.max(afterSeq.current, frame.seq)
+      // status/done frames carry the server's running session total; the
+      // server emits a status frame on every cost change, so the footer's
+      // dollar figure climbs mid-turn as the agent spends.
+      if (
+        (frame.type === 'status' || frame.type === 'done') &&
+        typeof frame.cost_millicents === 'number'
+      ) {
+        applyServerCostUsd(usdNumberFromMillicents(frame.cost_millicents))
+      }
       if (frame.type === 'status' && frame.status && frame.status !== lastStatus.current) {
         lastStatus.current = frame.status
         setStatus(frame.status)
@@ -331,7 +354,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       }
       scheduleRefresh()
     },
-    [finishClosed, scheduleRefresh],
+    [applyServerCostUsd, finishClosed, scheduleRefresh],
   )
 
   // Keep the socket attached across reconnects/resume. A keyed session going
@@ -406,6 +429,13 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const pollStatus = useCallback(async (): Promise<void> => {
     try {
       const s = await api.getAgentSession(sessionId)
+      // Same figure the stream's cost_millicents carries, so the footer keeps
+      // climbing even when the socket never attached (polling fallback).
+      applyServerCostUsd(
+        usdNumberFromMillicents(
+          s.cost_tokens + s.cost_sandbox_cpu + s.cost_sandbox_memory + s.cost_fee,
+        ),
+      )
       const word = s.surface?.status ?? s.status
       if (word !== lastStatus.current) {
         lastStatus.current = word
@@ -417,7 +447,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     } catch {
       // Transient fetch failure — the next tick retries.
     }
-  }, [api, finishClosed, sessionId])
+  }, [api, applyServerCostUsd, finishClosed, sessionId])
 
   useEffect(() => {
     pump()
@@ -595,8 +625,11 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
 
   // The persistent footer status line, kept minimal: the current status and
   // the running spend (cumulative total + the last turn's cost). Session
-  // identity lives in the banner; command hints live in --help.
-  const totalStr = `$${(cost.total ?? 0).toFixed(2)}`
+  // identity lives in the banner; command hints live in --help. The total
+  // prefers the server's ledger figure (live via cost_millicents frames,
+  // climbing mid-turn); the CC-derived result total is the fallback against
+  // older backends.
+  const totalStr = `$${(serverCostUsd ?? cost.total ?? 0).toFixed(2)}`
   const lastStepStr = cost.lastStep != null ? ` (Last step: $${cost.lastStep.toFixed(2)})` : ''
   const metaLine = `${status} · ${totalStr} total${lastStepStr}`
   // Three distinct, factual activity signals — never whimsy. All render IN the
