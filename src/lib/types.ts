@@ -126,6 +126,11 @@ export interface AgentSession {
   cost_fee: number
   tokens_total: number
   metadata: Record<string, string>
+  // Present on the POST /v1/sessions response only (StartAgentSessionResponse):
+  // which config the session runs under and which rung of the defaults ladder
+  // chose it (null when an explicit config/template bypassed resolution).
+  resolved_config_name?: string | null
+  resolution_source?: 'repo_default' | 'account_default' | 'none' | null
   [key: string]: unknown
 }
 
@@ -172,6 +177,13 @@ export interface StartAgentSessionRequest {
   config?: AgentConfig
   template_id?: string
   handoff?: HandoffAgentSessionParams
+  // The "owner/name" repository the CLI is standing in (origin remote). With
+  // no explicit config source it selects the repo rung of the server's
+  // default-config ladder (repo default -> account default -> bare config),
+  // and it is always merged into the sandbox repository set (cloned at the
+  // default branch), even alongside --config. Unknown/foreign repos are
+  // ignored server-side.
+  repository?: string
   // No `source`: the server derives a session's provenance from the credential
   // (a user token => `cli`), so it can't be spoofed by the request body.
   metadata?: Record<string, string>

@@ -205,6 +205,13 @@ export function registerSession(program: Command): void {
           if (opts.config) req.config_id = opts.config
           if (opts.configFile) req.config = readConfigFile(opts.configFile)
           if (opts.template) req.template_id = opts.template
+          // The repo we're standing in (origin remote), sent unconditionally —
+          // with no config source it picks the repo rung of the server's
+          // defaults ladder, and either way the server merges it into the
+          // sandbox checkout set. Outside a git repo (or with no usable
+          // remote) nothing is sent.
+          const contextRepo = repoFromCwd(process.cwd())
+          if (contextRepo) req.repository = contextRepo
           // Sugar flags (--model, --repo, --cpu, ...) and the raw
           // --config-override are merged into one structured override, applied
           // onto the chosen (or default) config and re-validated server-side.
@@ -217,7 +224,30 @@ export function registerSession(program: Command): void {
           const api = new ApiClient()
           const session = await api.startAgentSession(req)
 
+          // Say which agent the server picked when it came from the defaults
+          // ladder, so a bare `agent` never silently runs an unexpected config.
+          if (!opts.json && session.resolved_config_name) {
+            if (session.resolution_source === 'repo_default') {
+              console.log(`using config "${session.resolved_config_name}" (repo default)`)
+            } else if (session.resolution_source === 'account_default') {
+              console.log(`using config "${session.resolved_config_name}" (account default)`)
+            }
+          }
+
           if (opts.connect) {
+            // A non-interactive config refuses the stream/messages surface, so
+            // a connect would fail; degrade to watching the output instead.
+            const ellipsisBlock = (session.agent_config as Record<string, unknown> | undefined)
+              ?.ellipsis as { interactive?: boolean } | undefined
+            if (ellipsisBlock?.interactive === false) {
+              console.log(
+                'this agent is not interactive; watching output instead of connecting',
+              )
+              console.log(`✓ started session ${session.id}`)
+              await printSessionUrl(api, session.id)
+              await watchSessionStreaming(api, session.id, FALLBACK_POLL_INTERVAL_SECONDS, false)
+              return
+            }
             await startConnect(session)
             return
           }
