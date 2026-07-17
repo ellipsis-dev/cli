@@ -168,10 +168,13 @@ export function registerConfig(program: Command): void {
     .alias('ls')
     .description('List all default-config rungs (GET /v1/defaults)')
     .option('--json', 'output raw JSON')
-    .action(async (opts: { json?: boolean }) => {
+    // The group also defines --json (for the bare view), and commander parses
+    // parent options even when they follow the subcommand name — so read the
+    // merged view, not just this command's own opts.
+    .action(async (_opts: { json?: boolean }, cmd: Command) => {
       await runAction(async () => {
         const rungs = await new ApiClient().listAgentDefaults()
-        if (opts.json) {
+        if (cmd.optsWithGlobals().json) {
           printJson(rungs)
           return
         }
@@ -202,21 +205,23 @@ export function registerConfig(program: Command): void {
       'target a repo rung: "owner/name", or no value for the repo you are standing in',
     )
     .option('--json', 'output raw JSON')
-    .action(async (configId: string, opts: { repo?: string | boolean; json?: boolean }) => {
-      await runAction(async () => {
-        const repository = resolveRepoFlag(opts.repo)
-        const set = await new ApiClient().putAgentDefault({
-          config_id: configId,
-          ...(repository ? { repository } : {}),
+    .action(
+      async (configId: string, opts: { repo?: string | boolean; json?: boolean }, cmd: Command) => {
+        await runAction(async () => {
+          const repository = resolveRepoFlag(opts.repo)
+          const set = await new ApiClient().putAgentDefault({
+            config_id: configId,
+            ...(repository ? { repository } : {}),
+          })
+          if (cmd.optsWithGlobals().json) {
+            printJson(set)
+            return
+          }
+          const rung = set.repository ? `default for ${set.repository}` : 'account default'
+          console.log(`✓ set ${rung} to "${defaultName(set)}" (${set.config_id})`)
         })
-        if (opts.json) {
-          printJson(set)
-          return
-        }
-        const rung = set.repository ? `default for ${set.repository}` : 'account default'
-        console.log(`✓ set ${rung} to "${defaultName(set)}" (${set.config_id})`)
-      })
-    })
+      },
+    )
 
   defaults
     .command('clear')
