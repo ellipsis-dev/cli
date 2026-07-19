@@ -18,6 +18,7 @@ import {
 } from '../lib/events'
 import { hyperlink } from '../lib/urls'
 import { usdNumberFromMillicents } from '../lib/output'
+import { oneLine, setupOutputHook, setupOutputLine } from '../lib/steps'
 import { VERSION } from '../lib/constants'
 
 // The interactive `agent session connect` UI, modelled on Claude Code: a
@@ -109,6 +110,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const [status, setStatus] = useState(props.initialStatus)
   const [working, setWorking] = useState(isWorkingStatus(props.initialStatus))
   const [elapsed, setElapsed] = useState(0)
+  // The setup script's latest output line while the sandbox spawns (streamed
+  // sandbox_setup_output lifecycle chunks) — the sub-line under "Starting
+  // sandbox…" that says WHAT the box is doing. Cleared by sandbox_ready.
+  const [setupLine, setSetupLine] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(props.initialNotice ?? null)
   const [input, setInput] = useState('')
   // ctrl+r toggles full vs. collapsed tool output across the whole transcript.
@@ -260,6 +265,16 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         for (const st of fresh) {
           maxFeed.current = Math.max(maxFeed.current, st.feed_seq)
           applyCost(st.payload as CCEvent)
+          // Setup-script output chunks drive the "Starting sandbox" sub-line;
+          // sandbox_ready retires it (the spawn is over).
+          if (st.source === 'lifecycle') {
+            if (st.record_type === 'sandbox_setup_output') {
+              const line = setupOutputLine(st.payload)
+              if (line) setSetupLine(`${setupOutputHook(st.payload)} · ${line}`)
+            } else if (st.record_type === 'sandbox_ready') {
+              setSetupLine(null)
+            }
+          }
         }
         // Lifecycle rows stay off the transcript — the activity line + footer
         // carry session state, closing surfaces as the exit notice — except
@@ -688,12 +703,23 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       {/* Sandbox spawn/wake progress, at the top where startup belongs;
           re-renders in place and disappears once the session is live. */}
       {infraActivity && (
-        <Text>
-          <Text color="cyan">✻</Text>{' '}
-          <Text dimColor>
-            {infraActivity}… ({formatDuration(elapsed)})
+        <Box flexDirection="column">
+          <Text>
+            <Text color="cyan">✻</Text>{' '}
+            <Text dimColor>
+              {infraActivity}… ({formatDuration(elapsed)})
+            </Text>
           </Text>
-        </Text>
+          {/* What the spawn is actually doing: the setup script's latest
+              output line, streamed from the backend as it runs (a cold
+              dependency install is most of a slow start). */}
+          {setupLine && (
+            <Text>
+              {'  '}
+              <Text dimColor>⎿ {oneLine(setupLine, 110)}</Text>
+            </Text>
+          )}
+        </Box>
       )}
       {/* The transcript grows through the middle of the terminal, pinning the
           composer + meta to the bottom edge (flexGrow fills the slack). */}
