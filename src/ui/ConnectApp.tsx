@@ -639,15 +639,20 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     }
   }, [items, expanded, pendingTools])
 
-  // The persistent footer status line, kept minimal: the current status and
-  // the running spend (cumulative total + the last turn's cost). Session
-  // identity lives in the banner; command hints live in --help. The total
-  // prefers the server's ledger figure (live via cost_millicents frames,
-  // climbing mid-turn); the CC-derived result total is the fallback against
-  // older backends.
+  // The persistent footer status line: the current status, the running spend
+  // (cumulative total + the last turn's cost), and the session identity — the
+  // dashboard link rendered as the session id, the model, and the CLI version.
+  // Command hints live in --help. The total prefers the server's ledger figure
+  // (live via cost_millicents frames, climbing mid-turn); the CC-derived
+  // result total is the fallback against older backends.
   const totalStr = `$${(serverCostUsd ?? cost.total ?? 0).toFixed(2)}`
   const lastStepStr = cost.lastStep != null ? ` (Last step: $${cost.lastStep.toFixed(2)})` : ''
-  const metaLine = `${status} · ${totalStr} total${lastStepStr}`
+  const metaLine = [
+    `${status} · ${totalStr} total${lastStepStr}`,
+    hyperlink(props.sessionUrl, sessionId),
+    ...(props.model ? [props.model] : []),
+    `v${VERSION}`,
+  ].join(' · ')
   // Three distinct, factual activity signals — never whimsy. All render IN the
   // transcript, on the block they describe, not above the composer:
   // - `infraActivity`: the sandbox is spawning/waking (scheduled/starting/
@@ -679,28 +684,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
 
   return (
     <Box flexDirection="column" minHeight={termRows - 1}>
-      {/* The banner: brand + version, then the session's dashboard link —
-          Claude Code's header, Ellipsis-flavoured. Session identity lives here
-          and in the footer; nothing is printed to scrollback before the app. */}
-      <Box flexDirection="column" marginTop={1} marginBottom={1}>
-        <Text>
-          <Text color="cyan" bold>
-            {' ●●● '}
-          </Text>
-          <Text bold> Ellipsis</Text>
-          <Text dimColor> v{VERSION}</Text>
-        </Text>
-        <Text dimColor>
-          {'      '}
-          {hyperlink(props.sessionUrl, props.sessionUrl)}
-        </Text>
-        {props.model && (
-          <Text dimColor>
-            {'      '}
-            {props.model}
-          </Text>
-        )}
-      </Box>
+      {/* No banner: session identity (dashboard link, model, version) lives in
+          the footer meta line, so the transcript starts at the top edge and
+          nothing is printed to scrollback before the app. */}
       {/* Sandbox spawn/wake progress, at the top where startup belongs;
           re-renders in place and disappears once the session is live. */}
       {infraActivity && (
