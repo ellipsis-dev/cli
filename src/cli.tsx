@@ -24,6 +24,9 @@ program
   .name('agent')
   .description('Ellipsis agent CLI: drive the Ellipsis cloud from your terminal')
   .version(VERSION)
+  // Set before the register* calls so every subcommand inherits it and lists
+  // its own subcommands alphabetically too.
+  .configureHelp({ sortSubcommands: true })
 
 registerLogin(program)
 registerHost(program)

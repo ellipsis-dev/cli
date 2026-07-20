@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest'
-import { relativeAge, usd, usdFromMillicents, usdNumberFromMillicents } from '../src/lib/output'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { ApiError } from '../src/lib/api'
+import {
+  friendlyErrorMessage,
+  relativeAge,
+  usd,
+  usdFromMillicents,
+  usdNumberFromMillicents,
+} from '../src/lib/output'
 
 describe('usdFromMillicents', () => {
   it('converts millicents to dollars (1 cent = 1000 millicents)', () => {
@@ -39,5 +46,38 @@ describe('usd', () => {
     expect(usd(0)).toBe('$0.00')
     expect(usd(9.5)).toBe('$9.50')
     expect(usd(100)).toBe('$100.00')
+  })
+})
+
+describe('friendlyErrorMessage', () => {
+  beforeEach(() => {
+    delete process.env.ELLIPSIS_API_TOKEN
+  })
+  afterEach(() => {
+    delete process.env.ELLIPSIS_API_TOKEN
+  })
+
+  it('maps a 401 to a re-login hint instead of the raw HTTP failure', () => {
+    const err = new ApiError(401, 'GET', '/v1/me', 'Unauthorized', 'req_1')
+    expect(friendlyErrorMessage(err)).toBe(
+      'Your login is invalid or has expired. Run `agent login` to re-authenticate.',
+    )
+  })
+
+  it('blames ELLIPSIS_API_TOKEN when the rejected credential came from the env', () => {
+    process.env.ELLIPSIS_API_TOKEN = 'stale_tok'
+    const err = new ApiError(401, 'GET', '/v1/me', 'Unauthorized')
+    expect(friendlyErrorMessage(err)).toMatch(/ELLIPSIS_API_TOKEN/)
+  })
+
+  it('passes other ApiErrors through with the server detail intact', () => {
+    const err = new ApiError(409, 'POST', '/v1/sessions/s_1/messages', 'Session is closed')
+    expect(friendlyErrorMessage(err)).toBe(
+      'POST /v1/sessions/s_1/messages failed: 409 Session is closed',
+    )
+  })
+
+  it('passes plain errors through unchanged', () => {
+    expect(friendlyErrorMessage(new Error('boom'))).toBe('boom')
   })
 })

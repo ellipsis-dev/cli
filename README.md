@@ -116,7 +116,7 @@ prints a clickable dashboard link. The stream protocol is specified in
 `agent login` uses the device-code flow: it requests a code pair, prints a
 verification URL (and opens it unless `--no-browser`), and polls until you
 approve the request in the dashboard. The issued user token is stored under
-`~/.config/ellipsis/config.json` (mode 0600) and attributes sessions to you.
+`~/.ellipsis/config.json` (mode 0600) and attributes sessions to you.
 
 **Credentials resolve in this order (highest wins):** explicit argument →
 environment (`ELLIPSIS_API_TOKEN` / `ELLIPSIS_API_BASE_URL`, with the legacy
@@ -142,9 +142,11 @@ add … --app-base <url>` (or `agent host set <name> --app-base <url>`). `agent
 login` then authenticates the active host, and every link the CLI prints points
 at that host's dashboard.
 
-Hosts and tokens live in `~/.config/ellipsis/config.json` (mode 0600). A config
-file from before hosts existed is migrated in place on first use — your existing
-login becomes a host named for its API base — so nothing needs re-doing.
+Hosts and tokens live in `~/.ellipsis/config.json` (mode 0600); set
+`ELLIPSIS_CONFIG_DIR` to relocate it. A config file from before hosts existed
+is migrated on first use — your existing login becomes a host named for its API
+base — and a config left at the old `~/.config/ellipsis` location is still read
+until the next write lands it in `~/.ellipsis`, so nothing needs re-doing.
 
 ## Develop
 

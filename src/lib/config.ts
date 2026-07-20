@@ -7,12 +7,22 @@ import { DEFAULT_API_BASE } from './constants'
 // A 0600 file under ~/.config is fine for the skeleton, not for shipping — and
 // multi-host means several tokens on disk, so this matters more now.
 // Resolved lazily (not at import) so ELLIPSIS_CONFIG_DIR is honored at runtime.
-function configDir(): string {
-  return process.env.ELLIPSIS_CONFIG_DIR ?? join(homedir(), '.config', 'ellipsis')
+// ~/.ellipsis (not ~/.config/ellipsis): the CLI creates it itself directly
+// under $HOME, so it can never inherit a root-owned ~/.config left behind by
+// an old `sudo` install — the most common first-run EACCES on macOS.
+export function configDir(): string {
+  return process.env.ELLIPSIS_CONFIG_DIR ?? join(homedir(), '.ellipsis')
 }
 
 function configFile(): string {
   return join(configDir(), 'config.json')
+}
+
+// Where pre-0.17 installs kept the config. Read-only fallback so the move to
+// ~/.ellipsis doesn't log anyone out; the first saveConfig writes the new
+// location and it wins from then on.
+function legacyConfigFile(): string {
+  return join(homedir(), '.config', 'ellipsis', 'config.json')
 }
 
 // One Ellipsis instance the CLI can target (prod, beta, or a self-hosted
@@ -89,8 +99,22 @@ function migrate(raw: unknown): CliConfig {
 
 export function loadConfig(): CliConfig {
   const file = configFile()
-  if (!existsSync(file)) return { version: 2, hosts: {} }
-  return migrate(JSON.parse(readFileSync(file, 'utf8')))
+  if (existsSync(file)) return migrate(JSON.parse(readFileSync(file, 'utf8')))
+  // No config at the current path: fall back to the legacy XDG location, but
+  // only for the default dir — an explicit ELLIPSIS_CONFIG_DIR must resolve
+  // exactly (tests and sandboxes rely on that isolation).
+  if (!process.env.ELLIPSIS_CONFIG_DIR) {
+    const legacy = legacyConfigFile()
+    if (existsSync(legacy)) {
+      try {
+        return migrate(JSON.parse(readFileSync(legacy, 'utf8')))
+      } catch {
+        // Unreadable legacy file (often a root-owned ~/.config from an old
+        // sudo run — the problem ~/.ellipsis exists to avoid). Start fresh.
+      }
+    }
+  }
+  return { version: 2, hosts: {} }
 }
 
 export function saveConfig(config: CliConfig): void {
