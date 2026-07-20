@@ -250,6 +250,25 @@ describe('recordText / formatStepLine', () => {
     expect(line).toBe('  -2  2026-07-03 12:00  sandbox_ready     Sandbox ready')
   })
 
+  it('renders sandbox_ready cache tier and setup-output chunks', () => {
+    // sandbox_ready carries the image-cache tier so a slow start explains itself.
+    const ready = formatStepLine(
+      record(
+        { repositories: ['acme/repo'], cache_tier: 'full' },
+        { source: 'lifecycle', record_type: 'sandbox_ready', stream_seq: -2 },
+      ),
+    )
+    expect(ready).toContain('Sandbox ready · acme/repo · full build')
+    // A setup-output chunk reads as the script's latest non-empty line.
+    const chunk = formatStepLine(
+      record(
+        { hook: 'image.setup', chunk: 3, lines: ['Installing pandas (3.0.3)', '  '] },
+        { source: 'lifecycle', record_type: 'sandbox_setup_output', stream_seq: -3 },
+      ),
+    )
+    expect(chunk).toContain('image.setup · Installing pandas (3.0.3)')
+  })
+
   it('truncates long text to about 120 characters', () => {
     const line = formatStepLine(record({ message: { content: 'x'.repeat(500) } }))
     expect(line.endsWith('...')).toBe(true)
