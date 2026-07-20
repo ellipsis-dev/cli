@@ -21,7 +21,7 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { getEnrolledRepos, setEnrolledRepos } from './config'
+import { configDir, getEnrolledRepos, setEnrolledRepos } from './config'
 import type { SyncAgentSessionRequest } from './types'
 
 // ---------------------------------------------------------------------------
@@ -221,10 +221,7 @@ export function redactLine(line: string): string {
 // ---------------------------------------------------------------------------
 
 function spoolDir(): string {
-  return join(
-    process.env.ELLIPSIS_CONFIG_DIR ?? join(homedir(), '.config', 'ellipsis'),
-    'spool',
-  )
+  return join(configDir(), 'spool')
 }
 
 export function spoolSync(req: SyncAgentSessionRequest): string {
@@ -326,10 +323,7 @@ const FAILURE_OUTCOMES: ReadonlySet<SyncOutcome> = new Set<SyncOutcome>([
 ])
 
 function hooksDir(): string {
-  return join(
-    process.env.ELLIPSIS_CONFIG_DIR ?? join(homedir(), '.config', 'ellipsis'),
-    'hooks',
-  )
+  return join(configDir(), 'hooks')
 }
 
 export function syncLogPath(): string {

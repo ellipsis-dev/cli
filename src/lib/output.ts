@@ -2,6 +2,8 @@
 // structured output the same way.
 
 import { stringify as stringifyYaml } from 'yaml'
+import { ApiError } from './api'
+import { envToken } from './config'
 
 export function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2))
@@ -67,13 +69,27 @@ export function usd(amount: number): string {
   return `$${amount.toFixed(2)}`
 }
 
+// A 401 means the credential itself was rejected (expired, revoked, or
+// malformed) regardless of which endpoint hit it, so tell the user how to get
+// a new one instead of echoing the raw HTTP failure. The remedy depends on
+// where the token came from: an env token outranks the config file in the
+// precedence chain, so `agent login` alone can't replace it.
+export function friendlyErrorMessage(err: unknown): string {
+  if (err instanceof ApiError && err.status === 401) {
+    return envToken()
+      ? 'The server rejected ELLIPSIS_API_TOKEN. Check the token, or unset it and run `agent login`.'
+      : 'Your login is invalid or has expired. Run `agent login` to re-authenticate.'
+  }
+  return (err as Error).message
+}
+
 // Wraps a command body so API/network failures print a clean message and set a
 // non-zero exit code instead of dumping a stack trace.
 export async function runAction(fn: () => Promise<void>): Promise<void> {
   try {
     await fn()
   } catch (err) {
-    console.error(`error: ${(err as Error).message}`)
+    console.error(`error: ${friendlyErrorMessage(err)}`)
     process.exitCode = 1
   }
 }

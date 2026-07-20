@@ -1,5 +1,6 @@
 import type { Command } from 'commander'
 import { ApiClient } from '../lib/api'
+import { requireToken } from '../lib/config'
 import { printJson, runAction } from '../lib/output'
 import type { WhoAmI } from '../lib/types'
 
@@ -20,6 +21,10 @@ export function registerMe(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
+        // Fail fast with the login hint when no credential exists anywhere;
+        // without this the request would go out unauthenticated and come back
+        // as a 401.
+        requireToken()
         const me = await new ApiClient().whoami()
         if (opts.json) {
           printJson(me)
