@@ -421,13 +421,14 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       })
       .catch((err: unknown) => {
         if (abort.current.signal.aborted) return
-        const msg =
-          err instanceof StreamUnavailableError
-            ? `live stream unavailable (${err.message}) — polling for updates`
-            : `stream error: ${(err as Error).message}`
-        setNotice(msg)
-        // No socket: the poll below keeps the transcript current; only a
-        // watch-only session (which would never poll long) exits here.
+        // A dropped/unreachable socket is not worth announcing: the poll below
+        // keeps the transcript current, so the fallback is invisible. Only a
+        // genuine stream error gets a notice.
+        if (!(err instanceof StreamUnavailableError)) {
+          setNotice(`stream error: ${(err as Error).message}`)
+        }
+        // No socket: only a watch-only session (which would never poll long)
+        // exits here.
         if (!canSend) exit()
       })
       .finally(() => {
