@@ -105,6 +105,8 @@ export interface AgentSession {
   updated_at: string
   status: AgentSessionStatus
   status_reason: string | null
+  // Why the session ended, finer than status; null until terminal.
+  exit_status?: string | null
   source?: AgentSessionSource
   agent_config_id: string | null
   // Durable-conversation identity (stateful sessions): a keyed session runs
@@ -158,6 +160,9 @@ export type AgentConfig = Record<string, unknown>
 // message appended to a durable session's inbox.
 export interface SendSessionMessageRequest {
   message: string
+  // Retry-safety key, unique per (session, key): a retried POST returns the
+  // original message instead of double-queueing a turn (protocol v2 §4.2).
+  idempotency_key?: string | null
 }
 
 // Laptop -> cloud handoff params: start a fresh session on the built-in
@@ -353,19 +358,30 @@ export type LifecycleRecordType =
 export interface SessionRecord {
   id: string
   agent_session_id: string
-  session_execution_id: string
   created_at: string
   feed_seq: number
   stream_seq: number
-  source: RecordSource
+  // Free TEXT server-side; unknown sources must be ignored, not crashed on.
+  source: RecordSource | string
   record_type: string
   record_format: string
+  // The turn this record belongs to (stream protocol v2 §3.3).
+  agent_turn_id?: string | null
+  // Correlates a user-echo record back to the inbox message it echoes, so
+  // queued chips retire by id (§4.2).
+  session_message_id?: string | null
   payload: Record<string, unknown>
   [key: string]: unknown
 }
 
 export interface ListSessionRecordsResponse {
   records: SessionRecord[]
+  // The OPEN inbox slice (pending rows only) — the server-side queued signal.
+  messages?: SessionMessage[]
+  // Whether records past this page remain (only meaningful with ?limit=).
+  has_more?: boolean
+  // The retention head: lowest stored feed_seq, or null when no records.
+  earliest_feed_seq?: number | null
 }
 
 // One exchange within a keyed session (a single Claude Code turn), from
@@ -389,6 +405,9 @@ export interface SessionMessage {
   body: string
   status: 'pending' | 'delivered'
   feed_seq: number | null
+  // The sender's display name for single-human-utterance messages; null for
+  // event-rendered messages.
+  author?: string | null
   created_at: string
   delivered_at: string | null
   delivered_turn_id: string | null

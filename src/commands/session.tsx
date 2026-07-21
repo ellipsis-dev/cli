@@ -26,17 +26,20 @@ import {
 import { sessionUrl } from '../lib/urls'
 import {
   resolveWsBase,
+  sessionStatusWord,
   streamSession,
   StreamUnavailableError,
   type StreamFrame,
   type StreamOutcome,
 } from '../lib/ws'
+import { isConnectVisibleRecord, recordToItems } from '../lib/events'
 import type {
   AgentSession,
   AgentSessionSource,
   AgentSessionStatus,
   GithubAccountSnippet,
   ReplayAgentSessionRequest,
+  SessionRecord,
   SessionSearchResult,
   SessionSearchScope,
   SessionTranscript,
@@ -807,19 +810,26 @@ export async function watchSessionStreaming(
   const token = requireToken()
   const wsBase = resolveWsBase(resolveApiBase())
 
-  // The server sends a `status` frame as its keepalive, so collapse unchanged
-  // statuses — both to keep the human log quiet and the NDJSON stream clean.
+  // Session frames are LWW snapshots resent on any change (cost ticks
+  // included), so collapse to status-word transitions — both to keep the
+  // human log quiet and the NDJSON stream clean of near-duplicates. Heartbeats
+  // are liveness only; deltas are ephemeral partials the committed record
+  // supersedes — a line-oriented log skips both.
   let lastStatus: string | undefined
   const onFrame = (frame: StreamFrame) => {
-    if (frame.type === 'status') {
-      if (frame.status === lastStatus) return
-      lastStatus = frame.status
+    if (frame.type === 'session' || frame.type === 'snapshot') {
+      const word = sessionStatusWord(
+        (frame as { session: AgentSession }).session,
+      )
+      if (word === lastStatus) return
+      lastStatus = word
     }
+    if (frame.type === 'heartbeat' || frame.type === 'delta') return
     if (json) {
       console.log(JSON.stringify(frame))
       return
     }
-    renderFrameHuman(frame)
+    renderFrameHuman(frame, lastStatus)
   }
 
   let outcome: StreamOutcome
@@ -851,28 +861,35 @@ export async function watchSessionStreaming(
   if (exitCodeForStatus(outcome.status) !== 0) process.exitCode = 1
 }
 
-function renderFrameHuman(frame: StreamFrame): void {
+function renderFrameHuman(frame: StreamFrame, statusWord?: string): void {
   switch (frame.type) {
-    case 'status':
-      console.log(`${nowClock()}  ${frame.status}`)
+    case 'snapshot':
+    case 'session':
+      console.log(`${nowClock()}  ${statusWord ?? ''}`)
       break
-    case 'stdout':
-      writeChunk(process.stdout, frame.data)
+    case 'records_append': {
+      // Raw records, rendered client-side (the semantic-relay philosophy):
+      // one line per transcript item, same shaping as `session connect`.
+      const records = (frame as { records: SessionRecord[] }).records
+      for (const record of records) {
+        if (!isConnectVisibleRecord(record)) continue
+        for (const item of recordToItems(record, `w${record.feed_seq}`)) {
+          const line = item.detail ? `${item.text}  ${item.detail}` : item.text
+          if (line.trim()) console.log(line)
+        }
+      }
       break
-    case 'stderr':
-      writeChunk(process.stderr, frame.data)
-      break
+    }
+    case 'messages':
+      break // queued-chip bookkeeping; nothing to log line-orientedly
     case 'error':
-      console.error(`error: ${frame.message ?? frame.data ?? 'stream error'}`)
+      console.error(`error: ${(frame as { message?: string }).message ?? 'stream error'}`)
       break
     case 'done':
       break // handled by the caller
+    default:
+      break // unknown frame types are ignored (protocol §3.6)
   }
-}
-
-function writeChunk(stream: NodeJS.WriteStream, data?: string): void {
-  if (!data) return
-  stream.write(data.endsWith('\n') ? data : data + '\n')
 }
 
 // Exit 0 for a successful terminal status, non-zero otherwise (spec §4.1).

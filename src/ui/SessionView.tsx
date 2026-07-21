@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { Box, Text, useApp } from 'ink'
 import Spinner from 'ink-spinner'
-import { streamSession, type StreamFrame } from '../lib/ws'
+import { sessionStatusWord, streamSession, type StreamFrame } from '../lib/ws'
+import { isConnectVisibleRecord, recordToItems } from '../lib/events'
+import type { AgentSession, SessionRecord } from '../lib/types'
 
 interface Props {
   sessionId: string
@@ -17,13 +19,22 @@ export function SessionView({ sessionId, token }: Props): React.ReactElement {
     const controller = new AbortController()
     const onFrame = (frame: StreamFrame) => {
       switch (frame.type) {
-        case 'stdout':
-        case 'stderr':
-          setLines((prev) => [...prev, frame.data ?? ''])
+        case 'records_append': {
+          const records = (frame as { records: SessionRecord[] }).records
+          const rendered = records
+            .filter(isConnectVisibleRecord)
+            .flatMap((record) => recordToItems(record, `v${record.feed_seq}`))
+            .map((item) => (item.detail ? `${item.text}  ${item.detail}` : item.text))
+            .filter((line) => line.trim().length > 0)
+          if (rendered.length) setLines((prev) => [...prev, ...rendered])
           break
-        case 'status':
-          setStatus(frame.status ?? 'running')
+        }
+        case 'snapshot':
+        case 'session':
+          setStatus(sessionStatusWord((frame as { session: AgentSession }).session))
           break
+        default:
+          break // heartbeat/messages/delta/unknown: nothing to draw here
       }
     }
     streamSession({ token, sessionId, onFrame, signal: controller.signal })
