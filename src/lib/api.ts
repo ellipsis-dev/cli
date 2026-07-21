@@ -61,10 +61,11 @@ import type {
   StartSandboxBuildRequest,
 } from './types'
 
-// Thin REST client over the public `/v1` API. The typed request/response
-// surface mirrors ellipsis/src/public_api/routers/v1/v1_router.py and will move
-// to @ellipsis/sdk (generated from the backend OpenAPI spec) once that package
-// exists; this CLI then imports it instead of hand-rolling types.
+// Thin REST client over the public `/v1` API. The session-stream surface
+// types come from @ellipsis-dev/sdk (generated from the backend's schema, via
+// lib/types re-exports); the rest of the typed surface remains a hand-rolled
+// mirror of ellipsis/src/public_api/routers/v1/v1_router.py until the SDK's
+// OpenAPI surface widens beyond the protocol endpoints.
 
 export class ApiError extends Error {
   constructor(
@@ -208,11 +209,23 @@ export class ApiClient {
   // The session's full stored transcript as native session_records (transcript
   // + lifecycle), ordered by feed_seq.
   async getAgentSessionRecords(sessionId: string): Promise<SessionRecord[]> {
-    const res = await this.request<ListSessionRecordsResponse>(
-      'GET',
-      `/v1/sessions/${encodeURIComponent(sessionId)}/records`,
-    )
-    return res.records
+    const res = await this.getAgentSessionRecordsPage(sessionId)
+    // The OpenAPI response type marks defaulted fields optional; on the wire
+    // the server always serializes every field (the frames-schema flavor).
+    return res.records as SessionRecord[]
+  }
+
+  // The full records response (records + the open inbox slice +
+  // has_more/earliest_feed_seq), optionally resuming past a feed_seq cursor
+  // (protocol §4.3) — what the connect UI's REST poll fallback feeds its
+  // transcript store from.
+  getAgentSessionRecordsPage(
+    sessionId: string,
+    options: { afterSeq?: number } = {},
+  ): Promise<ListSessionRecordsResponse> {
+    const query =
+      options.afterSeq != null && options.afterSeq > 0 ? `?after_seq=${options.afterSeq}` : ''
+    return this.request('GET', `/v1/sessions/${encodeURIComponent(sessionId)}/records${query}`)
   }
 
   // The session's conversation structure — turns and inbox messages, each

@@ -1,12 +1,12 @@
 import type { Command } from 'commander'
 import React from 'react'
 import { render } from 'ink'
+import { SessionTranscriptStore } from '@ellipsis-dev/sdk/store'
 import { ApiClient } from '../lib/api'
 import { requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
-import { runAction, usdNumberFromMillicents } from '../lib/output'
-import { foldCosts, isConnectVisibleRecord, recordToItems, type CCEvent } from '../lib/events'
+import { runAction } from '../lib/output'
 import { sessionUrl } from '../lib/urls'
-import { resolveWsBase } from '../lib/ws'
+import { makeOpenSocket, resolveWsBase } from '../lib/stream'
 import { ConnectApp } from '../ui/ConnectApp'
 import type { AgentSession } from '../lib/types'
 
@@ -93,7 +93,7 @@ export async function runConnect(
 ): Promise<void> {
   const api = new ApiClient()
   const token = requireToken()
-  const wsBase = resolveWsBase(resolveApiBase())
+  const openSocket = makeOpenSocket(token, resolveWsBase(resolveApiBase()))
 
   const [session, me] = await Promise.all([api.getAgentSession(sessionId), api.whoami()])
   const c = connectability(session)
@@ -104,29 +104,20 @@ export async function runConnect(
   const url = sessionUrl(resolveAppBase(), me.customer_login, sessionId)
 
   // No scrollback preamble: the app owns the whole surface, Claude Code-style.
-  // The banner (brand + version + session link) and the footer carry the
-  // session identity/status; a watch-only reason surfaces as the app's notice.
+  // The footer carries the session identity/status; a watch-only reason
+  // surfaces as the app's notice.
 
-  // Fetch the stored records to seed the transcript (unless --no-records), the
-  // live-refresh cursor (so live updates only append what's new), and the
-  // opening spend. Records are ordered by feed_seq (the shared transcript +
-  // lifecycle feed). Lifecycle rows are filtered except the sandbox-ready
-  // conversation note (isConnectVisibleRecord): connect shows the
-  // conversation, and the live activity line + footer carry session state.
-  const records = await api.getAgentSessionRecords(sessionId)
-  const ordered = [...records].sort((a, b) => a.feed_seq - b.feed_seq)
-  const initialMaxFeedSeq = ordered.reduce((m, s) => Math.max(m, s.feed_seq), 0)
-  const initialItems = showRecords
-    ? ordered
-        .filter(isConnectVisibleRecord)
-        .flatMap((st) => recordToItems(st, `s${st.feed_seq}`))
-    : []
-  const initialCost = foldCosts(ordered.map((st) => st.payload as CCEvent))
-  // The server's ledger total at connect time; live updates arrive as
-  // cost_millicents on status/done frames.
-  const initialServerCostUsd = usdNumberFromMillicents(
-    session.cost_tokens + session.cost_sandbox_cpu + session.cost_sandbox_memory + session.cost_fee,
-  )
+  // Seed ONE transcript store with the stored records and the fetched session
+  // — synthetic frames through the same ingest path the live stream uses, so
+  // the first paint is instant and streamSession resumes past the seeded
+  // cursor instead of replaying history. --no-records skips *rendering* the
+  // seeded history (minRenderFeedSeq), not re-streaming it.
+  const store = new SessionTranscriptStore()
+  const page = await api.getAgentSessionRecordsPage(sessionId)
+  const ordered = [...page.records].sort((a, b) => a.feed_seq - b.feed_seq)
+  if (ordered.length) store.ingest({ type: 'records_append', records: ordered })
+  store.ingest({ type: 'messages', messages: page.messages ?? [] })
+  store.ingest({ type: 'session', session })
 
   // Written by the app when it exits because the conversation closed (terminal;
   // nothing left to reconnect to), so the detach sign-off below stays honest.
@@ -134,18 +125,12 @@ export async function runConnect(
   const app = render(
     React.createElement(ConnectApp, {
       api,
-      token,
       sessionId,
-      wsBase,
+      store,
+      openSocket,
       canSend,
-      initialItems,
-      // Always advance the cursor past existing records: --no-records skips
-      // *rendering* history, not re-streaming it live.
-      initialMaxFeedSeq,
-      initialStatus: session.surface?.status ?? session.status,
+      minRenderFeedSeq: showRecords ? 0 : store.cursor,
       sessionUrl: url,
-      initialCost,
-      initialServerCostUsd,
       initialNotice: reason ?? null,
       // The session's one model, fixed at creation (backend tokens_model).
       model: typeof session.tokens_model === 'string' ? session.tokens_model : null,

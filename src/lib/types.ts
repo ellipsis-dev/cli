@@ -1,8 +1,38 @@
-// TypeScript mirror of the backend `/v1` request/response models. These are
-// hand-rolled for now and will be replaced by the generated @ellipsis/sdk
-// package once it exists. Nested config/input/output payloads are typed loosely
-// (the CLI only displays summary fields); the rest mirror the Pydantic models
-// in ellipsis/src/public_api/routers/v1/v1_router.py and the shared services.
+// TypeScript types for the backend `/v1` request/response models.
+//
+// The session-stream surface (records, inbox messages, turns, the enriched
+// session wire shape, and their request/response DTOs) comes from
+// @ellipsis-dev/sdk — generated from the server's schema, never hand-written —
+// re-exported below under the CLI's historical names. Everything else (the
+// endpoints outside the SDK's REST surface: session list/start, configs,
+// sandboxes, integrations, …) remains a hand-rolled mirror of the Pydantic
+// models in ellipsis's v1_router until the SDK's OpenAPI surface widens.
+// Nested config/input/output payloads are typed loosely (the CLI only
+// displays summary fields).
+
+import type {
+  AgentSessionSource,
+  AgentSessionStatus,
+  SessionMessageWire,
+  SessionRecordWire,
+  SessionState,
+  SessionSurface,
+} from '@ellipsis-dev/sdk'
+
+export type {
+  AgentSessionSource,
+  AgentSessionStatus,
+  AgentSessionWire,
+  ListSessionRecordsResponse,
+  ListSessionTurnsResponse,
+  SendSessionMessageRequest,
+  SessionState,
+  SessionSurface,
+} from '@ellipsis-dev/sdk'
+
+// The CLI's historical names for the SDK's wire models.
+export type SessionRecord = SessionRecordWire
+export type SessionMessage = SessionMessageWire
 
 // ------------------------------- identity -------------------------------
 
@@ -76,26 +106,6 @@ export interface UsageDashboard {
 
 // ----------------------------- agent sessions ----------------------------
 
-export type AgentSessionSource =
-  | 'react'
-  | 'manual'
-  | 'api'
-  | 'cli'
-  | 'mention'
-  | 'cron'
-  // A Claude Code session ingested from a developer laptop via `agent session sync`.
-  | 'laptop'
-
-export type AgentSessionStatus =
-  | 'scheduled'
-  | 'creating_sandbox'
-  | 'running'
-  | 'retrying'
-  | 'completed'
-  | 'error'
-  | 'cancelled'
-  | 'stopped'
-
 // Loosely typed: the CLI reads a handful of summary fields and otherwise treats
 // the session as opaque JSON. See AgentSession in the backend for the full shape.
 export interface AgentSession {
@@ -155,15 +165,6 @@ export interface SavedAgentConfig {
 export type AgentConfig = Record<string, unknown>
 
 // --------------------------- request / response -------------------------
-
-// Body of POST /v1/sessions/{id}/messages (`agent session connect`): a human
-// message appended to a durable session's inbox.
-export interface SendSessionMessageRequest {
-  message: string
-  // Retry-safety key, unique per (session, key): a retried POST returns the
-  // original message instead of double-queueing a turn (protocol v2 §4.2).
-  idempotency_key?: string | null
-}
 
 // Laptop -> cloud handoff params: start a fresh session on the built-in
 // handoff config, chained to the handed-off session (parent_kind=handoff).
@@ -337,90 +338,6 @@ export interface ListAgentSessionsQuery {
 
 // The render switch on a session_record (session_records.source). The CLI
 // renders claude_code records natively and lifecycle records as system lines.
-export type RecordSource = 'claude_code' | 'lifecycle'
-
-// session_records.record_type for source==='lifecycle' rows: the
-// spawn/respawn/idle notifications the transcript itself does not carry.
-export type LifecycleRecordType =
-  | 'sandbox_starting'
-  | 'sandbox_ready'
-  | 'session_resumed'
-  | 'session_paused'
-  | 'session_closed'
-  | 'session_cancelled'
-
-// One native session_record from GET /v1/sessions/{id}/records. `payload` is the
-// harness's verbatim line — for claude_code, a Claude Code stream event
-// (assistant turn, tool call/result, result); for lifecycle, a small blob. The
-// CLI switches on `source` and only extracts display text. `feed_seq` is the
-// shared per-session order (transcript + lifecycle merged); `stream_seq` is the
-// per-execution native index (NEGATIVE for lifecycle records).
-export interface SessionRecord {
-  id: string
-  agent_session_id: string
-  created_at: string
-  feed_seq: number
-  stream_seq: number
-  // Free TEXT server-side; unknown sources must be ignored, not crashed on.
-  source: RecordSource | string
-  record_type: string
-  record_format: string
-  // The turn this record belongs to (stream protocol v2 §3.3).
-  agent_turn_id?: string | null
-  // Correlates a user-echo record back to the inbox message it echoes, so
-  // queued chips retire by id (§4.2).
-  session_message_id?: string | null
-  payload: Record<string, unknown>
-  [key: string]: unknown
-}
-
-export interface ListSessionRecordsResponse {
-  records: SessionRecord[]
-  // The OPEN inbox slice (pending rows only) — the server-side queued signal.
-  messages?: SessionMessage[]
-  // Whether records past this page remain (only meaningful with ?limit=).
-  has_more?: boolean
-  // The retention head: lowest stored feed_seq, or null when no records.
-  earliest_feed_seq?: number | null
-}
-
-// One exchange within a keyed session (a single Claude Code turn), from
-// GET /v1/sessions/{id}/turns.
-export interface SessionTurn {
-  id: string
-  agent_session_id: string
-  turn_index: number
-  status: string
-  created_at: string
-  completed_at: string | null
-  [key: string]: unknown
-}
-
-// One entry in a keyed session's inbox: a message posted into the conversation,
-// `pending` until a turn consumes it (the server-side "queued" signal),
-// `delivered` once it reached the agent. `body` is the raw text as sent.
-export interface SessionMessage {
-  id: string
-  agent_session_id: string
-  body: string
-  status: 'pending' | 'delivered'
-  feed_seq: number | null
-  // The sender's display name for single-human-utterance messages; null for
-  // event-rendered messages.
-  author?: string | null
-  created_at: string
-  delivered_at: string | null
-  delivered_turn_id: string | null
-  [key: string]: unknown
-}
-
-// GET /v1/sessions/{id}/turns: the conversation structure of a keyed session —
-// empty lists for single-shot sessions.
-export interface ListSessionTurnsResponse {
-  turns: SessionTurn[]
-  messages: SessionMessage[]
-}
-
 // One process's raw transcript from GET /v1/sessions/{id}/transcripts: the
 // pointer metadata plus a short-lived presigned S3 GET for the .jsonl.gz
 // object itself (expires after expires_in seconds — fetch it immediately).

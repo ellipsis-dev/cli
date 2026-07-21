@@ -25,16 +25,17 @@ import {
 } from '../lib/args'
 import { sessionUrl } from '../lib/urls'
 import {
-  resolveWsBase,
   sessionStatusWord,
   streamSession,
   StreamUnavailableError,
   type StreamFrame,
   type StreamOutcome,
-} from '../lib/ws'
-import { isConnectVisibleRecord, recordToItems } from '../lib/events'
+} from '@ellipsis-dev/sdk/stream'
+import { isConnectVisibleRecord, recordToItems } from '@ellipsis-dev/sdk/store'
+import { makeOpenSocket, resolveWsBase } from '../lib/stream'
 import type {
   AgentSession,
+  AgentSessionWire,
   AgentSessionSource,
   AgentSessionStatus,
   GithubAccountSnippet,
@@ -808,7 +809,7 @@ export async function watchSessionStreaming(
   json?: boolean,
 ): Promise<void> {
   const token = requireToken()
-  const wsBase = resolveWsBase(resolveApiBase())
+  const openSocket = makeOpenSocket(token, resolveWsBase(resolveApiBase()))
 
   // Session frames are LWW snapshots resent on any change (cost ticks
   // included), so collapse to status-word transitions — both to keep the
@@ -819,7 +820,7 @@ export async function watchSessionStreaming(
   const onFrame = (frame: StreamFrame) => {
     if (frame.type === 'session' || frame.type === 'snapshot') {
       const word = sessionStatusWord(
-        (frame as { session: AgentSession }).session,
+        (frame as unknown as { session: AgentSessionWire }).session,
       )
       if (word === lastStatus) return
       lastStatus = word
@@ -834,7 +835,7 @@ export async function watchSessionStreaming(
 
   let outcome: StreamOutcome
   try {
-    outcome = await streamSession({ token, sessionId, wsBase, onFrame })
+    outcome = await streamSession({ sessionId, openSocket, onFrame })
   } catch (err) {
     if (err instanceof StreamUnavailableError) {
       if (!json) {
