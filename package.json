@@ -20,6 +20,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@ellipsis-dev/sdk": "^0.1.0",
     "commander": "^12.1.0",
     "ink": "^5.0.1",
     "ink-spinner": "^5.0.0",

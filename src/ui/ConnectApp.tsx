@@ -1,13 +1,18 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink'
-import { ApiClient, ApiError } from '../lib/api'
 import {
-  sessionStatusWord,
   streamSession,
+  sessionStatusWord,
   StreamUnavailableError,
-  type StreamFrame,
-} from '../lib/ws'
-import type { AgentSession, SessionMessage, SessionRecord } from '../lib/types'
+  type OpenSocket,
+} from '@ellipsis-dev/sdk/stream'
 import {
   clampLines,
   collapseToolRuns,
@@ -16,61 +21,58 @@ import {
   isConnectVisibleRecord,
   pendingToolCalls,
   recordToItems,
-  resultCostUsd,
+  setupOutputHook,
+  setupOutputLine,
   statusActivityText,
+  oneLine,
   type CCEvent,
   type ItemKind,
+  type SessionTranscriptStore,
   type TranscriptItem,
-} from '../lib/events'
+} from '@ellipsis-dev/sdk/store'
+import { ApiClient, ApiError } from '../lib/api'
 import { hyperlink } from '../lib/urls'
 import { usdNumberFromMillicents } from '../lib/output'
-import { oneLine, setupOutputHook, setupOutputLine } from '../lib/steps'
 import { VERSION } from '../lib/constants'
 
 // The interactive `agent session connect` UI, modelled on Claude Code: a
 // committed transcript that groups tool calls with their results and spaces
 // messages apart — live activity (✻ Running/Generating) rendered on the
 // transcript block it describes — above a footer with a composer that echoes
-// what you send. Rendering shape lives in lib/events.ts
-// (pure); this component owns the data flow, the composer, and the colours.
+// what you send. Rendering shape lives in @ellipsis-dev/sdk/store (pure); this
+// component owns the data flow, the composer, and the colours.
 //
-// Data flow: the committed transcript comes from the structured records API
-// (GET /v1/sessions/{id}/records, whose payload is the full native event) —
-// grouped into tool calls / results — with the socket as a low-latency
-// "something changed" wake plus status source, backed by a slow poll. On top of
-// that, the socket also carries EPHEMERAL `delta` frames (partial assistant text
-// + a running output-token count) that render as a live, in-progress line and a
-// footer token counter — the token-by-token feel of local Claude Code — until
-// the committed assistant step lands and supersedes it.
+// Data flow: ONE SessionTranscriptStore (pre-seeded by the caller with the
+// stored records + session, so the first paint is instant) is fed by the
+// SDK's streamSession — records arrive PUSHED as records_append frames, the
+// session/messages frames carry status + the open inbox, and ephemeral
+// `delta` frames overlay the in-progress response token-by-token. Everything
+// on screen derives from the store snapshot; there is no REST refresh loop.
+// If the stream is unavailable (old backend, blocked socket), a REST poll
+// feeds the SAME store through synthetic frames, so the UI is identical
+// either way.
 
 export interface ConnectAppProps {
   api: ApiClient
-  token: string
   sessionId: string
-  wsBase: string
+  // The one transcript store, pre-seeded with the fetched records + session.
+  store: SessionTranscriptStore
+  // The bearer-door socket factory (lib/stream.ts makeOpenSocket).
+  openSocket: OpenSocket
   // Keyed, open sessions accept messages (show the composer); single-shot /
   // closed / --no-input sessions follow read-only and exit when the stream ends.
   canSend: boolean
-  initialItems: TranscriptItem[]
-  // The highest feed_seq already rendered into initialItems, so live refreshes
-  // only append records newer than what's on screen (feed_seq is the shared
-  // per-session order across transcript + lifecycle records).
-  initialMaxFeedSeq: number
-  initialStatus: string
+  // Records at or below this feed_seq are not RENDERED (--no-records skips
+  // replaying history on screen without re-streaming it). 0 renders everything.
+  minRenderFeedSeq: number
   // The clickable dashboard link for this session (app.ellipsis.dev/…/sessions/{id}),
   // shown in the footer status line.
   sessionUrl: string
-  // Spend seeded from the stored steps: cumulative total + the last turn's cost.
-  initialCost: { total: number | null; lastStep: number | null }
-  // The server-reported session total (USD) at connect time, from the session's
-  // cost columns — the billing authority. Live updates arrive as
-  // `cost_millicents` on status/done frames; null against older backends.
-  initialServerCostUsd?: number | null
   // A one-line caveat shown as the app's opening notice (e.g. "watch-only:
   // this conversation is closed"). null for the normal connect.
   initialNotice?: string | null
   // The session's model (backend tokens_model, fixed at creation), shown in
-  // the banner under the dashboard link.
+  // the footer meta line.
   model?: string | null
   // Written (not read) by the app: set true when the app exits because the
   // conversation closed, so the caller skips the "detached — still running"
@@ -88,14 +90,13 @@ function isWorkingStatus(status: string): boolean {
 
 // One local send awaiting server acknowledgement: messageId is null while the
 // POST is in flight, then the created SessionMessage's id (protocol v2 §4.2) —
-// the chip retires the moment the server acknowledges that id (a messages
-// frame, an inbox fetch, or the transcript user-echo record's
-// session_message_id back-reference), and the server's own pending row takes
-// over as its representation.
+// the chip retires the moment the store acknowledges that id (a messages
+// frame, or the transcript user-echo record's session_message_id
+// back-reference), and the server's own pending row takes over.
 type QueuedSend = { text: string; messageId: string | null }
 
 export function ConnectApp(props: ConnectAppProps): React.ReactElement {
-  const { api, token, sessionId, wsBase, canSend } = props
+  const { api, sessionId, store, openSocket, canSend } = props
   const { exit } = useApp()
   const { isRawModeSupported } = useStdin()
   const { stdout } = useStdout()
@@ -114,352 +115,170 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     }
   }, [stdout])
 
-  const [items, setItems] = useState<TranscriptItem[]>(props.initialItems)
-  const [status, setStatus] = useState(props.initialStatus)
-  const [working, setWorking] = useState(isWorkingStatus(props.initialStatus))
+  // The store snapshot is the single source of truth for everything streamed.
+  const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
+  const statusWord = snapshot.session ? sessionStatusWord(snapshot.session) : 'starting'
+  // Bridge the gap between a send and the server's status flip: treat the
+  // session as working until the next status transition lands.
+  const [sendPending, setSendPending] = useState(false)
+  useEffect(() => {
+    setSendPending(false)
+  }, [statusWord])
+  const working = isWorkingStatus(statusWord) || sendPending
+
   const [elapsed, setElapsed] = useState(0)
-  // The setup script's latest output line while the sandbox spawns (streamed
-  // sandbox_setup_output lifecycle chunks) — the sub-line under "Starting
-  // sandbox…" that says WHAT the box is doing. Cleared by sandbox_ready.
-  const [setupLine, setSetupLine] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(props.initialNotice ?? null)
   const [input, setInput] = useState('')
   // ctrl+r toggles full vs. collapsed tool output across the whole transcript.
   const [expanded, setExpanded] = useState(false)
-  // Messages you've sent that the agent hasn't picked up yet — shown as a
-  // queued region below the composer, exactly like Claude Code. A send renders
-  // as a LOCAL chip only until a records/turns refresh that started after its
-  // POST resolved confirms the server has the message (postSeq, see
-  // refreshSteps); from then on the server's own pending rows (serverQueued)
-  // are the queued truth. That keeps the region honest even when the agent
-  // consumes messages in ways local text-matching can't follow (the server once
-  // coalesced two queued sends into one "a\nb" user turn, stranding both chips
-  // forever). Chips also leave via the transcript: when the backend relays a
-  // send as a user turn, or when the turn idles (whichever first), so a send is
-  // never lost.
+  // Messages you've sent that the server hasn't acknowledged yet — shown as a
+  // queued region below the composer, exactly like Claude Code. From the first
+  // acknowledgement on (a messages frame or the user-echo record carrying the
+  // id), the server's own pending rows (serverQueued) are the queued truth.
   const [queued, setQueued] = useState<QueuedSend[]>([])
-  // Bodies of the server's PENDING inbox messages — the durable queued signal.
-  const [serverQueued, setServerQueued] = useState<string[]>([])
-  // Ephemeral live-streaming overlay for the CURRENT assistant response, driven
-  // by `delta` frames: the prose so far and the running output-token count. Both
-  // clear when the committed assistant step lands (it supersedes the overlay) or
-  // the turn settles.
-  const [liveText, setLiveText] = useState('')
-  const [liveTokens, setLiveTokens] = useState<number | null>(null)
-  // Running spend for the footer: `total` is the cumulative session cost from
-  // the latest Claude Code result; `lastStep` is the cost of the most recent
-  // turn (the delta between the last two results).
-  const [cost, setCost] = useState(props.initialCost)
-  // The server's authoritative running total (USD), from `cost_millicents` on
-  // status/done frames (and the status poll as backstop). Preferred over the
-  // CC-derived total when present; kept monotonic so the footer never dips.
-  const [serverCostUsd, setServerCostUsd] = useState<number | null>(
-    props.initialServerCostUsd ?? null,
-  )
-  const applyServerCostUsd = useCallback((usd: number): void => {
-    setServerCostUsd((prev) => (prev == null ? usd : Math.max(prev, usd)))
-  }, [])
 
-  // Live-flow state that must survive re-renders without triggering them.
-  // The stream resume cursor (protocol v2 §3.4: the highest feed_seq seen in
-  // records_append frames) — seeded from the REST-rendered transcript so the
-  // first attach doesn't replay history the screen already shows.
-  const afterSeq = useRef(props.initialMaxFeedSeq)
+  // Whether the sandbox ever reached a connectable state, so a terminal status
+  // *before* that (a preflight/budget gate) is reported as a failure, not idle.
+  const everRunning = useRef(isWorkingStatus(statusWord) && statusWord !== 'scheduled')
+  useEffect(() => {
+    if (['working', 'waiting'].includes(statusWord)) everRunning.current = true
+  }, [statusWord])
+
   const streaming = useRef(false)
+  const polling = useRef(false)
   const abort = useRef(new AbortController())
-  const lastStatus = useRef(props.initialStatus)
-  const keyCounter = useRef(0)
-  // The highest feed_seq committed to the transcript, and the refresh
-  // in-flight / re-run guards so overlapping wakes don't double-append.
-  const maxFeed = useRef(props.initialMaxFeedSeq)
-  // The cumulative cost last committed, so a new result's delta = the turn cost.
-  const costTotal = useRef(props.initialCost.total)
-  // Whether the sandbox ever reached `running`, so a terminal status *before*
-  // that (a preflight/budget gate) is reported as a failure, not idle.
-  const everRunning = useRef(props.initialStatus === 'running')
-  const refreshing = useRef(false)
-  const pendingRefresh = useRef(false)
-  // Guard so the closed-conversation teardown (final refresh + exit) runs once
-  // no matter which signal lands first (status frame, poll, stream end).
+  // Guard so the closed-conversation teardown runs once no matter which signal
+  // lands first (session frame, poll, stream outcome).
   const closingDown = useRef(false)
-  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // A mirror of `queued` for async callbacks, and the texts already committed
-  // locally so the backend's later echo of the same send is dropped.
-  const queuedRef = useRef<QueuedSend[]>([])
-  const flushed = useRef<string[]>([])
-  useEffect(() => {
-    queuedRef.current = queued
-  }, [queued])
-  // Mirror of serverQueued for the refresh gate.
-  const serverQueuedRef = useRef<string[]>([])
-  useEffect(() => {
-    serverQueuedRef.current = serverQueued
-  }, [serverQueued])
-  const fetchedTurnsOnce = useRef(false)
 
-  // Retire local chips the server has acknowledged (by SessionMessage id):
-  // once an id shows up in a messages frame, an inbox fetch, or a transcript
-  // user-echo record, the server's own rows are the truth for that send.
-  const retireAcknowledgedChips = useCallback((ids: Set<string>): void => {
-    if (ids.size === 0) return
-    setQueued((prev) =>
-      prev.filter((q) => q.messageId === null || !ids.has(q.messageId)),
-    )
-  }, [])
+  // The committed transcript, derived from the store's record log. Keys ride
+  // feed_seq (the shared per-session order), so items are stable across
+  // re-derivations.
+  const items = useMemo(
+    () =>
+      snapshot.records
+        .filter((r) => r.feed_seq > props.minRenderFeedSeq)
+        .filter(isConnectVisibleRecord)
+        .flatMap((r) => recordToItems(r, `s${r.feed_seq}`)),
+    [snapshot.records, props.minRenderFeedSeq],
+  )
 
-  // Append items, promoting a queued send when its user turn arrives and
-  // dropping the backend's echo of a send we already committed locally.
-  const append = useCallback((incoming: TranscriptItem[]): void => {
-    const commit: TranscriptItem[] = []
-    for (const it of incoming) {
-      if (it.kind === 'user') {
-        if (queuedRef.current.some((q) => q.text === it.text)) {
-          setQueued((prev) => {
-            const j = prev.findIndex((q) => q.text === it.text)
-            return j < 0 ? prev : [...prev.slice(0, j), ...prev.slice(j + 1)]
-          })
-        } else {
-          const fi = flushed.current.indexOf(it.text)
-          if (fi >= 0) {
-            flushed.current.splice(fi, 1)
-            continue
-          }
-        }
-      }
-      commit.push(it)
-    }
-    if (commit.length) setItems((prev) => [...prev, ...commit])
-  }, [])
-
-  // Fold a committed event into the footer spend: a result carries the running
-  // total, so the turn cost is its delta from the previous total.
-  const applyCost = useCallback((event: CCEvent): void => {
-    const total = resultCostUsd(event)
-    if (total == null) return
-    const prev = costTotal.current
-    costTotal.current = total
-    setCost({
-      total,
-      lastStep: prev != null ? Math.max(0, total - prev) : total,
-    })
-  }, [])
-
-  // Pull the structured steps and append any newer than what's on screen. This
-  // is the sole source of transcript content — the socket only decides *when*
-  // to call it. Guarded so concurrent wakes coalesce into one trailing refresh.
-  const refreshSteps = useCallback(async (): Promise<void> => {
-    if (refreshing.current) {
-      pendingRefresh.current = true
-      return
-    }
-    refreshing.current = true
-    try {
-      // Reconcile the queued region against the server's inbox whenever there
-      // is anything to reconcile (plus once at startup, to pick up messages
-      // already pending on reconnect). Chips retire by SessionMessage id: a
-      // fetched inbox that contains a chip's id means the server owns the
-      // send — delivered messages vanish, still-pending ones re-render from
-      // serverQueued with identical text. The v2 `messages` frames keep this
-      // current between fetches.
-      const wantTurns =
-        !fetchedTurnsOnce.current ||
-        queuedRef.current.length > 0 ||
-        serverQueuedRef.current.length > 0
-      const turnsPromise = wantTurns
-        ? api.getAgentSessionTurns(sessionId).catch(() => null)
-        : Promise.resolve(null)
-      const records = await api.getAgentSessionRecords(sessionId)
-      const turns = await turnsPromise
-      if (turns !== null) {
-        fetchedTurnsOnce.current = true
-        setServerQueued(
-          turns.messages.filter((m) => m.status === 'pending').map((m) => m.body),
-        )
-        retireAcknowledgedChips(new Set(turns.messages.map((m) => m.id)))
-      }
-      const ordered = [...records].sort((a, b) => a.feed_seq - b.feed_seq)
-      const fresh = ordered.filter((st) => st.feed_seq > maxFeed.current)
-      retireAcknowledgedChips(
-        new Set(
-          fresh
-            .map((st) => st.session_message_id)
-            .filter((id): id is string => typeof id === 'string'),
-        ),
+  // Footer spend: the server's ledger total (the session frame's four cost
+  // columns — the billing authority, resent on every cost tick) with the
+  // CC-result fold as the last-turn readout and older-backend fallback (§6:
+  // record folding is display-only).
+  const cost = useMemo(
+    () =>
+      foldCosts(
+        snapshot.records
+          .filter((r) => r.source === 'claude_code')
+          .map((r) => r.payload as CCEvent),
+      ),
+    [snapshot.records],
+  )
+  const serverCostUsd = snapshot.session
+    ? usdNumberFromMillicents(
+        snapshot.session.cost_tokens +
+          snapshot.session.cost_sandbox_cpu +
+          snapshot.session.cost_sandbox_memory +
+          snapshot.session.cost_fee,
       )
-      if (fresh.length) {
-        for (const st of fresh) {
-          maxFeed.current = Math.max(maxFeed.current, st.feed_seq)
-          applyCost(st.payload as CCEvent)
-          // Setup-script output chunks drive the "Starting sandbox" sub-line;
-          // sandbox_ready retires it (the spawn is over).
-          if (st.source === 'lifecycle') {
-            if (st.record_type === 'sandbox_setup_output') {
-              const line = setupOutputLine(st.payload)
-              if (line) setSetupLine(`${setupOutputHook(st.payload)} · ${line}`)
-            } else if (st.record_type === 'sandbox_ready') {
-              setSetupLine(null)
-            }
-          }
-        }
-        // Lifecycle rows stay off the transcript — the activity line + footer
-        // carry session state, closing surfaces as the exit notice — except
-        // the sandbox-ready conversation note (isConnectVisibleRecord).
-        append(
-          fresh.filter(isConnectVisibleRecord).flatMap((st) => recordToItems(st, `s${st.feed_seq}`)),
-        )
-        // Drop the live overlay only when a committed ASSISTANT step (or the
-        // turn's result) lands — those supersede the streamed prose. Other
-        // records (lifecycle rows, your own relayed message) arrive mid-
-        // generation; clearing on them would lose the streamed prefix for
-        // good, since later deltas append to the now-empty overlay.
-        const supersedes = fresh.some((st) => {
-          if (st.source === 'lifecycle') return false
-          const t = (st.payload as CCEvent).type
-          return t === 'assistant' || t === 'result'
-        })
-        if (supersedes) {
-          setLiveText('')
-          setLiveTokens(null)
-        }
-      }
-    } catch {
-      // Transient fetch failure — the next wake/poll retries.
-    } finally {
-      refreshing.current = false
-      if (pendingRefresh.current) {
-        pendingRefresh.current = false
-        void refreshSteps()
+    : null
+
+  // The setup script's latest output line while the sandbox spawns (streamed
+  // sandbox_setup_output lifecycle chunks) — the sub-line under "Starting
+  // sandbox…" that says WHAT the box is doing. sandbox_ready retires it.
+  const setupLine = useMemo(() => {
+    for (let i = snapshot.records.length - 1; i >= 0; i--) {
+      const record = snapshot.records[i]
+      if (record.source !== 'lifecycle') continue
+      if (record.record_type === 'sandbox_ready') return null
+      if (record.record_type === 'sandbox_setup_output') {
+        const line = setupOutputLine(record.payload)
+        return line ? `${setupOutputHook(record.payload)} · ${line}` : null
       }
     }
-  }, [api, append, applyCost, retireAcknowledgedChips, sessionId])
+    return null
+  }, [snapshot.records])
+
+  // Bodies of the server's PENDING inbox messages — the durable queued signal.
+  const serverQueued = useMemo(
+    () => snapshot.messages.filter((m) => m.status === 'pending').map((m) => m.body),
+    [snapshot.messages],
+  )
+
+  // Retire local chips the store has acknowledged (by SessionMessage id): once
+  // an id shows up in a messages frame or a transcript user-echo record, the
+  // server's own rows are the truth for that send.
+  useEffect(() => {
+    setQueued((prev) => {
+      const remaining = prev.filter(
+        (q) => q.messageId === null || !snapshot.acknowledgedMessageIds.has(q.messageId),
+      )
+      return remaining.length === prev.length ? prev : remaining
+    })
+  }, [snapshot.acknowledgedMessageIds])
 
   // A closed conversation is over — nothing can ever be sent or received
-  // again (a send would 409) — so pull the final records, leave one dim
-  // notice as the sign-off, and exit instead of sitting at the composer.
+  // again (a send would 409) — so leave one dim notice as the sign-off and
+  // exit instead of sitting at the composer. The server flushes the final
+  // records before the closing session frame, so there is nothing to fetch.
   const finishClosed = useCallback((): void => {
     if (closingDown.current) return
     closingDown.current = true
     if (props.exitState) props.exitState.closed = true
-    setWorking(false)
     setNotice('conversation closed')
-    void refreshSteps().finally(() => exit())
-  }, [exit, props.exitState, refreshSteps])
+    exit()
+  }, [exit, props.exitState])
+  useEffect(() => {
+    if (statusWord === 'closed') finishClosed()
+  }, [statusWord, finishClosed])
 
-  // Coalesce bursts of wakes into one refresh a beat later.
-  const scheduleRefresh = useCallback((): void => {
-    if (refreshTimer.current) return
-    refreshTimer.current = setTimeout(() => {
-      refreshTimer.current = null
-      void refreshSteps()
-    }, 250)
-  }, [refreshSteps])
-
-  // The socket speaks stream protocol v2: session/snapshot frames carry the
-  // status word + the server's running cost; messages frames carry the open
-  // inbox slice (queued chips); records_append is the committed-steps wake
-  // (the REST refresh stays the transcript source in this port — the SDK swap
-  // rebases rendering on pushed records); deltas are the ephemeral overlay.
-  const handleFrame = useCallback(
-    (frame: StreamFrame): void => {
-      if (frame.type === 'snapshot' || frame.type === 'session') {
-        const session = (frame as { session: AgentSession }).session
-        // The server's authoritative running total; the session frame is
-        // resent on every cost change, so the footer climbs mid-turn.
-        applyServerCostUsd(
-          usdNumberFromMillicents(
-            session.cost_tokens +
-              session.cost_sandbox_cpu +
-              session.cost_sandbox_memory +
-              session.cost_fee,
-          ),
-        )
-        const word = sessionStatusWord(session)
-        if (word && word !== lastStatus.current) {
-          lastStatus.current = word
-          setStatus(word)
-          setWorking(isWorkingStatus(word))
-          // Box-up states (working/waiting) mean the session became
-          // connectable; used to tell a preflight failure from a
-          // mid-conversation one.
-          if (['working', 'waiting'].includes(word)) everRunning.current = true
-          if (word === 'closed') {
-            finishClosed()
-            return
-          }
+  // REST fallback when the stream is unavailable: poll the records + session
+  // and feed the SAME store through synthetic frames (the REST rows are the
+  // same wire shapes) — the cursor dedupes, the UI can't tell the difference.
+  const startPollFallback = useCallback((): void => {
+    if (polling.current || abort.current.signal.aborted) return
+    polling.current = true
+    const tick = async (): Promise<void> => {
+      try {
+        const [page, session] = await Promise.all([
+          api.getAgentSessionRecordsPage(sessionId, { afterSeq: store.cursor }),
+          api.getAgentSession(sessionId),
+        ])
+        if (page.records.length) {
+          store.ingest({ type: 'records_append', records: page.records })
         }
-        if (frame.type === 'snapshot') {
-          // The snapshot's inbox is the open slice — seed the queued region.
-          const messages = (frame as { messages: SessionMessage[] }).messages
-          setServerQueued(
-            messages.filter((m) => m.status === 'pending').map((m) => m.body),
-          )
-          retireAcknowledgedChips(new Set(messages.map((m) => m.id)))
-        }
-        return
+        store.ingest({ type: 'messages', messages: page.messages ?? [] })
+        store.ingest({ type: 'session', session })
+      } catch {
+        // Transient fetch failure — the next tick retries.
       }
-      if (frame.type === 'messages') {
-        // The open inbox slice, resent on any change: pending rows are the
-        // queued truth; a row that flipped delivered retires its chip.
-        const messages = (frame as { messages: SessionMessage[] }).messages
-        setServerQueued(
-          messages.filter((m) => m.status === 'pending').map((m) => m.body),
-        )
-        retireAcknowledgedChips(new Set(messages.map((m) => m.id)))
-        return
-      }
-      if (frame.type === 'error') {
-        setNotice((frame as { message?: string }).message ?? 'stream error')
-        return
-      }
-      // Ephemeral streaming delta: update the live overlay in place. NOT a
-      // committed-steps wake, so it must not trigger a steps refresh (that would
-      // poll the API several times a second during generation). Unknown kinds
-      // ("thinking" is reserved) are ignored per §3.6.
-      if (frame.type === 'delta') {
-        const delta = frame as { kind?: string; text?: string | null; output_tokens?: number | null }
-        if (delta.kind !== undefined && delta.kind !== 'text') return
-        if (delta.text) setLiveText((t) => t + delta.text)
-        if (typeof delta.output_tokens === 'number') setLiveTokens(delta.output_tokens)
-        return
-      }
-      if (frame.type === 'records_append') {
-        // Track the resume cursor from the pushed records; the debounced REST
-        // refresh commits them to the transcript.
-        for (const record of (frame as { records: SessionRecord[] }).records) {
-          if (typeof record.feed_seq === 'number') {
-            afterSeq.current = Math.max(afterSeq.current, record.feed_seq)
-          }
-        }
-        scheduleRefresh()
-        return
-      }
-      if (frame.type === 'heartbeat' || frame.type === 'done') return
-      // Unknown frame types are ignored (protocol §3.6).
-    },
-    [applyServerCostUsd, finishClosed, retireAcknowledgedChips, scheduleRefresh],
-  )
+    }
+    void tick()
+    const timer = setInterval(() => void tick(), 3000)
+    abort.current.signal.addEventListener('abort', () => clearInterval(timer), {
+      once: true,
+    })
+  }, [api, sessionId, store])
 
   // Keep the socket attached across reconnects/resume. A keyed session going
   // terminal is not the end of the conversation — it idles between turns — so
-  // we refresh once more, report idle, and re-attach on the next send.
-  // Watch-only sessions exit when the stream ends.
+  // we report idle and re-attach on the next send. Watch-only sessions exit
+  // when the stream ends.
   const pump = useCallback((): void => {
     if (streaming.current || abort.current.signal.aborted) return
     streaming.current = true
     streamSession({
-      token,
       sessionId,
-      wsBase,
-      afterSeq: afterSeq.current,
-      onFrame: handleFrame,
+      openSocket,
+      afterSeq: store.cursor,
+      onFrame: store.ingest,
       signal: abort.current.signal,
     })
-      .then(async (outcome) => {
+      .then((outcome) => {
         if (abort.current.signal.aborted) return
-        await refreshSteps() // pull the final steps of the turn before settling
-        setLiveText('')
-        setLiveTokens(null)
-        setWorking(false)
+        setSendPending(false)
         if (outcome.type === 'error') setNotice(`stream error: ${outcome.message}`)
         // A terminal failure before the sandbox ever ran is a preflight/budget
         // gate — there's no conversation to attend, so report it and exit.
@@ -476,7 +295,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         // The warm loop can end by closing the conversation (a closing event's
         // final turn, or an ephemeral session finishing): that's terminal, not
         // an idle nap — tear down instead of inviting a doomed send.
-        if (outcome.type === 'done' && lastStatus.current === 'closed') {
+        if (outcome.type === 'done' && outcome.status === 'closed') {
           finishClosed()
           return
         }
@@ -488,67 +307,26 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       })
       .catch((err: unknown) => {
         if (abort.current.signal.aborted) return
-        // A dropped/unreachable socket is not worth announcing: the poll below
-        // keeps the transcript current, so the fallback is invisible. Only a
-        // genuine stream error gets a notice.
-        if (!(err instanceof StreamUnavailableError)) {
-          setNotice(`stream error: ${(err as Error).message}`)
+        if (err instanceof StreamUnavailableError) {
+          // No socket (old backend, blocked port): fall back to REST polling,
+          // silently — the store keeps filling, so the fallback is invisible.
+          startPollFallback()
+          return
         }
-        // No socket: only a watch-only session (which would never poll long)
-        // exits here.
+        setNotice(`stream error: ${(err as Error).message}`)
         if (!canSend) exit()
       })
       .finally(() => {
         streaming.current = false
       })
-  }, [canSend, exit, finishClosed, handleFrame, refreshSteps, sessionId, token, wsBase])
-
-  // A status backstop that doesn't depend on the socket: the lifecycle
-  // transitions may arrive before the socket attaches, so poll the session too
-  // and drive the same transition handling. Use the derived surface word so this
-  // matches the stream's `frame.status` exactly (the raw `status` is a different
-  // vocabulary); fall back to raw for un-keyed sessions. `lastStatus` dedupes
-  // against socket frames so a transition is only announced once.
-  const pollStatus = useCallback(async (): Promise<void> => {
-    try {
-      const s = await api.getAgentSession(sessionId)
-      // Same figure the stream's cost_millicents carries, so the footer keeps
-      // climbing even when the socket never attached (polling fallback).
-      applyServerCostUsd(
-        usdNumberFromMillicents(
-          s.cost_tokens + s.cost_sandbox_cpu + s.cost_sandbox_memory + s.cost_fee,
-        ),
-      )
-      const word = s.surface?.status ?? s.status
-      if (word !== lastStatus.current) {
-        lastStatus.current = word
-        setStatus(word)
-        setWorking(isWorkingStatus(word))
-        if (['working', 'waiting'].includes(word)) everRunning.current = true
-        if (word === 'closed') finishClosed()
-      }
-    } catch {
-      // Transient fetch failure — the next tick retries.
-    }
-  }, [api, applyServerCostUsd, finishClosed, sessionId])
+  }, [canSend, exit, finishClosed, openSocket, sessionId, startPollFallback, store])
 
   useEffect(() => {
     pump()
-    scheduleRefresh() // catch steps created between the initial fetch and connect
-    // A slow poll backs up the socket wake (and covers a socket that never
-    // connected, so following still updates). The socket wake is the fast path;
-    // this is just a safety net, so it can be gentle.
-    const poll = setInterval(scheduleRefresh, 3000)
-    const statusPoll = setInterval(() => void pollStatus(), 3000)
     const controller = abort.current
-    return () => {
-      controller.abort()
-      clearInterval(poll)
-      clearInterval(statusPoll)
-      if (refreshTimer.current) clearTimeout(refreshTimer.current)
-    }
+    return () => controller.abort()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pump, scheduleRefresh, pollStatus])
+  }, [pump])
 
   // Tick an elapsed-seconds counter while the agent works — a steady progress
   // read alongside the live token counter, and the sole liveness cue during a
@@ -587,24 +365,6 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     return () => clearInterval(t)
   }, [pendingToolKey])
 
-  // When the turn goes idle, commit any still-queued messages into the
-  // transcript (they weren't relayed) so they never vanish; remember them so a
-  // late backend echo is de-duplicated. A message sent while already idle
-  // flushes immediately — it starts a fresh turn rather than queueing.
-  useEffect(() => {
-    if (working || queued.length === 0) return
-    flushed.current.push(...queued.map((q) => q.text))
-    const items = queued.map<TranscriptItem>((q) => ({
-      key: `q${keyCounter.current++}`,
-      kind: 'user',
-      gutter: '›',
-      text: q.text,
-      spaceBefore: true,
-    }))
-    setItems((prev) => [...prev, ...items])
-    setQueued([])
-  }, [working, queued])
-
   const submit = useCallback(
     (raw: string): void => {
       const text = raw.trim()
@@ -621,11 +381,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             setNotice(`stop requested (${s.status}) — the conversation survives`)
             return
           }
-          // Show the message as queued (or, if idle, it flushes to the
-          // transcript at once), then post it. The POST returns the created
-          // SessionMessage (protocol v2 §4.2): stamp the chip with its id so
-          // the first messages frame / inbox fetch / user-echo record carrying
-          // that id retires it in favour of the server's own row.
+          // Show the message as queued, then post it. The POST returns the
+          // created SessionMessage (protocol v2 §4.2): stamp the chip with its
+          // id so the first messages frame / user-echo record carrying that id
+          // retires it in favour of the server's own row.
           setQueued((prev) => [...prev, { text, messageId: null }])
           setNotice(null)
           const created = await api.sendSessionMessage(sessionId, text)
@@ -639,7 +398,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
               return q
             })
           })
-          setWorking(true)
+          setSendPending(true)
           pump()
         } catch (err) {
           setQueued((prev) => {
@@ -709,12 +468,12 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // (cumulative total + the last turn's cost), and the session identity — the
   // dashboard link rendered as the session id, the model, and the CLI version.
   // Command hints live in --help. The total prefers the server's ledger figure
-  // (live via cost_millicents frames, climbing mid-turn); the CC-derived
-  // result total is the fallback against older backends.
+  // (live via the session frames' cost columns, climbing mid-turn); the
+  // CC-derived result total is the fallback against older backends.
   const totalStr = `$${(serverCostUsd ?? cost.total ?? 0).toFixed(2)}`
   const lastStepStr = cost.lastStep != null ? ` (Last step: $${cost.lastStep.toFixed(2)})` : ''
   const metaLine = [
-    `${status} · ${totalStr} total${lastStepStr}`,
+    `${statusWord} · ${totalStr} total${lastStepStr}`,
     hyperlink(props.sessionUrl, sessionId),
     ...(props.model ? [props.model] : []),
     `v${VERSION}`,
@@ -731,14 +490,16 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   //   the live third), naming the tool and ticking its own timer (generating
   //   wins if both somehow read true; the model can't stream past an
   //   unresolved call).
-  const infraActivity = statusActivityText(status)
-  const generating = status === 'working' && (liveText !== '' || liveTokens != null)
+  const liveText = snapshot.liveText
+  const liveTokens = snapshot.liveOutputTokens
+  const infraActivity = statusActivityText(statusWord)
+  const generating = statusWord === 'working' && (liveText !== '' || liveTokens != null)
   const generatingBits = [
     formatDuration(elapsed),
     ...(liveTokens != null ? [`↓ ${formatTokens(liveTokens)} tokens`] : []),
     ...(inputActive ? ['esc to interrupt'] : []),
   ].join(' · ')
-  const runningTool = status === 'working' && !generating && pendingTools.length > 0
+  const runningTool = statusWord === 'working' && !generating && pendingTools.length > 0
   const runningToolLabel =
     pendingTools.length === 1
       ? `Running ${pendingTools[0].text}${pendingTools[0].detail ?? ''}`
