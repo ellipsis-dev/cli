@@ -68,8 +68,10 @@ describe('pure helpers', () => {
   it('classifies WebSocket close codes', () => {
     expect(classifyCloseCode(1000)).toBe('normal')
     expect(classifyCloseCode(1008)).toBe('auth')
-    expect(classifyCloseCode(1003)).toBe('unsupported')
+    expect(classifyCloseCode(1002)).toBe('unsupported') // unknown protocol version
+    expect(classifyCloseCode(1003)).toBe('unsupported') // no ?protocol= param
     expect(classifyCloseCode(1011)).toBe('retry')
+    expect(classifyCloseCode(1013)).toBe('retry') // over capacity
     expect(classifyCloseCode(1006)).toBe('retry')
   })
 
@@ -107,9 +109,13 @@ describe('pure helpers', () => {
     ).toBe('fallback')
   })
 
-  it('builds the stream URL with an optional after_seq cursor', () => {
-    expect(buildStreamUrl('wss://h', 'session 1', 0)).toBe('wss://h/v1/sessions/session%201/stream')
-    expect(buildStreamUrl('wss://h', 's', 7)).toBe('wss://h/v1/sessions/s/stream?after_seq=7')
+  it('builds the stream URL with the required protocol + optional cursor', () => {
+    expect(buildStreamUrl('wss://h', 'session 1', 0)).toBe(
+      'wss://h/v1/sessions/session%201/stream?protocol=2',
+    )
+    expect(buildStreamUrl('wss://h', 's', 7)).toBe(
+      'wss://h/v1/sessions/s/stream?protocol=2&after_seq=7',
+    )
   })
 
   it('resolves the ws base from env, then derives it from the api base', () => {
@@ -123,6 +129,37 @@ describe('pure helpers', () => {
 
 // ---------------------------- streamSession ---------------------------------
 
+// Minimal v2 frame builders (protocol §3.3). The session frame carries the
+// lean wire session; only the fields streamSession reads are populated.
+function sessionFrame(word: string, exitStatus: string | null = null): StreamFrame {
+  return {
+    type: 'session',
+    session: {
+      id: 's',
+      status: word,
+      exit_status: exitStatus,
+      surface: { session: null, run: null, status: word },
+    },
+  } as unknown as StreamFrame
+}
+
+function recordsFrame(...feedSeqs: number[]): StreamFrame {
+  return {
+    type: 'records_append',
+    records: feedSeqs.map((feed_seq) => ({
+      id: `rec-${feed_seq}`,
+      agent_session_id: 's',
+      feed_seq,
+      stream_seq: feed_seq,
+      source: 'claude_code',
+      record_type: 'assistant',
+      record_format: 'claude_stream_json@2.0',
+      payload: {},
+      created_at: 'now',
+    })),
+  } as unknown as StreamFrame
+}
+
 describe('streamSession', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -132,7 +169,7 @@ describe('streamSession', () => {
     delete process.env.ELLIPSIS_WS_BASE
   })
 
-  it('emits every frame and resolves on done', async () => {
+  it('emits every frame and resolves on done with the last session word', async () => {
     const { factory, sockets } = makeFactory()
     const frames: StreamFrame[] = []
     const p = streamSession({
@@ -143,17 +180,24 @@ describe('streamSession', () => {
       onFrame: (f) => frames.push(f),
     })
     sockets[0].sock.emitOpen()
-    sockets[0].sock.emitFrame({ type: 'status', status: 'running' })
-    sockets[0].sock.emitFrame({ type: 'stdout', data: 'hello', seq: 1 })
-    sockets[0].sock.emitFrame({ type: 'done', status: 'completed', exit_status: 'completed' })
+    sockets[0].sock.emitFrame(sessionFrame('working'))
+    sockets[0].sock.emitFrame(recordsFrame(1))
+    // The final session frame carries the end state, then done (§3.3).
+    sockets[0].sock.emitFrame(sessionFrame('closed', 'completed'))
+    sockets[0].sock.emitFrame({ type: 'done' })
 
     const outcome = await p
-    expect(outcome).toEqual({ type: 'done', status: 'completed', exitStatus: 'completed' })
-    expect(frames.map((f) => f.type)).toEqual(['status', 'stdout', 'done'])
+    expect(outcome).toEqual({ type: 'done', status: 'closed', exitStatus: 'completed' })
+    expect(frames.map((f) => f.type)).toEqual([
+      'session',
+      'records_append',
+      'session',
+      'done',
+    ])
     expect(sockets[0].sock.closed).toBe(true)
   })
 
-  it('reconnects after a drop and resumes from the last seq (no loss/dupes)', async () => {
+  it('reconnects after a drop and resumes from the last record feed_seq', async () => {
     const { factory, sockets } = makeFactory()
     const p = streamSession({
       token: 't',
@@ -163,17 +207,19 @@ describe('streamSession', () => {
       onFrame: () => {},
     })
     sockets[0].sock.emitOpen()
-    sockets[0].sock.emitFrame({ type: 'stdout', data: 'one', seq: 1 })
-    sockets[0].sock.emitFrame({ type: 'stdout', data: 'two', seq: 2 })
+    sockets[0].sock.emitFrame(recordsFrame(1, 2))
+    // Only records advance the cursor (§3.4) — a session frame never does.
+    sockets[0].sock.emitFrame(sessionFrame('working'))
     sockets[0].sock.emitClose(1011) // server error: retryable drop
 
     await vi.advanceTimersByTimeAsync(500) // backoff for attempt 1
     expect(sockets).toHaveLength(2)
-    expect(sockets[1].url).toBe('ws://x/v1/sessions/s/stream?after_seq=2')
+    expect(sockets[1].url).toBe('ws://x/v1/sessions/s/stream?protocol=2&after_seq=2')
 
-    sockets[1].sock.emitFrame({ type: 'done', status: 'completed', exit_status: null })
+    sockets[1].sock.emitFrame(sessionFrame('closed', null))
+    sockets[1].sock.emitFrame({ type: 'done' })
     const outcome = await p
-    expect(outcome).toEqual({ type: 'done', status: 'completed', exitStatus: null })
+    expect(outcome).toEqual({ type: 'done', status: 'closed', exitStatus: null })
   })
 
   it('surfaces a server error frame as an error outcome (not a fallback)', async () => {

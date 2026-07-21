@@ -1,7 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink'
 import { ApiClient, ApiError } from '../lib/api'
-import { streamSession, StreamUnavailableError, type StreamFrame } from '../lib/ws'
+import {
+  sessionStatusWord,
+  streamSession,
+  StreamUnavailableError,
+  type StreamFrame,
+} from '../lib/ws'
+import type { AgentSession, SessionMessage, SessionRecord } from '../lib/types'
 import {
   clampLines,
   collapseToolRuns,
@@ -80,11 +86,13 @@ function isWorkingStatus(status: string): boolean {
   return ['scheduled', 'starting', 'working', 'retrying'].includes(status)
 }
 
-// One local send awaiting server acknowledgement: postSeq is null while the
-// POST is in flight, then the monotonic order in which it resolved — used to
-// retire the chip once an inbox fetch is guaranteed to cover it (see
-// refreshSteps).
-type QueuedSend = { text: string; postSeq: number | null }
+// One local send awaiting server acknowledgement: messageId is null while the
+// POST is in flight, then the created SessionMessage's id (protocol v2 §4.2) —
+// the chip retires the moment the server acknowledges that id (a messages
+// frame, an inbox fetch, or the transcript user-echo record's
+// session_message_id back-reference), and the server's own pending row takes
+// over as its representation.
+type QueuedSend = { text: string; messageId: string | null }
 
 export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const { api, token, sessionId, wsBase, canSend } = props
@@ -153,7 +161,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   }, [])
 
   // Live-flow state that must survive re-renders without triggering them.
-  const afterSeq = useRef(0)
+  // The stream resume cursor (protocol v2 §3.4: the highest feed_seq seen in
+  // records_append frames) — seeded from the REST-rendered transcript so the
+  // first attach doesn't replay history the screen already shows.
+  const afterSeq = useRef(props.initialMaxFeedSeq)
   const streaming = useRef(false)
   const abort = useRef(new AbortController())
   const lastStatus = useRef(props.initialStatus)
@@ -179,14 +190,22 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   useEffect(() => {
     queuedRef.current = queued
   }, [queued])
-  // Mirror of serverQueued for the refresh gate, and the monotonic counter
-  // stamped onto a chip when its POST resolves (see refreshSteps).
+  // Mirror of serverQueued for the refresh gate.
   const serverQueuedRef = useRef<string[]>([])
   useEffect(() => {
     serverQueuedRef.current = serverQueued
   }, [serverQueued])
-  const postSeqCounter = useRef(0)
   const fetchedTurnsOnce = useRef(false)
+
+  // Retire local chips the server has acknowledged (by SessionMessage id):
+  // once an id shows up in a messages frame, an inbox fetch, or a transcript
+  // user-echo record, the server's own rows are the truth for that send.
+  const retireAcknowledgedChips = useCallback((ids: Set<string>): void => {
+    if (ids.size === 0) return
+    setQueued((prev) =>
+      prev.filter((q) => q.messageId === null || !ids.has(q.messageId)),
+    )
+  }, [])
 
   // Append items, promoting a queued send when its user turn arrives and
   // dropping the backend's echo of a send we already committed locally.
@@ -237,16 +256,15 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     try {
       // Reconcile the queued region against the server's inbox whenever there
       // is anything to reconcile (plus once at startup, to pick up messages
-      // already pending on reconnect). A chip whose POST resolved BEFORE this
-      // fetch started (postSeq < startSeq) is guaranteed to be in the fetched
-      // list, so the server rows take over as its representation and the chip
-      // retires — delivered messages vanish, still-pending ones re-render from
-      // serverQueued with identical text.
+      // already pending on reconnect). Chips retire by SessionMessage id: a
+      // fetched inbox that contains a chip's id means the server owns the
+      // send — delivered messages vanish, still-pending ones re-render from
+      // serverQueued with identical text. The v2 `messages` frames keep this
+      // current between fetches.
       const wantTurns =
         !fetchedTurnsOnce.current ||
         queuedRef.current.length > 0 ||
         serverQueuedRef.current.length > 0
-      const startSeq = postSeqCounter.current
       const turnsPromise = wantTurns
         ? api.getAgentSessionTurns(sessionId).catch(() => null)
         : Promise.resolve(null)
@@ -257,10 +275,17 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         setServerQueued(
           turns.messages.filter((m) => m.status === 'pending').map((m) => m.body),
         )
-        setQueued((prev) => prev.filter((q) => q.postSeq === null || q.postSeq >= startSeq))
+        retireAcknowledgedChips(new Set(turns.messages.map((m) => m.id)))
       }
       const ordered = [...records].sort((a, b) => a.feed_seq - b.feed_seq)
       const fresh = ordered.filter((st) => st.feed_seq > maxFeed.current)
+      retireAcknowledgedChips(
+        new Set(
+          fresh
+            .map((st) => st.session_message_id)
+            .filter((id): id is string => typeof id === 'string'),
+        ),
+      )
       if (fresh.length) {
         for (const st of fresh) {
           maxFeed.current = Math.max(maxFeed.current, st.feed_seq)
@@ -306,7 +331,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         void refreshSteps()
       }
     }
-  }, [api, append, applyCost, sessionId])
+  }, [api, append, applyCost, retireAcknowledgedChips, sessionId])
 
   // A closed conversation is over — nothing can ever be sent or received
   // again (a send would 409) — so pull the final records, leave one dim
@@ -329,47 +354,89 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     }, 250)
   }, [refreshSteps])
 
-  // The socket carries status transitions (drive the spinner) and acts as a
-  // wake: any frame means new steps may exist, so schedule a refresh.
+  // The socket speaks stream protocol v2: session/snapshot frames carry the
+  // status word + the server's running cost; messages frames carry the open
+  // inbox slice (queued chips); records_append is the committed-steps wake
+  // (the REST refresh stays the transcript source in this port — the SDK swap
+  // rebases rendering on pushed records); deltas are the ephemeral overlay.
   const handleFrame = useCallback(
     (frame: StreamFrame): void => {
-      if (typeof frame.seq === 'number') afterSeq.current = Math.max(afterSeq.current, frame.seq)
-      // status/done frames carry the server's running session total; the
-      // server emits a status frame on every cost change, so the footer's
-      // dollar figure climbs mid-turn as the agent spends.
-      if (
-        (frame.type === 'status' || frame.type === 'done') &&
-        typeof frame.cost_millicents === 'number'
-      ) {
-        applyServerCostUsd(usdNumberFromMillicents(frame.cost_millicents))
-      }
-      if (frame.type === 'status' && frame.status && frame.status !== lastStatus.current) {
-        lastStatus.current = frame.status
-        setStatus(frame.status)
-        setWorking(isWorkingStatus(frame.status))
-        // Box-up states (working/waiting) mean the session became connectable;
-        // used to tell a preflight failure from a mid-conversation one.
-        if (['working', 'waiting'].includes(frame.status)) everRunning.current = true
-        if (frame.status === 'closed') {
-          finishClosed()
-          return
+      if (frame.type === 'snapshot' || frame.type === 'session') {
+        const session = (frame as { session: AgentSession }).session
+        // The server's authoritative running total; the session frame is
+        // resent on every cost change, so the footer climbs mid-turn.
+        applyServerCostUsd(
+          usdNumberFromMillicents(
+            session.cost_tokens +
+              session.cost_sandbox_cpu +
+              session.cost_sandbox_memory +
+              session.cost_fee,
+          ),
+        )
+        const word = sessionStatusWord(session)
+        if (word && word !== lastStatus.current) {
+          lastStatus.current = word
+          setStatus(word)
+          setWorking(isWorkingStatus(word))
+          // Box-up states (working/waiting) mean the session became
+          // connectable; used to tell a preflight failure from a
+          // mid-conversation one.
+          if (['working', 'waiting'].includes(word)) everRunning.current = true
+          if (word === 'closed') {
+            finishClosed()
+            return
+          }
         }
+        if (frame.type === 'snapshot') {
+          // The snapshot's inbox is the open slice — seed the queued region.
+          const messages = (frame as { messages: SessionMessage[] }).messages
+          setServerQueued(
+            messages.filter((m) => m.status === 'pending').map((m) => m.body),
+          )
+          retireAcknowledgedChips(new Set(messages.map((m) => m.id)))
+        }
+        return
+      }
+      if (frame.type === 'messages') {
+        // The open inbox slice, resent on any change: pending rows are the
+        // queued truth; a row that flipped delivered retires its chip.
+        const messages = (frame as { messages: SessionMessage[] }).messages
+        setServerQueued(
+          messages.filter((m) => m.status === 'pending').map((m) => m.body),
+        )
+        retireAcknowledgedChips(new Set(messages.map((m) => m.id)))
+        return
       }
       if (frame.type === 'error') {
-        setNotice(frame.message ?? frame.data ?? 'stream error')
+        setNotice((frame as { message?: string }).message ?? 'stream error')
         return
       }
       // Ephemeral streaming delta: update the live overlay in place. NOT a
       // committed-steps wake, so it must not trigger a steps refresh (that would
-      // poll the API several times a second during generation).
+      // poll the API several times a second during generation). Unknown kinds
+      // ("thinking" is reserved) are ignored per §3.6.
       if (frame.type === 'delta') {
-        if (frame.text) setLiveText((t) => t + frame.text)
-        if (typeof frame.output_tokens === 'number') setLiveTokens(frame.output_tokens)
+        const delta = frame as { kind?: string; text?: string | null; output_tokens?: number | null }
+        if (delta.kind !== undefined && delta.kind !== 'text') return
+        if (delta.text) setLiveText((t) => t + delta.text)
+        if (typeof delta.output_tokens === 'number') setLiveTokens(delta.output_tokens)
         return
       }
-      scheduleRefresh()
+      if (frame.type === 'records_append') {
+        // Track the resume cursor from the pushed records; the debounced REST
+        // refresh commits them to the transcript.
+        for (const record of (frame as { records: SessionRecord[] }).records) {
+          if (typeof record.feed_seq === 'number') {
+            afterSeq.current = Math.max(afterSeq.current, record.feed_seq)
+          }
+        }
+        scheduleRefresh()
+        return
+      }
+      if (frame.type === 'heartbeat' || frame.type === 'done') return
+      // Unknown frame types are ignored (protocol §3.6).
     },
-    [applyServerCostUsd, finishClosed, scheduleRefresh],
+    [applyServerCostUsd, finishClosed, retireAcknowledgedChips, scheduleRefresh],
   )
 
   // Keep the socket attached across reconnects/resume. A keyed session going
@@ -555,20 +622,19 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             return
           }
           // Show the message as queued (or, if idle, it flushes to the
-          // transcript at once), then post it and wait for the turn. Once the
-          // POST resolves the server owns the message: stamp the chip with the
-          // next postSeq so the first inbox fetch that starts after this point
-          // retires it in favour of the server's own pending row.
-          setQueued((prev) => [...prev, { text, postSeq: null }])
+          // transcript at once), then post it. The POST returns the created
+          // SessionMessage (protocol v2 §4.2): stamp the chip with its id so
+          // the first messages frame / inbox fetch / user-echo record carrying
+          // that id retires it in favour of the server's own row.
+          setQueued((prev) => [...prev, { text, messageId: null }])
           setNotice(null)
-          await api.sendSessionMessage(sessionId, text)
-          const seq = ++postSeqCounter.current
+          const created = await api.sendSessionMessage(sessionId, text)
           setQueued((prev) => {
             let stamped = false
             return prev.map((q) => {
-              if (!stamped && q.text === text && q.postSeq === null) {
+              if (!stamped && q.text === text && q.messageId === null) {
                 stamped = true
-                return { text: q.text, postSeq: seq }
+                return { text: q.text, messageId: created.id }
               }
               return q
             })
@@ -577,7 +643,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           pump()
         } catch (err) {
           setQueued((prev) => {
-            const j = prev.findIndex((q) => q.text === text && q.postSeq === null)
+            const j = prev.findIndex((q) => q.text === text && q.messageId === null)
             return j < 0 ? prev : [...prev.slice(0, j), ...prev.slice(j + 1)]
           })
           setNotice(`✗ ${err instanceof ApiError ? err.detail : (err as Error).message}`)

@@ -1,51 +1,75 @@
 import WebSocket from 'ws'
 import { resolveApiBase } from './config'
 import { DEFAULT_WS_BASE, USER_AGENT } from './constants'
+import type { AgentSession, SessionMessage, SessionRecord } from './types'
 
-// The frame protocol spoken over the session WebSocket (server -> client). One
-// JSON object per message. Mirrors session_stream.py in the backend.
-//   status: { type, status, session, run, cost_millicents, ts }
-//   stdout/stderr: { type, data, seq, ts }
-//   delta:  { type, text?, output_tokens? }
-//   done: { type, status, session, run, exit_status, cost_millicents }
-//   error: { type, message }
-// `status` is the derived single word (working/waiting/sleeping/starting/…);
-// `session` (alive/sleeping/closed) and `run` are the two raw axes. All three
-// are null for an un-keyed (laptop) session. See session_surface.py.
-// `cost_millicents` is the session's running total cost from the server's spend
-// ledger — the billing authority; it climbs mid-turn as the agent spends, and
-// the server emits a status frame on every change (absent on older backends).
-// `seq` is a monotonic per-session cursor; the client resumes from the last seq
-// it saw via `?after_seq=` so a dropped socket loses nothing. `delta` is the
-// EPHEMERAL live-streaming frame (partial assistant text + running token count);
-// it has no seq — not resumable, rendered live and superseded by the committed
-// step that follows.
-export interface StreamFrame {
-  type: 'stdout' | 'stderr' | 'status' | 'delta' | 'done' | 'error'
-  data?: string
-  status?: string
-  // status/done frames: the two raw session-surface axes (null for laptop).
-  session?: string | null
-  run?: string | null
-  // status/done frames: the session's running total cost (millicents).
-  cost_millicents?: number
-  seq?: number
-  ts?: string
-  message?: string
-  exit_status?: string | null
-  // delta frames only:
-  text?: string | null
-  output_tokens?: number | null
+// The session stream protocol v2 (server -> client), one JSON object per
+// message. Mirrors the frame DTOs in the backend's
+// public_api/realtime/session_stream.py (documents/eng/SESSION_STREAM_PROTOCOL.md):
+//
+//   snapshot:       { type, protocol, earliest_feed_seq, session, messages }
+//   records_append: { type, records }          — raw session_records, by feed_seq
+//   messages:       { type, messages }         — the OPEN inbox slice (LWW)
+//   session:        { type, session }          — the lean session, resent on change
+//   delta:          { type, agent_turn_id, kind, text?, output_tokens? }
+//   heartbeat:      { type, ts }
+//   done:           { type }                    — conversation over; close 1000 follows
+//   error:          { type, message }           — curated copy; close 1011 follows
+//
+// Delivery classes: records_append is cursored append-only — the ONE resume
+// cursor (`?after_seq=` = the highest feed_seq seen in records_append frames;
+// messages/session frames NEVER advance it). session/messages are
+// last-writer-wins snapshots; delta/heartbeat are fire-and-forget; done/error
+// are terminal. Unknown frame types (and unknown source/record_type/kind
+// values) MUST be ignored — additive server changes are not a protocol break.
+export const SESSION_STREAM_PROTOCOL_VERSION = 2
+
+export type StreamFrame =
+  | {
+      type: 'snapshot'
+      protocol: number
+      // The retention head: the lowest feed_seq still stored, or null when the
+      // session has no stored records. Replaying from before it means history
+      // was truncated under the customer's log retention.
+      earliest_feed_seq: number | null
+      session: AgentSession
+      messages: SessionMessage[]
+    }
+  | { type: 'records_append'; records: SessionRecord[] }
+  | { type: 'messages'; messages: SessionMessage[] }
+  | { type: 'session'; session: AgentSession }
+  | {
+      type: 'delta'
+      agent_turn_id?: string | null
+      // "text" today; "thinking" reserved — ignore unknown kinds.
+      kind?: string
+      text?: string | null
+      output_tokens?: number | null
+    }
+  | { type: 'heartbeat'; ts?: string }
+  | { type: 'done' }
+  | { type: 'error'; message?: string }
+  // Forward compatibility: an unrecognized frame type parses, is handed to
+  // onFrame, and must be ignored by renderers.
+  | { type: string; [key: string]: unknown }
+
+// The display word for a session: the server-derived surface status
+// (working/waiting/sleeping/starting/closed/…) when present, else the raw
+// per-execution status. Shared by every frame consumer so the stream and the
+// REST poll can never disagree about the word.
+export function sessionStatusWord(session: AgentSession): string {
+  return session.surface?.status ?? session.status
 }
 
-// How streamSession() finished. `done`/`error` are normal terminal outcomes;
-// `aborted` means the caller cancelled via the AbortSignal.
+// How streamSession() finished. `done`/`error` are normal terminal outcomes
+// (`status` is the last session frame's derived word); `aborted` means the
+// caller cancelled via the AbortSignal.
 export type StreamOutcome =
   | { type: 'done'; status: string; exitStatus?: string | null }
   | { type: 'error'; message: string }
   | { type: 'aborted' }
 
-// Thrown when streaming isn't usable (no endpoint, unsupported close, or
+// Thrown when streaming isn't usable (no endpoint, unsupported protocol, or
 // reconnects exhausted) — the caller should fall back to REST polling.
 export class StreamUnavailableError extends Error {
   constructor(message: string) {
@@ -86,8 +110,8 @@ export interface StreamSocket {
 }
 export type SocketFactory = (url: string, token: string) => StreamSocket
 
-// Server keepalive cadence is ~20s; if we hear nothing for this long the socket
-// is presumed dead and we reconnect.
+// Server heartbeat cadence is 20s; if we hear nothing for ~2x that the socket
+// is presumed dead and we reconnect (the protocol's own liveness rule).
 const HEARTBEAT_TIMEOUT_MS = 45_000
 const DEFAULT_MAX_RECONNECTS = 5
 
@@ -119,10 +143,11 @@ export function classifyCloseCode(code: number): CloseKind {
       return 'normal'
     case 1008:
       return 'auth'
-    case 1003:
+    case 1002: // unsupported protocol version requested
+    case 1003: // no ?protocol= param (shouldn't happen — we always send it)
       return 'unsupported'
     default:
-      // 1011 server error, 1006 abnormal (refused / no endpoint), etc.
+      // 1011 server error, 1013 over capacity, 1006 abnormal, etc.
       return 'retry'
   }
 }
@@ -173,14 +198,17 @@ export function resolveWsBase(apiBase?: string): string {
 }
 
 export function buildStreamUrl(wsBase: string, sessionId: string, afterSeq: number): string {
-  const url = `${wsBase}/v1/sessions/${encodeURIComponent(sessionId)}/stream`
-  return afterSeq > 0 ? `${url}?after_seq=${afterSeq}` : url
+  // ?protocol= is REQUIRED by the v2 handshake: a server that doesn't see it
+  // closes 1003 (how pre-v2 binaries degrade to polling); an unknown version
+  // closes 1002 with the supported list in the reason.
+  const url = `${wsBase}/v1/sessions/${encodeURIComponent(sessionId)}/stream?protocol=${SESSION_STREAM_PROTOCOL_VERSION}`
+  return afterSeq > 0 ? `${url}&after_seq=${afterSeq}` : url
 }
 
 // ------------------------------ connection ---------------------------------
 
 type ConnResult =
-  | { kind: 'done'; status: string; exitStatus?: string | null }
+  | { kind: 'done' }
   | { kind: 'frameError'; message: string }
   | { kind: 'closed'; code: number }
   | { kind: 'error'; err: Error }
@@ -236,9 +264,12 @@ function connectOnce(
       }
       emit(frame)
       if (frame.type === 'done') {
-        finish({ kind: 'done', status: frame.status ?? '', exitStatus: frame.exit_status })
+        finish({ kind: 'done' })
       } else if (frame.type === 'error') {
-        finish({ kind: 'frameError', message: frame.message ?? frame.data ?? 'stream error' })
+        finish({
+          kind: 'frameError',
+          message: (frame as { message?: string }).message ?? 'stream error',
+        })
       }
     })
     sock.onClose((code) => finish({ kind: 'closed', code }))
@@ -262,10 +293,13 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 // ------------------------------ public API ---------------------------------
 
-// Stream an agent session's output to completion, reconnecting with backoff
-// and resuming from the last seen `seq` so a dropped socket loses no frames.
-// Calls `onFrame` for every frame received. Resolves with the terminal
-// outcome, or throws StreamUnavailableError (caller should poll instead) /
+// Stream an agent session to completion, reconnecting with backoff and
+// resuming from the last records_append feed_seq so a dropped socket loses no
+// records (§3.4: ONLY records advance the cursor — session/messages snapshots
+// are re-sent fresh on reconnect). Calls `onFrame` for every frame received.
+// Resolves with the terminal outcome — `done`'s status/exitStatus come from
+// the last session frame, which the server guarantees carries the end state
+// before `done`. Throws StreamUnavailableError (caller should poll instead) /
 // StreamAuthError.
 export async function streamSession(opts: StreamOptions): Promise<StreamOutcome> {
   const wsBase = opts.wsBase ?? resolveWsBase()
@@ -275,10 +309,23 @@ export async function streamSession(opts: StreamOptions): Promise<StreamOutcome>
   let afterSeq = opts.afterSeq ?? 0
   let everReceivedFrame = false
   let attempt = 0
+  let lastStatusWord = ''
+  let lastExitStatus: string | null | undefined
 
   const emit = (frame: StreamFrame) => {
     everReceivedFrame = true
-    if (typeof frame.seq === 'number') afterSeq = Math.max(afterSeq, frame.seq)
+    if (frame.type === 'records_append') {
+      const records = (frame as { records: SessionRecord[] }).records
+      for (const record of records) {
+        if (typeof record.feed_seq === 'number') {
+          afterSeq = Math.max(afterSeq, record.feed_seq)
+        }
+      }
+    } else if (frame.type === 'snapshot' || frame.type === 'session') {
+      const session = (frame as { session: AgentSession }).session
+      lastStatusWord = sessionStatusWord(session)
+      lastExitStatus = (session.exit_status as string | null | undefined) ?? null
+    }
     opts.onFrame(frame)
   }
 
@@ -288,7 +335,7 @@ export async function streamSession(opts: StreamOptions): Promise<StreamOutcome>
     const res = await connectOnce(url, opts.token, factory, emit, opts.signal)
 
     if (res.kind === 'done') {
-      return { type: 'done', status: res.status, exitStatus: res.exitStatus }
+      return { type: 'done', status: lastStatusWord, exitStatus: lastExitStatus }
     }
     if (res.kind === 'frameError') return { type: 'error', message: res.message }
     if (res.kind === 'aborted') return { type: 'aborted' }

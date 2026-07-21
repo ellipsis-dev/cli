@@ -46,6 +46,7 @@ import type {
   SandboxVariableSummary,
   SearchSessionsQuery,
   SearchSessionsResponse,
+  SessionMessage,
   SessionRecord,
   SyncAgentSessionRequest,
   SyncAgentSessionResponse,
@@ -251,9 +252,17 @@ export class ApiClient {
   // inbox delivers it to the agent's Claude Code stdin at the next turn
   // boundary, or wakes the session when idle. 409 for single-shot / closed
   // sessions (no inbox loop to attend it).
-  sendSessionMessage(sessionId: string, message: string): Promise<AgentSession> {
+  // Returns the CREATED SessionMessage (protocol v2 §4.2) so callers key
+  // their optimistic chip on its id. `idempotencyKey` makes retries safe:
+  // the server dedupes per (session, key) and returns the original message.
+  sendSessionMessage(
+    sessionId: string,
+    message: string,
+    idempotencyKey?: string,
+  ): Promise<SessionMessage> {
     return this.request('POST', `/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
       message,
+      idempotency_key: idempotencyKey ?? null,
     } satisfies SendSessionMessageRequest)
   }
 
