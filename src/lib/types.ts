@@ -209,6 +209,11 @@ export interface StartAgentSessionRequest {
   // bare `agent`). Mutually exclusive with prompt; the server ignores it when
   // the resolved config is not interactive (that session runs its workflow).
   idle_start?: boolean
+  // Skip the sandbox image cache for this session's initial provision: a
+  // fresh full build (image layers + clone + image.setup from scratch),
+  // whose snapshot then refreshes the cache for later runs. Wakes of a
+  // durable session provision through the cache as usual. The --rebuild flag.
+  force_rebuild?: boolean
 }
 
 // Replay payload for POST /v1/sessions/{id}/replay. Re-runs an existing
