@@ -856,100 +856,105 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       {/* No banner: session identity (dashboard link, model, version) lives in
           the footer meta line, so the transcript starts right under the top
           padding and nothing is printed to scrollback before the app. */}
-      {/* Sandbox spawn/wake progress, at the top where startup belongs: dim
-          session notes (scheduled / waking / retrying / resumed), then the ✻
-          header (ticking while infra is active; "Sandbox ready · cached image
-          · 29s" once up), then the phase timeline — completed phases stack as
-          ✓ lines with their cache-tier/duration notes, the live phase ticks
-          under them with its latest output line. Highlighting the block (↑)
-          and pressing → opens the step list; →/← on a step shows/hides its
-          logs (a live 5-line tail while the step runs). The block stays after
-          startup as the durable trace. It is the viewport's first entry, so
-          it scrolls out of frame like any line. */}
+      {/* The startup story, session-first, at most three levels deep:
+              ✻ Session starting…
+                ✻ Sandbox starting…
+                  ✓ Preparing image · incremental build · 3.4s
+                  ✻ Running setup…
+          While in progress the whole hierarchy shows, the live level ticking.
+          Once ready it COLLAPSES to the single "✓ Session ready!" line —
+          highlighting it (↑ from the composer) and pressing → drills back
+          into the hierarchy, →/← on a phase shows/hides its logs. It is the
+          viewport's first entry, so it scrolls out of frame like any line. */}
       {(infraActivity || sandbox) && entries.keys[0] === 'sandbox' && slice.start === 0 && (
         <Box flexDirection="column">
-          {sandbox?.notes
-            .filter((n) => !n.tail)
-            .map((n, i) => (
-              <Text key={`n${i}`} dimColor>
-                {'  '}· {oneLine(n.text, 110)}
-              </Text>
-            ))}
-          {/* The › replaces the ✻ while highlighted (same 1-char slot), so
-              the header never shifts; the block's text goes cyan with it. */}
+          {/* Level 1: the session headline. The › replaces the mark while
+              highlighted (same 1-char slot), so the header never shifts. */}
           <Text>
             {navKey === 'sandbox' ? (
               <Text color="cyan">›</Text>
-            ) : sandbox?.ready && !infraActivity ? (
+            ) : sandbox?.done && !infraActivity ? (
               <Text color="green">✓</Text>
             ) : (
               <Text color="cyan">✻</Text>
             )}{' '}
             <Text color={navKey === 'sandbox' ? 'cyan' : undefined} dimColor={navKey !== 'sandbox'}>
-              {infraActivity
-                ? `${infraActivity}… (${formatDuration(elapsed)})`
-                : (sandbox?.readyLine ??
-                  (sandbox?.ready ? 'Sandbox ready' : 'Starting sandbox…'))}
-              {inputActive && navKey === 'sandbox' && !sandboxOpen ? ' (→: steps)' : ''}
+              {/* A live status word overrides a stale done-headline: on a
+                  wake the status flips before the new session_starting
+                  record lands, and "Session ready!" must not linger. */}
+              {sandbox?.done && !infraActivity
+                ? sandbox.headline
+                : `${(!sandbox || sandbox.done ? (infraActivity ?? 'Session starting') : sandbox.headline).replace(/…$/, '')}… (${formatDuration(elapsed)})`}
+              {inputActive && navKey === 'sandbox' && !sandboxOpen && sandbox?.sandboxLine
+                ? ' (→: details)'
+                : ''}
             </Text>
           </Text>
-          {sandbox?.steps.map((step, i) => {
-            const running = step.status === 'running' && !sandbox.ready && infraActivity != null
-            const cursor = Math.min(stepCursor, sandbox.steps.length - 1)
-            const selected = sandboxOpen && i === cursor
-            const logLines = running
-              ? step.lines.slice(-RUNNING_TAIL_LINES)
-              : step.lines.slice(-FINISHED_LOG_LINES)
-            const hidden = step.lines.length - logLines.length
-            const mark =
-              step.status === 'failed' ? (
-                <Text color="red">✗</Text>
-              ) : running ? (
-                <Text color="cyan">✻</Text>
-              ) : (
-                <Text color="green">✓</Text>
-              )
-            return (
-              <Box key={step.key} flexDirection="column">
-                {/* The › cursor column is always reserved (a space when
-                    unselected), so opening the panel never shifts the rows;
-                    the selected step reads cyan like the transcript
-                    highlight. */}
-                <Text>
-                  {'  '}
-                  <Text color="cyan">{selected ? '›' : ' '}</Text> {mark}{' '}
-                  <Text
-                    color={selected ? 'cyan' : step.status === 'failed' ? 'red' : undefined}
-                    dimColor={!selected && step.status !== 'failed'}
-                  >
-                    {oneLine(sandboxStepLine(step), 110)}
-                  </Text>
-                  {sandboxOpen && step.lines.length > 0 && (
-                    <Text color={selected ? 'cyan' : undefined} dimColor={!selected}>
-                      {' '}
-                      ({step.lines.length} log line{step.lines.length === 1 ? '' : 's'})
-                    </Text>
-                  )}
-                </Text>
-                {(selected && stepLogsOpen ? logLines : []).map((l, j) => (
-                  <Text key={`${step.key}:${j}`} dimColor>
-                    {'      '}
-                    {j === 0 && hidden > 0 ? `… +${hidden} earlier · ` : ''}
-                    {oneLine(l, 104)}
-                  </Text>
-                ))}
-              </Box>
-            )
-          })}
-          {sandbox?.notes
-            .filter((n) => n.tail)
-            .map((n, i) => (
-              <Text key={`t${i}`} dimColor>
-                {'  '}· {oneLine(n.text, 110)}
+          {/* Levels 2+3: the sandbox line and its phases — always visible
+              while starting, behind → once the session is ready. */}
+          {sandbox && sandbox.sandboxLine && (!sandbox.done || sandboxOpen || infraActivity) && (
+            <Box flexDirection="column">
+              <Text>
+                {'  '}
+                {sandbox.sandboxDone ? (
+                  <Text color="green">✓</Text>
+                ) : (
+                  <Text color="cyan">✻</Text>
+                )}{' '}
+                <Text dimColor>{oneLine(sandbox.sandboxLine, 110)}</Text>
               </Text>
-            ))}
-          {sandboxOpen && (
-            <Text dimColor>{'    '}↑/↓ step · → logs · ← back · esc close</Text>
+              {sandbox.steps.map((step, i) => {
+                const running = step.status === 'running' && !sandbox.sandboxDone
+                const cursor = Math.min(stepCursor, sandbox.steps.length - 1)
+                const selected = sandboxOpen && i === cursor
+                const logLines = running
+                  ? step.lines.slice(-RUNNING_TAIL_LINES)
+                  : step.lines.slice(-FINISHED_LOG_LINES)
+                const hidden = step.lines.length - logLines.length
+                const mark =
+                  step.status === 'failed' ? (
+                    <Text color="red">✗</Text>
+                  ) : running ? (
+                    <Text color="cyan">✻</Text>
+                  ) : (
+                    <Text color="green">✓</Text>
+                  )
+                return (
+                  <Box key={step.key} flexDirection="column">
+                    {/* The › cursor column is always reserved (a space when
+                        unselected), so opening the panel never shifts the
+                        rows; the selected phase reads cyan like the
+                        transcript highlight. */}
+                    <Text>
+                      {'    '}
+                      <Text color="cyan">{selected ? '›' : ' '}</Text> {mark}{' '}
+                      <Text
+                        color={selected ? 'cyan' : step.status === 'failed' ? 'red' : undefined}
+                        dimColor={!selected && step.status !== 'failed'}
+                      >
+                        {oneLine(sandboxStepLine(step), 108)}
+                      </Text>
+                      {sandboxOpen && step.lines.length > 0 && (
+                        <Text color={selected ? 'cyan' : undefined} dimColor={!selected}>
+                          {' '}
+                          ({step.lines.length} log line{step.lines.length === 1 ? '' : 's'})
+                        </Text>
+                      )}
+                    </Text>
+                    {(selected && stepLogsOpen ? logLines : []).map((l, j) => (
+                      <Text key={`${step.key}:${j}`} dimColor>
+                        {'        '}
+                        {j === 0 && hidden > 0 ? `… +${hidden} earlier · ` : ''}
+                        {oneLine(l, 100)}
+                      </Text>
+                    ))}
+                  </Box>
+                )
+              })}
+              {sandboxOpen && (
+                <Text dimColor>{'    '}↑/↓ phase · → logs · ← back · esc close</Text>
+              )}
+            </Box>
           )}
         </Box>
       )}
@@ -1148,9 +1153,9 @@ export function estimateItemRows(item: TranscriptItem, width: number, clamp: boo
   return rows
 }
 
-// Estimated rows of the sandbox startup block in its current shape: notes +
-// header + one row per timeline step, plus the selected step's open log
-// lines and the key hint when the panel is open.
+// Estimated rows of the startup block in its current shape: the headline,
+// plus — while starting or drilled into — the sandbox line, one row per
+// phase, the selected phase's open log lines, and the key hint.
 function sandboxBlockRows(
   sandbox: SandboxState | null,
   open: boolean,
@@ -1158,14 +1163,17 @@ function sandboxBlockRows(
   stepCursor: number,
   infraActive: boolean,
 ): number {
-  const steps = sandbox?.steps ?? []
-  let rows = (sandbox?.notes.length ?? 0) + 1 + steps.length
+  let rows = 1 // the headline
+  const expanded =
+    sandbox != null && sandbox.sandboxLine != null && (!sandbox.done || open || infraActive)
+  if (!expanded) return rows
+  const steps = sandbox.steps
+  rows += 1 + steps.length
   if (open) rows += 1 // the key hint
   if (open && logsOpen && steps.length > 0) {
     const i = Math.min(stepCursor, steps.length - 1)
     const step = steps[i]
-    const running =
-      sandbox != null && !sandbox.ready && infraActive && step.status === 'running'
+    const running = step.status === 'running' && !sandbox.sandboxDone
     rows += Math.min(step.lines.length, running ? RUNNING_TAIL_LINES : FINISHED_LOG_LINES)
   }
   return rows
@@ -1227,16 +1235,22 @@ export type SandboxStep = {
   // transition.
   inferred: boolean
 }
-// A session-subject lifecycle line (scheduled / starting / waking / retrying /
-// resumed / idle). `tail` = it happened after the box was ready, so it renders
-// below the steps instead of above the header.
-export type SandboxNote = { text: string; tail: boolean }
+// The startup story as a THREE-LEVEL hierarchy, session-first: the headline
+// is the SESSION's state ("Session scheduled…" → "Session starting…" →
+// "Session ready!"), the sandbox is one child line under it, and the
+// provisioning phases are children of the sandbox. `done` collapses the
+// whole block to the single ✓ headline (drill back in with →).
 export type SandboxState = {
-  notes: SandboxNote[]
+  // The current top-level line ("Session scheduled…", "Session starting…",
+  // "Waking the session…", "Retrying…", "Session ready!").
+  headline: string
+  done: boolean
+  // Level 2: the sandbox child line ("Sandbox starting…" or the
+  // "Sandbox ready · cached image · 29s" summary), null before provisioning.
+  sandboxLine: string | null
+  sandboxDone: boolean
+  // Level 3: the provisioning phases under the sandbox line.
   steps: SandboxStep[]
-  ready: boolean
-  // "Sandbox ready · cached image · 29s" — replaces the header once ready.
-  readyLine: string | null
 }
 
 // The structural slice of a session record the derivation needs (the SDK's
@@ -1261,57 +1275,63 @@ function stepLabel(phase: string, step: string | null): string {
   return sandboxPhaseLabel(phase)
 }
 
-// Session-subject record types that render as dim timeline notes. closed /
-// cancelled are exit conditions the app already reports on its way out.
-const NOTE_RECORD_TYPES = new Set([
-  'session_scheduled',
-  'session_retrying',
-  'session_resumed',
-  'session_idle',
-])
-
-// The sandbox startup timeline from the lifecycle records of the LATEST
-// start: session-subject notes, plus one step per provisioning phase — opened
-// by its sandbox_phase `started` transition, closed (with cache-tier/duration
-// note) by `completed`/`failed` — with sandbox_output chunks attaching their
-// lines to the matching step (exact phase:step, then the bare phase, then an
+// The startup story from the lifecycle records of the LATEST start, as the
+// session-first hierarchy: the headline tracks the session-subject records
+// ("Session scheduled…" → "Session starting…"/"Waking…"/"Retrying…" →
+// "Session ready!" when the sandbox comes up), the sandbox is one child line,
+// and the provisioning phases are its children — opened by their
+// sandbox_phase `started` transition, closed (with cache-tier/duration note)
+// by `completed`/`failed` — with sandbox_output chunks attaching their lines
+// to the matching step (exact phase:step, then the bare phase, then an
 // inferred step for feeds that predate phase transitions). session_starting
-// begins a fresh story (a wake or infra retry drops the previous one);
-// sandbox_ready closes it with the header summary line. null when no
-// lifecycle record has been seen. Pure, for tests.
+// begins a fresh story (a wake or infra retry drops the previous one).
+// null when no lifecycle record has been seen. Pure, for tests.
 export function deriveSandboxState(
   records: readonly LifecycleRecordLike[],
   minFeedSeq: number,
 ): SandboxState | null {
   let seen = false
-  let notes: SandboxNote[] = []
+  let headline = 'Session starting…'
+  let done = false
+  let sandboxLine: string | null = null
+  let sandboxDone = false
   let steps: SandboxStep[] = []
-  let ready = false
-  let readyLine: string | null = null
   for (const record of records) {
     if (record.feed_seq <= minFeedSeq || record.source !== 'lifecycle') continue
     const p = record.payload
-    if (record.record_type === 'session_starting') {
+    if (record.record_type === 'session_scheduled') {
       seen = true
-      // A wake or an infra retry restarts the story; the very first claim
-      // keeps the session_scheduled note above it.
-      const wakeIndex = typeof p.wake_index === 'number' ? p.wake_index : 0
-      const attempt = typeof p.attempt === 'number' ? p.attempt : 0
-      if (wakeIndex > 0 || attempt > 0) notes = []
+      const config = typeof p.config_name === 'string' && p.config_name ? p.config_name : null
+      headline = config ? `Session scheduled · ${config}…` : 'Session scheduled…'
+      done = false
+    } else if (
+      record.record_type === 'session_starting' ||
+      record.record_type === 'session_retrying'
+    ) {
+      seen = true
+      // Every claim starts a fresh story: the headline takes over ("Session
+      // starting…", "Waking the session…", "Retrying…") and the previous
+      // start's sandbox children drop.
+      headline = lifecycleText(record.record_type, p) ?? 'Session starting…'
+      done = false
+      sandboxLine = null
+      sandboxDone = false
       steps = []
-      ready = false
-      readyLine = null
-      const text = lifecycleText(record.record_type, p)
-      if (text) notes.push({ text, tail: false })
-    } else if (NOTE_RECORD_TYPES.has(record.record_type)) {
+    } else if (record.record_type === 'session_resumed') {
       seen = true
-      const text = lifecycleText(record.record_type, p)
-      if (text) notes.push({ text, tail: ready })
+      // The wake mounted its snapshots and the conversation continues — the
+      // session-level outcome, same beat as ready on a fresh start.
+      headline = 'Session ready!'
+      done = true
+    } else if (record.record_type === 'session_idle') {
+      seen = true
+      headline = 'Session idle — your next message wakes it'
+      done = true
     } else if (record.record_type === 'sandbox_starting') {
       seen = true
+      sandboxLine = 'Sandbox starting…'
+      sandboxDone = false
       steps = []
-      ready = false
-      readyLine = null
     } else if (record.record_type === 'sandbox_phase') {
       seen = true
       const phase = typeof p.phase === 'string' && p.phase ? p.phase : 'setup'
@@ -1367,7 +1387,6 @@ export function deriveSandboxState(
       entry.lines.push(...sandboxOutputLines(p))
     } else if (record.record_type === 'sandbox_ready') {
       seen = true
-      ready = true
       for (const s of steps) if (s.status === 'running') s.status = 'done'
       const timings =
         p.phase_timings && typeof p.phase_timings === 'object'
@@ -1381,10 +1400,15 @@ export function deriveSandboxState(
         cacheTierLabel(p.cache_tier),
         totalSeconds > 0 ? formatDuration(Math.round(totalSeconds)) : null,
       ].filter((b): b is string => b != null)
-      readyLine = ['Sandbox ready', ...bits].join(' · ')
+      sandboxLine = ['Sandbox ready', ...bits].join(' · ')
+      sandboxDone = true
+      // The box coming up is the session-level outcome too: the block
+      // collapses to the ✓ headline (drill in with →).
+      headline = 'Session ready!'
+      done = true
     }
   }
-  return seen ? { notes, steps, ready, readyLine } : null
+  return seen ? { headline, done, sandboxLine, sandboxDone, steps } : null
 }
 
 // One timeline step as its collapsed display line: a running step shows its

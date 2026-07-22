@@ -23,6 +23,43 @@ describe('deriveSandboxState', () => {
     expect(deriveSandboxState([rec('assistant', {}, 'claude_code')], 0)).toBeNull()
   })
 
+  it('walks the session headline: scheduled → starting → ready', () => {
+    const scheduled = deriveSandboxState([rec('session_scheduled', { source: 'cli' })], 0)
+    expect(scheduled?.headline).toBe('Session scheduled…')
+    expect(scheduled?.done).toBe(false)
+    expect(scheduled?.sandboxLine).toBeNull()
+
+    const starting = deriveSandboxState(
+      [
+        rec('session_scheduled', { source: 'cli', config_name: 'my-agent' }),
+        rec('session_starting', { attempt: 0, wake_index: 0 }),
+      ],
+      0,
+    )
+    expect(starting?.headline).toBe('Session starting…')
+    expect(starting?.done).toBe(false)
+
+    const ready = deriveSandboxState(
+      [
+        rec('session_starting', { attempt: 0, wake_index: 0 }),
+        rec('sandbox_starting', {}),
+        rec('sandbox_ready', { cache_tier: 'exact' }),
+      ],
+      0,
+    )
+    expect(ready?.headline).toBe('Session ready!')
+    expect(ready?.done).toBe(true)
+    expect(ready?.sandboxDone).toBe(true)
+  })
+
+  it('carries the config name on the scheduled headline', () => {
+    const state = deriveSandboxState(
+      [rec('session_scheduled', { source: 'cli', config_name: 'deployer' })],
+      0,
+    )
+    expect(state?.headline).toBe('Session scheduled · deployer…')
+  })
+
   it('builds the phase timeline from sandbox_phase transitions', () => {
     const state = deriveSandboxState(
       [
@@ -39,7 +76,8 @@ describe('deriveSandboxState', () => {
       0,
     )
     expect(state).not.toBeNull()
-    expect(state?.ready).toBe(false)
+    expect(state?.done).toBe(false)
+    expect(state?.sandboxLine).toBe('Sandbox starting…')
     expect(state?.steps.map((s) => [s.key, s.status])).toEqual([
       ['image', 'done'],
       ['clone', 'running'],
@@ -122,7 +160,7 @@ describe('deriveSandboxState', () => {
     expect(state?.steps[1].label).toBe('Post-clone setup')
   })
 
-  it('collects session-subject notes and closes on sandbox_ready with a summary', () => {
+  it('closes on sandbox_ready: sandbox summary line + Session ready! headline', () => {
     const state = deriveSandboxState(
       [
         rec('session_scheduled', { source: 'cli' }),
@@ -137,14 +175,15 @@ describe('deriveSandboxState', () => {
       ],
       0,
     )
-    expect(state?.notes.map((n) => n.text)).toEqual(['Session scheduled', 'Session starting…'])
-    expect(state?.ready).toBe(true)
-    expect(state?.readyLine).toBe('Sandbox ready · cached image · 29s')
+    expect(state?.headline).toBe('Session ready!')
+    expect(state?.done).toBe(true)
+    expect(state?.sandboxLine).toBe('Sandbox ready · cached image · 29s')
+    expect(state?.sandboxDone).toBe(true)
     // A phase still open at ready closes as done.
     expect(state?.steps[0].status).toBe('done')
   })
 
-  it('starts a fresh story on a wake and notes it', () => {
+  it('starts a fresh story on a wake: Waking headline, ready via session_resumed', () => {
     const state = deriveSandboxState(
       [
         rec('session_scheduled', { source: 'cli' }),
@@ -156,17 +195,56 @@ describe('deriveSandboxState', () => {
         rec('session_starting', { attempt: 0, wake_index: 1 }),
         rec('sandbox_starting'),
         rec('sandbox_phase', { phase: 'restore', status: 'started' }),
+      ],
+      0,
+    )
+    expect(state?.headline).toBe('Waking the session…')
+    expect(state?.done).toBe(false)
+    expect(state?.sandboxLine).toBe('Sandbox starting…')
+    expect(state?.steps.map((s) => s.key)).toEqual(['restore'])
+    expect(state?.steps[0].label).toBe('Restoring workspace')
+
+    const resumed = deriveSandboxState(
+      [
+        rec('session_starting', { attempt: 0, wake_index: 1 }),
+        rec('sandbox_starting'),
+        rec('sandbox_ready', { cache_tier: 'exact' }),
         rec('session_resumed', { wake_index: 1 }),
       ],
       0,
     )
-    expect(state?.notes.map((n) => n.text)).toEqual([
-      'Waking the session…',
-      'Resumed the conversation',
-    ])
-    expect(state?.ready).toBe(false)
-    expect(state?.steps.map((s) => s.key)).toEqual(['restore'])
-    expect(state?.steps[0].label).toBe('Restoring workspace')
+    expect(resumed?.headline).toBe('Session ready!')
+    expect(resumed?.done).toBe(true)
+  })
+
+  it('parks the headline on session_idle', () => {
+    const state = deriveSandboxState(
+      [
+        rec('session_starting', { attempt: 0, wake_index: 0 }),
+        rec('sandbox_starting'),
+        rec('sandbox_ready', {}),
+        rec('session_idle', {}),
+      ],
+      0,
+    )
+    expect(state?.headline).toBe('Session idle — your next message wakes it')
+    expect(state?.done).toBe(true)
+  })
+
+  it('shows Retrying as the headline on an infra retry', () => {
+    const state = deriveSandboxState(
+      [
+        rec('session_starting', { attempt: 0, wake_index: 0 }),
+        rec('sandbox_starting'),
+        rec('session_retrying', { reason: 'sandbox provisioning failed', attempt: 1 }),
+      ],
+      0,
+    )
+    expect(state?.headline).toBe('Retrying · sandbox provisioning failed')
+    expect(state?.done).toBe(false)
+    // The failed start's sandbox children drop with the fresh story.
+    expect(state?.sandboxLine).toBeNull()
+    expect(state?.steps).toHaveLength(0)
   })
 
   it('ignores records at or below the render cursor (--no-records)', () => {
