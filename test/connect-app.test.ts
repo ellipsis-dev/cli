@@ -6,8 +6,9 @@ import {
   estimateItemRows,
   foldRun,
   hookPhrase,
-  sandboxPhaseLine,
+  sandboxStepLine,
   viewportSlice,
+  type SandboxStep,
 } from '../src/ui/ConnectApp'
 import type { TranscriptItem } from '@ellipsis-dev/sdk/store'
 
@@ -17,12 +18,92 @@ function rec(recordType: string, payload: Record<string, unknown> = {}, source =
 }
 
 describe('deriveSandboxState', () => {
-  it('returns null before any sandbox lifecycle record', () => {
+  it('returns null before any lifecycle record', () => {
     expect(deriveSandboxState([], 0)).toBeNull()
     expect(deriveSandboxState([rec('assistant', {}, 'claude_code')], 0)).toBeNull()
   })
 
-  it('accumulates chunked output into one step per step key, in order', () => {
+  it('builds the phase timeline from sandbox_phase transitions', () => {
+    const state = deriveSandboxState(
+      [
+        rec('sandbox_starting', { repositories: ['o/r'] }),
+        rec('sandbox_phase', { phase: 'image', status: 'started' }),
+        rec('sandbox_phase', {
+          phase: 'image',
+          status: 'completed',
+          duration_ms: 1200,
+          detail: { cache_tier: 'exact' },
+        }),
+        rec('sandbox_phase', { phase: 'clone', status: 'started' }),
+      ],
+      0,
+    )
+    expect(state).not.toBeNull()
+    expect(state?.ready).toBe(false)
+    expect(state?.steps.map((s) => [s.key, s.status])).toEqual([
+      ['image', 'done'],
+      ['clone', 'running'],
+    ])
+    expect(state?.steps[0].label).toBe('Preparing image')
+    expect(state?.steps[0].note).toBe('cached image · 1.2s')
+  })
+
+  it('attaches output chunks to the transition-opened step', () => {
+    const state = deriveSandboxState(
+      [
+        rec('sandbox_phase', { phase: 'clone', status: 'started' }),
+        rec('sandbox_output', { phase: 'clone', step: 'o/r', chunk: 0, lines: ['HEAD is now at x'] }),
+        rec('sandbox_output', { phase: 'clone', step: 'o/r', chunk: 1, lines: ['done'] }),
+      ],
+      0,
+    )
+    expect(state?.steps).toHaveLength(1)
+    expect(state?.steps[0].key).toBe('clone')
+    expect(state?.steps[0].lines).toEqual(['HEAD is now at x', 'done'])
+  })
+
+  it('keys per-step transitions (hooks) separately and labels them as hooks', () => {
+    const state = deriveSandboxState(
+      [
+        rec('sandbox_phase', { phase: 'hooks', step: 'post_clone', status: 'started' }),
+        rec('sandbox_output', { phase: 'hooks', step: 'post_clone', chunk: 0, lines: ['npm ci'] }),
+        rec('sandbox_phase', {
+          phase: 'hooks',
+          step: 'post_clone',
+          status: 'completed',
+          duration_ms: 800,
+        }),
+      ],
+      0,
+    )
+    expect(state?.steps.map((s) => s.key)).toEqual(['hooks:post_clone'])
+    expect(state?.steps[0].label).toBe('Post-clone setup')
+    expect(state?.steps[0].status).toBe('done')
+    expect(state?.steps[0].note).toBe('800ms')
+    expect(state?.steps[0].lines).toEqual(['npm ci'])
+  })
+
+  it('marks a failed transition and keeps its duration', () => {
+    const state = deriveSandboxState(
+      [
+        rec('sandbox_phase', { phase: 'setup', status: 'started' }),
+        rec('sandbox_phase', { phase: 'setup', status: 'failed', duration_ms: 4000 }),
+      ],
+      0,
+    )
+    expect(state?.steps[0].status).toBe('failed')
+    expect(sandboxStepLine(state!.steps[0])).toBe('Running setup failed · 4.0s')
+  })
+
+  it('renders unknown phases generically (open vocabulary)', () => {
+    const state = deriveSandboxState(
+      [rec('sandbox_phase', { phase: 'warmup', status: 'started' })],
+      0,
+    )
+    expect(state?.steps[0].label).toBe('Warmup')
+  })
+
+  it('infers steps from bare output chunks (feeds without transitions)', () => {
     const state = deriveSandboxState(
       [
         rec('sandbox_starting'),
@@ -32,52 +113,60 @@ describe('deriveSandboxState', () => {
       ],
       0,
     )
-    expect(state).not.toBeNull()
-    expect(state?.ready).toBe(false)
-    expect(state?.steps.map((s) => s.step)).toEqual(['setup', 'post_clone'])
+    expect(state?.steps.map((s) => [s.key, s.status])).toEqual([
+      ['setup', 'done'],
+      ['post_clone', 'running'],
+    ])
     expect(state?.steps[0].lines).toEqual(['a', 'b', 'c'])
     expect(state?.steps[0].label).toBe('Building image')
     expect(state?.steps[1].label).toBe('Post-clone setup')
-    expect(state?.steps[1].lines).toEqual(['d'])
   })
 
-  it('treats sandbox_phase as part of the sandbox family (marks the story seen)', () => {
-    const state = deriveSandboxState(
-      [rec('sandbox_phase', { phase: 'clone', status: 'started' })],
-      0,
-    )
-    expect(state).not.toBeNull()
-    expect(state?.steps).toHaveLength(0)
-    expect(state?.ready).toBe(false)
-  })
-
-  it('marks ready and keeps the steps once sandbox_ready lands', () => {
+  it('collects session-subject notes and closes on sandbox_ready with a summary', () => {
     const state = deriveSandboxState(
       [
-        rec('sandbox_starting'),
-        rec('sandbox_output', { phase: 'hooks', step: 'post_clone', chunk: 0, lines: ['x'] }),
-        rec('sandbox_ready', { repositories: ['o/r'], cache_tier: 'exact' }),
+        rec('session_scheduled', { source: 'cli' }),
+        rec('session_starting', { attempt: 0, wake_index: 0 }),
+        rec('sandbox_starting', { repositories: ['o/r'] }),
+        rec('sandbox_phase', { phase: 'image', status: 'started' }),
+        rec('sandbox_ready', {
+          repositories: ['o/r'],
+          cache_tier: 'exact',
+          phase_timings: { image: 1.5, clone: 27.5 },
+        }),
       ],
       0,
     )
+    expect(state?.notes.map((n) => n.text)).toEqual(['Session scheduled', 'Session starting…'])
     expect(state?.ready).toBe(true)
-    expect(state?.steps).toHaveLength(1)
+    expect(state?.readyLine).toBe('Sandbox ready · cached image · 29s')
+    // A phase still open at ready closes as done.
+    expect(state?.steps[0].status).toBe('done')
   })
 
-  it('resets on a new sandbox_starting so a wake tells a fresh story', () => {
+  it('starts a fresh story on a wake and notes it', () => {
     const state = deriveSandboxState(
       [
+        rec('session_scheduled', { source: 'cli' }),
+        rec('session_starting', { attempt: 0, wake_index: 0 }),
         rec('sandbox_starting'),
         rec('sandbox_output', { phase: 'setup', chunk: 0, lines: ['old'] }),
         rec('sandbox_ready', {}),
+        rec('session_idle', {}),
+        rec('session_starting', { attempt: 0, wake_index: 1 }),
         rec('sandbox_starting'),
-        rec('sandbox_output', { phase: 'hooks', step: 'post_start', chunk: 0, lines: ['new'] }),
+        rec('sandbox_phase', { phase: 'restore', status: 'started' }),
+        rec('session_resumed', { wake_index: 1 }),
       ],
       0,
     )
+    expect(state?.notes.map((n) => n.text)).toEqual([
+      'Waking the session…',
+      'Resumed the conversation',
+    ])
     expect(state?.ready).toBe(false)
-    expect(state?.steps.map((s) => s.step)).toEqual(['post_start'])
-    expect(state?.steps[0].lines).toEqual(['new'])
+    expect(state?.steps.map((s) => s.key)).toEqual(['restore'])
+    expect(state?.steps[0].label).toBe('Restoring workspace')
   })
 
   it('ignores records at or below the render cursor (--no-records)', () => {
@@ -87,26 +176,35 @@ describe('deriveSandboxState', () => {
   })
 })
 
-describe('sandboxPhaseLine', () => {
-  it('is null with no state or no steps yet', () => {
-    expect(sandboxPhaseLine(null)).toBeNull()
-    expect(sandboxPhaseLine({ steps: [], ready: false })).toBeNull()
+describe('sandboxStepLine', () => {
+  const step = (over: Partial<SandboxStep>): SandboxStep => ({
+    key: 'clone',
+    label: 'Fetching repositories',
+    status: 'running',
+    note: null,
+    lines: [],
+    inferred: false,
+    ...over,
   })
 
-  it('shows only the current phase with its latest log line', () => {
-    expect(
-      sandboxPhaseLine({
-        steps: [
-          { step: 'setup', label: 'Building image', lines: ['a'] },
-          { step: 'post_clone', label: 'Post-clone setup', lines: ['bun install', 'done'] },
-        ],
-        ready: false,
-      }),
-    ).toBe('Post-clone setup… · done')
+  it('shows a running step with its latest output line', () => {
+    expect(sandboxStepLine(step({}))).toBe('Fetching repositories…')
+    expect(sandboxStepLine(step({ lines: ['a', 'HEAD is now at x'] }))).toBe(
+      'Fetching repositories… · HEAD is now at x',
+    )
   })
 
-  it('rewrites to Ready! once the box is up', () => {
-    expect(sandboxPhaseLine({ steps: [], ready: true })).toBe('Ready!')
+  it('shows a done step with its closing note', () => {
+    expect(sandboxStepLine(step({ status: 'done' }))).toBe('Fetching repositories')
+    expect(sandboxStepLine(step({ status: 'done', note: 'cached image · 1.2s' }))).toBe(
+      'Fetching repositories · cached image · 1.2s',
+    )
+  })
+
+  it('says failed', () => {
+    expect(sandboxStepLine(step({ status: 'failed', note: '4.0s' }))).toBe(
+      'Fetching repositories failed · 4.0s',
+    )
   })
 })
 
