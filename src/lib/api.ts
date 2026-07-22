@@ -36,7 +36,6 @@ import type {
   ListSentryOrganizationsResponse,
   ListSessionRecordsResponse,
   ListSessionTurnsResponse,
-  ListSessionTranscriptsResponse,
   ListSlackChannelsResponse,
   ListSlackMembersResponse,
   PutAgentDefaultRequest,
@@ -54,11 +53,7 @@ import type {
   StartAgentSessionRequest,
   UsageDashboard,
   WhoAmI,
-  GetSandboxBuildLogsResponse,
-  ListSandboxBuildsResponse,
-  SandboxBuild,
-  SandboxBuildLogLine,
-  StartSandboxBuildRequest,
+  GetSessionLogResponse,
 } from './types'
 
 // Thin REST client over the public `/v1` API. The session-stream surface
@@ -235,14 +230,11 @@ export class ApiClient {
     return this.request('GET', `/v1/sessions/${encodeURIComponent(sessionId)}/turns`)
   }
 
-  // The session's raw transcripts — one .jsonl.gz per process — each with a
-  // short-lived presigned download URL. Fetch the URL immediately; the JSON
-  // API never carries the bytes.
-  getSessionTranscripts(sessionId: string): Promise<ListSessionTranscriptsResponse> {
-    return this.request(
-      'GET',
-      `/v1/sessions/${encodeURIComponent(sessionId)}/transcripts`,
-    )
+  // The session-log manifest: the complete history archived into seq-ranged
+  // .jsonl.gz segments, each with a short-lived presigned download URL. Fetch
+  // the URLs immediately; the JSON API never carries the bytes.
+  getSessionLog(sessionId: string): Promise<GetSessionLogResponse> {
+    return this.request('GET', `/v1/sessions/${encodeURIComponent(sessionId)}/log`)
   }
 
   syncAgentSession(req: SyncAgentSessionRequest): Promise<SyncAgentSessionResponse> {
@@ -402,42 +394,6 @@ export class ApiClient {
       `/v1/sandboxes/variables/${encodeURIComponent(name)}`,
     )
     return res.variables
-  }
-
-  // ----------------------------- sandbox builds ---------------------------
-  // "docker build" for the Ellipsis sandbox (test a config's environment
-  // definition, streamed logs, cache pre-warm on success).
-
-  startSandboxBuild(request: StartSandboxBuildRequest): Promise<SandboxBuild> {
-    return this.request('POST', '/v1/sandboxes/builds', request)
-  }
-
-  async listSandboxBuilds(limit?: number): Promise<SandboxBuild[]> {
-    const res = await this.request<ListSandboxBuildsResponse>(
-      'GET',
-      '/v1/sandboxes/builds',
-      undefined,
-      { limit },
-    )
-    return res.builds
-  }
-
-  getSandboxBuild(buildId: string): Promise<SandboxBuild> {
-    return this.request('GET', `/v1/sandboxes/builds/${encodeURIComponent(buildId)}`)
-  }
-
-  async getSandboxBuildLogs(
-    buildId: string,
-    afterSeq?: number,
-    limit?: number,
-  ): Promise<SandboxBuildLogLine[]> {
-    const res = await this.request<GetSandboxBuildLogsResponse>(
-      'GET',
-      `/v1/sandboxes/builds/${encodeURIComponent(buildId)}/logs`,
-      undefined,
-      { after_seq: afterSeq, limit },
-    )
-    return res.lines
   }
 
   // ---------------------------- agent templates ---------------------------

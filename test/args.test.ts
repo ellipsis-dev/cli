@@ -56,12 +56,13 @@ describe('collectSource / collectStatus / parseScope', () => {
     expect(collectSource('cli', collectSource('laptop', []))).toEqual(['laptop', 'cli'])
     expect(collectStatus('completed', [])).toEqual(['completed'])
     expect(parseScope('recaps')).toBe('recaps')
+    expect(parseScope('records')).toBe('records')
   })
 
   it('reject unknown values listing the valid ones', () => {
     expect(() => collectSource('slack', [])).toThrow(/source must be one of: laptop, react/)
     expect(() => collectStatus('done', [])).toThrow(/status must be one of: scheduled/)
-    expect(() => parseScope('all')).toThrow(/scope must be one of: steps, recaps, both/)
+    expect(() => parseScope('all')).toThrow(/scope must be one of: records, recaps, both/)
   })
 })
 

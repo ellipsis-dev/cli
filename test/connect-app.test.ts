@@ -22,29 +22,40 @@ describe('deriveSandboxState', () => {
     expect(deriveSandboxState([rec('assistant', {}, 'claude_code')], 0)).toBeNull()
   })
 
-  it('accumulates chunked setup output into one step per hook, in order', () => {
+  it('accumulates chunked output into one step per step key, in order', () => {
     const state = deriveSandboxState(
       [
         rec('sandbox_starting'),
-        rec('sandbox_setup_output', { hook: 'image.setup', chunk: 0, lines: ['a'] }),
-        rec('sandbox_setup_output', { hook: 'image.setup', chunk: 1, lines: ['b', 'c'] }),
-        rec('sandbox_setup_output', { hook: 'post_clone', chunk: 0, lines: ['d'] }),
+        rec('sandbox_output', { phase: 'setup', chunk: 0, lines: ['a'] }),
+        rec('sandbox_output', { phase: 'setup', chunk: 1, lines: ['b', 'c'] }),
+        rec('sandbox_output', { phase: 'hooks', step: 'post_clone', chunk: 0, lines: ['d'] }),
       ],
       0,
     )
     expect(state).not.toBeNull()
     expect(state?.ready).toBe(false)
-    expect(state?.steps.map((s) => s.hook)).toEqual(['image.setup', 'post_clone'])
+    expect(state?.steps.map((s) => s.step)).toEqual(['setup', 'post_clone'])
     expect(state?.steps[0].lines).toEqual(['a', 'b', 'c'])
     expect(state?.steps[0].label).toBe('Building image')
+    expect(state?.steps[1].label).toBe('Post-clone setup')
     expect(state?.steps[1].lines).toEqual(['d'])
+  })
+
+  it('treats sandbox_phase as part of the sandbox family (marks the story seen)', () => {
+    const state = deriveSandboxState(
+      [rec('sandbox_phase', { phase: 'clone', status: 'started' })],
+      0,
+    )
+    expect(state).not.toBeNull()
+    expect(state?.steps).toHaveLength(0)
+    expect(state?.ready).toBe(false)
   })
 
   it('marks ready and keeps the steps once sandbox_ready lands', () => {
     const state = deriveSandboxState(
       [
         rec('sandbox_starting'),
-        rec('sandbox_setup_output', { hook: 'post_clone', chunk: 0, lines: ['x'] }),
+        rec('sandbox_output', { phase: 'hooks', step: 'post_clone', chunk: 0, lines: ['x'] }),
         rec('sandbox_ready', { repositories: ['o/r'], cache_tier: 'exact' }),
       ],
       0,
@@ -57,15 +68,15 @@ describe('deriveSandboxState', () => {
     const state = deriveSandboxState(
       [
         rec('sandbox_starting'),
-        rec('sandbox_setup_output', { hook: 'image.setup', chunk: 0, lines: ['old'] }),
+        rec('sandbox_output', { phase: 'setup', chunk: 0, lines: ['old'] }),
         rec('sandbox_ready', {}),
         rec('sandbox_starting'),
-        rec('sandbox_setup_output', { hook: 'post_start', chunk: 0, lines: ['new'] }),
+        rec('sandbox_output', { phase: 'hooks', step: 'post_start', chunk: 0, lines: ['new'] }),
       ],
       0,
     )
     expect(state?.ready).toBe(false)
-    expect(state?.steps.map((s) => s.hook)).toEqual(['post_start'])
+    expect(state?.steps.map((s) => s.step)).toEqual(['post_start'])
     expect(state?.steps[0].lines).toEqual(['new'])
   })
 
@@ -86,8 +97,8 @@ describe('sandboxPhaseLine', () => {
     expect(
       sandboxPhaseLine({
         steps: [
-          { hook: 'image.setup', label: 'Building image', lines: ['a'] },
-          { hook: 'post_clone', label: 'Post-clone setup', lines: ['bun install', 'done'] },
+          { step: 'setup', label: 'Building image', lines: ['a'] },
+          { step: 'post_clone', label: 'Post-clone setup', lines: ['bun install', 'done'] },
         ],
         ready: false,
       }),
@@ -100,10 +111,13 @@ describe('sandboxPhaseLine', () => {
 })
 
 describe('hookPhrase', () => {
-  it('maps known hooks and passes unknown ones through', () => {
+  it('maps known step/phase keys and passes unknown ones through', () => {
+    expect(hookPhrase('setup')).toBe('Building image')
     expect(hookPhrase('image.setup')).toBe('Building image')
+    expect(hookPhrase('clone')).toBe('Fetching repositories')
     expect(hookPhrase('post_clone')).toBe('Post-clone setup')
-    expect(hookPhrase('custom.hook')).toBe('custom.hook')
+    expect(hookPhrase('post_start')).toBe('Post-start setup')
+    expect(hookPhrase('custom.step')).toBe('custom.step')
   })
 })
 

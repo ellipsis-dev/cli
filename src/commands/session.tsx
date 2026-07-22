@@ -1,6 +1,6 @@
 import type { Command } from 'commander'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { extname, join } from 'node:path'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { extname } from 'node:path'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { parse as parseYaml } from 'yaml'
 import { ApiClient } from '../lib/api'
@@ -40,10 +40,10 @@ import type {
   AgentSessionStatus,
   GithubAccountSnippet,
   ReplayAgentSessionRequest,
+  SessionLogSegment,
   SessionRecord,
   SessionSearchResult,
   SessionSearchScope,
-  SessionTranscript,
   StartAgentSessionRequest,
   SyncAgentSessionRequest,
 } from '../lib/types'
@@ -383,7 +383,7 @@ export function registerSession(program: Command): void {
     .option('-s, --source <source>', 'filter by source (repeatable)', collectSource, [] as string[])
     .option('-r, --repo <name>', 'only sessions on this repository ("owner/name" or a bare name)')
     .option('--status <status>', 'filter by session status (repeatable)', collectStatus, [] as string[])
-    .option('--scope <scope>', 'what to search: steps, recaps, or both', parseScope, 'both')
+    .option('--scope <scope>', 'what to search: records, recaps, or both', parseScope, 'both')
     .option('--session <id>', 'restrict the search to this session (repeatable)', collect, [] as string[])
     .option('--since <when>', 'only sessions at or after this time', (v: string) => parseWhen(v))
     .option('--until <when>', 'only sessions at or before this time', (v: string) => parseWhen(v))
@@ -436,7 +436,7 @@ export function registerSession(program: Command): void {
             }
           }
           console.log(
-            '\nInspect one: agent session get <id>; full transcript: agent session records <id>',
+            '\nInspect one: agent session get <id>; full log: agent session log <id>',
           )
         })
       },
@@ -465,70 +465,51 @@ export function registerSession(program: Command): void {
     })
 
   session
-    .command('transcript <sessionId>')
-    .description(
-      "Download a session's raw transcript files (GET /v1/sessions/{id}/transcripts)",
-    )
+    .command('log <sessionId>')
+    .description("Download a session's complete log (GET /v1/sessions/{id}/log)")
     .option('-o, --output <path>', 'write to a file instead of stdout')
-    .option('--process <processId>', 'pick a specific process (retries have several)')
-    .option('--all', "download every process's transcript")
-    .option('-d, --dir <dir>', 'directory for --all downloads', '.')
-    .option('--json', 'print the metadata response (incl. download URLs), download nothing')
-    .option('--gzip', 'keep the .jsonl.gz bytes as-is (skip gunzip)')
+    .option('--gzip', 'keep the concatenated .jsonl.gz bytes as-is (skip gunzip)')
+    .option('--json', 'print the log manifest (incl. segment download URLs), download nothing')
     .action(
       async (
         sessionId: string,
         opts: {
           output?: string
-          process?: string
-          all?: boolean
-          dir: string
-          json?: boolean
           gzip?: boolean
+          json?: boolean
         },
       ) => {
         await runAction(async () => {
-          if (opts.all && (opts.process || opts.output)) {
-            throw new Error('--all cannot be combined with --process or -o')
-          }
-          const res = await new ApiClient().getSessionTranscripts(sessionId)
+          const manifest = await new ApiClient().getSessionLog(sessionId)
           if (opts.json) {
-            printJson(res)
+            printJson(manifest)
             return
           }
-          if (res.transcripts.length === 0) {
-            console.log('No transcripts stored for this session.')
+          if (manifest.segments.length === 0) {
+            console.error('No log segments archived for this session yet.')
             return
           }
-          const ext = opts.gzip ? 'jsonl.gz' : 'jsonl'
-          if (opts.all) {
-            mkdirSync(opts.dir, { recursive: true })
-            for (const t of res.transcripts) {
-              const path = join(opts.dir, `${t.process_id}.${ext}`)
-              writeFileSync(path, await fetchTranscript(t, { gzip: opts.gzip }))
-              console.log(path)
-            }
-            return
+          // Fetch every segment in feed order and concatenate the raw gzip
+          // members: their concatenation is itself a valid multi-member
+          // .jsonl.gz, so one gunzip yields the whole log.
+          const parts: Buffer[] = []
+          for (const segment of manifest.segments) {
+            parts.push(await fetchLogSegment(segment))
           }
-          // Default: the latest process (the list is in process-creation
-          // order, so retries supersede the attempts before them).
-          let transcript = res.transcripts[res.transcripts.length - 1]!
-          if (opts.process) {
-            const picked = res.transcripts.find((t) => t.process_id === opts.process)
-            if (!picked) {
-              throw new Error(
-                `no transcript for process '${opts.process}' — available: ` +
-                  res.transcripts.map((t) => t.process_id).join(', '),
-              )
-            }
-            transcript = picked
-          }
-          const data = await fetchTranscript(transcript, { gzip: opts.gzip })
+          const gz = Buffer.concat(parts)
+          const data = opts.gzip ? gz : gunzipSync(gz)
           if (opts.output) {
             writeFileSync(opts.output, data)
             console.log(opts.output)
           } else {
             process.stdout.write(data)
+          }
+          if (!manifest.caught_up) {
+            console.error(
+              `note: the archive trails the live feed (archived through ` +
+                `${manifest.archived_through_feed_seq} of ${manifest.latest_feed_seq}); ` +
+                're-run shortly for the complete log',
+            )
           }
         })
       },
@@ -904,8 +885,6 @@ function renderFrameHuman(frame: StreamFrame, statusWord?: string): void {
       }
       break
     }
-    case 'messages':
-      break // queued-chip bookkeeping; nothing to log line-orientedly
     case 'error':
       console.error(`error: ${(frame as { message?: string }).message ?? 'stream error'}`)
       break
@@ -1124,8 +1103,8 @@ export async function resolveAuthorId(api: ApiClient, login: string): Promise<nu
 
 // One search result as display lines: a header (id, status, author, age,
 // matched arms), then the best snippet indented. The recap snippet wins over
-// step hits when both matched; step_hit_count renders as a trailing count so
-// "many hits" is visible without dumping every step. Exported for tests.
+// record hits when both matched; record_hit_count renders as a trailing count
+// so "many hits" is visible without dumping every record. Exported for tests.
 export function formatSearchResult(
   result: SessionSearchResult,
   users: Record<string, GithubAccountSnippet>,
@@ -1141,10 +1120,10 @@ export function formatSearchResult(
     `matched: ${result.matched.join(', ')}`,
   ].join('  ')
   const lines = [header]
-  const snippet = result.recap_snippet ?? result.step_hits[0]?.snippet
+  const snippet = result.recap_snippet ?? result.record_hits[0]?.snippet
   if (snippet) lines.push(`    ${oneLine(snippet, 200)}`)
-  if (result.step_hit_count > 1) {
-    lines.push(`    ${result.step_hit_count} matching steps`)
+  if (result.record_hit_count > 1) {
+    lines.push(`    ${result.record_hit_count} matching records`)
   }
   return lines
 }
@@ -1153,26 +1132,16 @@ export function formatSearchResult(
 // connect`); re-exported here for existing importers and tests.
 export { formatStepLine, recordText }
 
-// Pull a transcript from its presigned S3 URL (bare fetch — the signature in
-// the URL is the credential) and gunzip unless the caller wants the raw
-// .jsonl.gz bytes. A warning for a failed final write goes to stderr so the
-// default stdout stream stays pure JSONL.
-export async function fetchTranscript(
-  transcript: SessionTranscript,
-  opts: { gzip?: boolean },
-): Promise<Buffer> {
-  if (transcript.write_status === 'failed') {
-    console.error(
-      `warning: ${transcript.process_id}'s final transcript write failed — ` +
-        'the tail past the last periodic flush may be missing',
-    )
-  }
-  const res = await fetch(transcript.download_url)
+// Pull one session-log segment's raw .jsonl.gz bytes from its presigned S3 URL
+// (bare fetch — the signature in the URL is the credential). Returns the gzip
+// member as-is; the caller concatenates segments and gunzips once.
+export async function fetchLogSegment(segment: SessionLogSegment): Promise<Buffer> {
+  const res = await fetch(segment.download_url)
   if (!res.ok) {
     if (res.status === 404) {
       throw new Error(
-        `transcript for ${transcript.process_id} is gone from storage — ` +
-          'it was likely deleted by your log retention setting',
+        `a log segment (feed_seq ${segment.start_feed_seq}–${segment.end_feed_seq}) is ` +
+          'gone from storage — it was likely deleted by your log retention setting',
       )
     }
     throw new Error(
@@ -1182,8 +1151,7 @@ export async function fetchTranscript(
           : ''),
     )
   }
-  const raw = Buffer.from(await res.arrayBuffer())
-  return opts.gzip ? raw : gunzipSync(raw)
+  return Buffer.from(await res.arrayBuffer())
 }
 
 function sleep(ms: number): Promise<void> {
