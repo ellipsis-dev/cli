@@ -172,10 +172,13 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // ctrl+s releases it for copy/paste and re-arms it — the terminal's own
   // bypass (shift-drag, or option-drag in iTerm2) works either way.
   const [mouseCapture, setMouseCapture] = useState(true)
-  // Messages you've sent that the server hasn't acknowledged yet — shown as a
-  // queued region below the composer, exactly like Claude Code. From the first
+  // Messages you've sent that the server hasn't acknowledged yet — shown
+  // IMMEDIATELY as dim rows at the bottom of the transcript, so a send always
+  // appears in the chat the moment you hit enter. From the first
   // acknowledgement on (a messages frame or the user-echo record carrying the
-  // id), the server's own pending rows (serverQueued) are the queued truth.
+  // id), the server's own pending rows (serverQueued) are the queued truth,
+  // and once the agent consumes the message its echo record lands as the
+  // real (full-colour) transcript row.
   const [queued, setQueued] = useState<QueuedSend[]>([])
 
   // Whether the sandbox ever reached a connectable state, so a terminal status
@@ -390,20 +393,39 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // transcript — see pendingToolCalls), with a per-burst seconds ticker so a
   // long Bash call reads "Running Bash(pytest…)… (34s)" instead of dead air.
   const pendingTools = useMemo(() => pendingToolCalls(items), [items])
-  // The queued region: the server's pending inbox rows are the truth; a local
-  // chip shows only while the server doesn't yet cover it (multiset-subtracted
-  // by text so a send never renders twice during the handoff window).
-  const queuedDisplay = useMemo(() => {
+  // Which silence a started-but-quiet turn is in ('boot': Claude Code is
+  // still starting in the sandbox; 'turn': the warm agent between records),
+  // for the fallback live line's label.
+  const awaitingAgent = useMemo(() => awaitingAgentPhase(snapshot.records), [snapshot.records])
+
+  // Sends the agent took mid-gap: delivered to the agent but its user-echo
+  // transcript record hasn't landed yet (the echo can lag by a whole sandbox
+  // wake). Rendered as full-colour user rows until the echo replaces them.
+  const acceptedSends = useMemo(
+    () => deliveredUnechoedSends(snapshot.records),
+    [snapshot.records],
+  )
+
+  // Every in-flight send, oldest pipeline stage last, at the transcript's
+  // bottom edge: 'accepted' (delivered, awaiting its echo record — full
+  // colour), 'queued' (the server's pending inbox — dim), 'sending' (the
+  // POST is in flight — dim). Local chips are multiset-subtracted by text so
+  // a send never renders twice during the received-record handoff window.
+  const inFlightSends = useMemo(() => {
     const counts = new Map<string, number>()
-    for (const b of serverQueued) counts.set(b, (counts.get(b) ?? 0) + 1)
+    for (const m of serverQueued) counts.set(m, (counts.get(m) ?? 0) + 1)
     const extras: string[] = []
     for (const q of queued) {
       const n = counts.get(q.text) ?? 0
       if (n > 0) counts.set(q.text, n - 1)
       else extras.push(q.text)
     }
-    return [...serverQueued, ...extras]
-  }, [serverQueued, queued])
+    return [
+      ...acceptedSends.map((m) => ({ key: m.id, text: m.body, state: 'accepted' as const })),
+      ...serverQueued.map((text, i) => ({ key: `sq${i}`, text, state: 'queued' as const })),
+      ...extras.map((text, i) => ({ key: `lq${i}`, text, state: 'sending' as const })),
+    ]
+  }, [acceptedSends, serverQueued, queued])
   const [toolElapsed, setToolElapsed] = useState(0)
   const pendingToolKey = pendingTools.length > 0 ? pendingTools[0].key : null
   useEffect(() => {
@@ -532,7 +554,16 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     openedKeys,
     termCols,
   ])
-  const navKeys = entries.keys
+  // Everything ↑/↓ can actually land on: the entry list minus turn summaries
+  // ("turn complete · 3s · $0.03"), which are informational trailers, not
+  // content — the selection walk skips them (they still render and scroll).
+  const navKeys = useMemo(
+    () =>
+      entries.keys.filter(
+        (k) => k === 'sandbox' || entries.byKey.get(k)?.kind !== 'summary',
+      ),
+    [entries],
+  )
 
   // Rows available to the transcript viewport: the window minus the shell
   // row, top padding, the footer (composer + meta + queued + notice), the
@@ -542,22 +573,30 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const viewBudget = useMemo(() => {
     const width = Math.max(20, termCols - 3)
     const composerRows = inputActive ? 3 + composer.text.split('\n').length : 0
-    const liveReserve =
-      statusWord === 'working'
-        ? 2 + (snapshot.liveText ? Math.ceil(snapshot.liveText.length / width) + 1 : 0)
-        : 0
-    const footerRows =
-      1 + (notice ? 1 : 0) + queuedDisplay.length + composerRows + 1 /* footer margin */
-    return Math.max(3, termRows - 1 - TOP_PAD - footerRows - liveReserve - 2)
+    const liveReserve = working
+      ? 2 + (snapshot.liveText ? Math.ceil(snapshot.liveText.length / width) + 1 : 0)
+      : 0
+    // The in-flight sends render inside the transcript area (below the
+    // slice), so their rows come out of the viewport budget: spacer +
+    // wrapped lines each.
+    const queuedReserve = inFlightSends.reduce(
+      (acc, q) =>
+        acc +
+        1 +
+        q.text.split('\n').reduce((a, l) => a + Math.max(1, Math.ceil(l.length / width)), 0),
+      0,
+    )
+    const footerRows = 1 + (notice ? 1 : 0) + composerRows + 1 /* footer margin */
+    return Math.max(3, termRows - 1 - TOP_PAD - footerRows - liveReserve - queuedReserve - 2)
   }, [
     termRows,
     termCols,
     inputActive,
     composer.text,
-    statusWord,
+    working,
     snapshot.liveText,
     notice,
-    queuedDisplay.length,
+    inFlightSends,
   ])
 
   // The viewport slice for a given scroll anchor (pure math in viewportSlice;
@@ -585,11 +624,14 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     [sliceFor, scrollKey, entries, viewBudget],
   )
 
-  // Snap the viewport so the entry at idx is in frame: above the window it
+  // Snap the viewport so the given entry is in frame: above the window it
   // becomes the top edge, below it becomes the bottom edge (bottom-pinned
-  // when it's the newest entry).
+  // when it's the newest entry). Keyed, because navigation walks navKeys
+  // (which skips unselectable entries) while the viewport slices entries.
   const ensureVisible = useCallback(
-    (idx: number): void => {
+    (key: string): void => {
+      const idx = entries.keys.indexOf(key)
+      if (idx < 0) return
       const cur = sliceFor(scrollKey)
       if (idx < cur.start) {
         setScrollKey(entries.keys[idx])
@@ -689,7 +731,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           const target = idx === -1 ? navKeys.length - 1 : Math.max(0, idx - 1)
           if (navKeys.length > 0) {
             setNavKey(navKeys[target])
-            ensureVisible(target)
+            ensureVisible(navKeys[target])
           }
           return
         }
@@ -699,7 +741,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             setScrollKey(null)
           } else {
             setNavKey(navKeys[idx + 1])
-            ensureVisible(idx + 1)
+            ensureVisible(navKeys[idx + 1])
           }
           return
         }
@@ -890,10 +932,26 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                 : ''}
             </Text>
           </Text>
-          {/* Levels 2+3: the sandbox line and its phases — always visible
-              while starting, behind → once the session is ready. */}
-          {sandbox && sandbox.sandboxLine && (!sandbox.done || sandboxOpen || infraActivity) && (
+          {/* Levels 2+3: the config line, the sandbox line and its phases —
+              always visible while starting, behind → once the session is
+              ready. */}
+          {sandbox &&
+            (sandbox.configName || sandbox.sandboxLine) &&
+            (!sandbox.done || sandboxOpen || infraActivity) && (
             <Box flexDirection="column">
+              {sandbox.configName && (
+                <Text>
+                  {'  '}
+                  <Text color="green">✓</Text>{' '}
+                  <Text dimColor>
+                    Using {sandbox.configName}
+                    {sandbox.configCommitSha
+                      ? ` @ ${sandbox.configCommitSha.slice(0, 7)}`
+                      : ''}
+                  </Text>
+                </Text>
+              )}
+              {sandbox.sandboxLine && (
               <Text>
                 {'  '}
                 {sandbox.sandboxDone ? (
@@ -903,6 +961,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                 )}{' '}
                 <Text dimColor>{oneLine(sandbox.sandboxLine, 110)}</Text>
               </Text>
+              )}
               {sandbox.steps.map((step, i) => {
                 const running = step.status === 'running' && !sandbox.sandboxDone
                 const cursor = Math.min(stepCursor, sandbox.steps.length - 1)
@@ -1016,6 +1075,44 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             </Text>
           </Box>
         )}
+        {/* Your in-flight sends, at the chat's bottom edge the moment you hit
+            enter: dim ◆ rows stamped (sending…) while the POST is in flight,
+            (queued) once the server accepts, then FULL COLOUR the moment the
+            agent takes the message — it holds that spot through the echo gap
+            (which spans a whole sandbox wake) until the agent's own user-echo
+            transcript item replaces it. */}
+        {atBottom &&
+          inFlightSends.map((q) => (
+            <Box key={q.key} marginTop={1}>
+              <Box width={2} flexShrink={0}>
+                <Text color="cyan" dimColor={q.state !== 'accepted'}>
+                  ◆
+                </Text>
+              </Box>
+              <Text bold={q.state === 'accepted'} dimColor={q.state !== 'accepted'}>
+                {q.text}
+                {q.state === 'sending' ? ' (sending…)' : q.state === 'queued' ? ' (queued)' : ''}
+              </Text>
+            </Box>
+          ))}
+        {/* The fallback live line: the session is working but nothing else
+            says so — no tokens streaming, no tool pending, no infra startup
+            block ticking. This is the harness-boot dead air (a fresh
+            execution takes ~15-20s to start Claude Code before its first
+            event) and the between-records lull; without it a send looks
+            like the app hung. */}
+        {atBottom && working && !generating && !runningTool && !infraActivity && (
+          <Box marginTop={1}>
+            <Text>
+              <Text color="cyan">✻</Text>{' '}
+              <Text dimColor>
+                {awaitingAgent === 'boot' ? 'Starting the agent' : 'Working'}… (
+                {formatDuration(elapsed)}
+                {inputActive ? ' · esc to interrupt' : ''})
+              </Text>
+            </Text>
+          </Box>
+        )}
       </Box>
       <Box flexDirection="column" marginTop={1}>
         {notice && <Text dimColor>· {notice}</Text>}
@@ -1050,15 +1147,6 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                   : composer.text.slice(composer.cursor)
                 : ''}
             </Text>
-          </Box>
-        )}
-        {queuedDisplay.length > 0 && (
-          <Box flexDirection="column">
-            {queuedDisplay.map((text, i) => (
-              <Text key={`q${i}`} dimColor>
-                ⏳ queued · {text}
-              </Text>
-            ))}
           </Box>
         )}
         <Text dimColor>{metaLine}</Text>
@@ -1154,8 +1242,8 @@ export function estimateItemRows(item: TranscriptItem, width: number, clamp: boo
 }
 
 // Estimated rows of the startup block in its current shape: the headline,
-// plus — while starting or drilled into — the sandbox line, one row per
-// phase, the selected phase's open log lines, and the key hint.
+// plus — while starting or drilled into — the config line, the sandbox line,
+// one row per phase, the selected phase's open log lines, and the key hint.
 function sandboxBlockRows(
   sandbox: SandboxState | null,
   open: boolean,
@@ -1165,10 +1253,13 @@ function sandboxBlockRows(
 ): number {
   let rows = 1 // the headline
   const expanded =
-    sandbox != null && sandbox.sandboxLine != null && (!sandbox.done || open || infraActive)
+    sandbox != null &&
+    (sandbox.configName != null || sandbox.sandboxLine != null) &&
+    (!sandbox.done || open || infraActive)
   if (!expanded) return rows
+  if (sandbox.configName != null) rows += 1
   const steps = sandbox.steps
-  rows += 1 + steps.length
+  if (sandbox.sandboxLine != null) rows += 1 + steps.length
   if (open) rows += 1 // the key hint
   if (open && logsOpen && steps.length > 0) {
     const i = Math.min(stepCursor, steps.length - 1)
@@ -1245,6 +1336,13 @@ export type SandboxState = {
   // "Waking the session…", "Retrying…", "Session ready!").
   headline: string
   done: boolean
+  // The agent config resolved at scheduling, shown as its own child line
+  // under the headline (NOT in the headline, which the next lifecycle
+  // record replaces — a config baked in there flashes and vanishes).
+  configName: string | null
+  // The commit of the config file in the repo it's owned at (the sync
+  // provenance), when the backend sends it. Shortened for display.
+  configCommitSha: string | null
   // Level 2: the sandbox child line ("Sandbox starting…" or the
   // "Sandbox ready · cached image · 29s" summary), null before provisioning.
   sandboxLine: string | null
@@ -1253,13 +1351,79 @@ export type SandboxState = {
   steps: SandboxStep[]
 }
 
-// The structural slice of a session record the derivation needs (the SDK's
+// The structural slice of a session record the derivations need (the SDK's
 // SessionRecordWire is not exported from its store entry).
 type LifecycleRecordLike = {
   feed_seq: number
   source: string
   record_type: string
   payload: Record<string, unknown>
+  // The inbox message a user-echo transcript record answers for (§3.3).
+  session_message_id?: string | null
+}
+
+// Whether a turn has started that the agent process hasn't spoken for yet (a
+// turn_started record with no claude_code record after it), and which silence
+// it is: 'boot' when the harness has emitted NOTHING this execution — Claude
+// Code is still starting up in the sandbox, the ~15-20s dead air after a send
+// lands a fresh execution's first turn — vs 'turn', the warm agent working
+// between records. null when no turn is awaiting the agent. Drives the
+// fallback live line so a send never looks like the app hung. Pure, for tests.
+export function awaitingAgentPhase(
+  records: readonly LifecycleRecordLike[],
+): 'boot' | 'turn' | null {
+  let pending = false
+  let sawAgent = false
+  for (const r of records) {
+    if (r.source === 'claude_code') {
+      pending = false
+      sawAgent = true
+    } else if (r.source === 'lifecycle') {
+      if (r.record_type === 'turn_started') pending = true
+      else if (
+        r.record_type === 'session_starting' ||
+        r.record_type === 'session_retrying'
+      ) {
+        // A fresh execution: the harness must boot again before it speaks.
+        pending = false
+        sawAgent = false
+      }
+    }
+  }
+  if (!pending) return null
+  return sawAgent ? 'turn' : 'boot'
+}
+
+// Sends the agent has TAKEN but not yet echoed into the transcript: each
+// message_received body, walked through delivered/requeued transitions, minus
+// the ids whose user-echo record (session_message_id back-reference) has
+// landed. The store's pending set drops a message the instant it's delivered,
+// but the agent's echo record can lag by a whole sandbox wake — without this
+// bridge a send flashes and vanishes for the gap. Rendered as full-colour
+// user rows at the transcript's bottom edge (the mid-turn send is part of the
+// running turn, Claude Code-style). Pure, for tests.
+export function deliveredUnechoedSends(
+  records: readonly LifecycleRecordLike[],
+): { id: string; body: string }[] {
+  const received = new Map<string, string>()
+  const delivered = new Set<string>()
+  const echoed = new Set<string>()
+  for (const r of records) {
+    if (r.session_message_id != null) echoed.add(r.session_message_id)
+    if (r.source !== 'lifecycle') continue
+    const id = typeof r.payload.message_id === 'string' ? r.payload.message_id : null
+    if (!id) continue
+    if (r.record_type === 'message_received') {
+      if (!received.has(id))
+        received.set(id, typeof r.payload.body === 'string' ? r.payload.body : '')
+    } else if (r.record_type === 'message_delivered') delivered.add(id)
+    else if (r.record_type === 'message_requeued') delivered.delete(id)
+  }
+  const out: { id: string; body: string }[] = []
+  for (const [id, body] of received) {
+    if (delivered.has(id) && !echoed.has(id)) out.push({ id, body })
+  }
+  return out
 }
 
 function msLabel(ms: unknown): string | null {
@@ -1293,6 +1457,8 @@ export function deriveSandboxState(
   let seen = false
   let headline = 'Session starting…'
   let done = false
+  let configName: string | null = null
+  let configCommitSha: string | null = null
   let sandboxLine: string | null = null
   let sandboxDone = false
   let steps: SandboxStep[] = []
@@ -1301,8 +1467,12 @@ export function deriveSandboxState(
     const p = record.payload
     if (record.record_type === 'session_scheduled') {
       seen = true
-      const config = typeof p.config_name === 'string' && p.config_name ? p.config_name : null
-      headline = config ? `Session scheduled · ${config}…` : 'Session scheduled…'
+      headline = 'Session scheduled…'
+      configName = typeof p.config_name === 'string' && p.config_name ? p.config_name : null
+      configCommitSha =
+        typeof p.config_commit_sha === 'string' && p.config_commit_sha
+          ? p.config_commit_sha
+          : null
       done = false
     } else if (
       record.record_type === 'session_starting' ||
@@ -1408,7 +1578,9 @@ export function deriveSandboxState(
       done = true
     }
   }
-  return seen ? { headline, done, sandboxLine, sandboxDone, steps } : null
+  return seen
+    ? { headline, done, configName, configCommitSha, sandboxLine, sandboxDone, steps }
+    : null
 }
 
 // One timeline step as its collapsed display line: a running step shows its
@@ -1437,6 +1609,18 @@ function isCollapsible(item: TranscriptItem): boolean {
   )
 }
 
+// The sender icon in the 2-column gutter: ◆ (cyan) marks a message you sent
+// (the --prompt initial message included — it's a user message), ⏺ marks the
+// assistant's prose. Everything else keeps the SDK's glyph (● tool calls,
+// ⎿ results, ✻ thinking) or none. The › selection highlight replaces the
+// icon in the same slot, so a selected line always reads differently from
+// its resting state. Pure, for tests.
+export function gutterFor(item: TranscriptItem): string {
+  if (item.kind === 'user') return '◆'
+  if (item.kind === 'assistant') return '⏺'
+  return item.gutter ?? ''
+}
+
 // Colour + weight for each transcript item kind, matched loosely to Claude Code.
 function styleFor(item: TranscriptItem): {
   gutterColor?: string
@@ -1454,8 +1638,10 @@ function styleFor(item: TranscriptItem): {
         dim: !item.isError,
         bold: false,
       }
+    // User copy stays white like the assistant's (the ◆ icon marks the
+    // sender); cyan text always and only means "the selection is here".
     case 'user':
-      return { gutterColor: 'cyan', textColor: 'cyan', bold: true, dim: false }
+      return { gutterColor: 'cyan', bold: true, dim: false }
     case 'error':
       return { gutterColor: 'red', textColor: 'red', dim: false, bold: false }
     case 'summary':
@@ -1509,9 +1695,7 @@ const TranscriptLine = React.memo(function TranscriptLine({
           color={selected ? 'cyan' : gutterColor}
           dimColor={!selected && dim && !item.isError}
         >
-          {/* Unselected user turns swap the SDK's › gutter for a plain >,
-              so › on screen always means "the selection is here". */}
-          {selected ? '›' : item.gutter === '›' ? '>' : (item.gutter ?? '')}
+          {selected ? '›' : gutterFor(item)}
         </Text>
       </Box>
       <Box flexDirection="column" flexGrow={1}>

@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  awaitingAgentPhase,
   cursorLineDown,
   cursorLineUp,
+  deliveredUnechoedSends,
   deriveSandboxState,
   estimateItemRows,
   foldRun,
+  gutterFor,
   hookPhrase,
   sandboxStepLine,
   viewportSlice,
@@ -52,12 +55,40 @@ describe('deriveSandboxState', () => {
     expect(ready?.sandboxDone).toBe(true)
   })
 
-  it('carries the config name on the scheduled headline', () => {
+  it('carries the config name as its own child line, not in the headline', () => {
     const state = deriveSandboxState(
       [rec('session_scheduled', { source: 'cli', config_name: 'deployer' })],
       0,
     )
-    expect(state?.headline).toBe('Session scheduled · deployer…')
+    expect(state?.headline).toBe('Session scheduled…')
+    expect(state?.configName).toBe('deployer')
+    expect(state?.configCommitSha).toBeNull()
+  })
+
+  it('carries the config commit sha when the backend sends it', () => {
+    const state = deriveSandboxState(
+      [
+        rec('session_scheduled', {
+          source: 'cli',
+          config_name: 'deployer',
+          config_commit_sha: 'abc1234def5678',
+        }),
+      ],
+      0,
+    )
+    expect(state?.configCommitSha).toBe('abc1234def5678')
+  })
+
+  it('keeps the config name across the starting transition (no flash)', () => {
+    const state = deriveSandboxState(
+      [
+        rec('session_scheduled', { source: 'cli', config_name: 'deployer' }),
+        rec('session_starting', { attempt: 0, wake_index: 0 }),
+      ],
+      0,
+    )
+    expect(state?.headline).toBe('Session starting…')
+    expect(state?.configName).toBe('deployer')
   })
 
   it('builds the phase timeline from sandbox_phase transitions', () => {
@@ -283,6 +314,107 @@ describe('sandboxStepLine', () => {
     expect(sandboxStepLine(step({ status: 'failed', note: '4.0s' }))).toBe(
       'Fetching repositories failed · 4.0s',
     )
+  })
+})
+
+describe('awaitingAgentPhase', () => {
+  it('is null with no pending turn', () => {
+    expect(awaitingAgentPhase([])).toBeNull()
+    expect(awaitingAgentPhase([rec('session_starting'), rec('sandbox_ready')])).toBeNull()
+  })
+
+  it("reports 'boot' for a fresh execution's first turn (Claude Code starting)", () => {
+    expect(
+      awaitingAgentPhase([rec('session_starting'), rec('sandbox_ready'), rec('turn_started')]),
+    ).toBe('boot')
+  })
+
+  it("reports 'turn' once the harness has spoken this execution", () => {
+    expect(
+      awaitingAgentPhase([
+        rec('session_starting'),
+        rec('turn_started'),
+        rec('assistant', {}, 'claude_code'),
+        rec('turn_started'),
+      ]),
+    ).toBe('turn')
+  })
+
+  it('resets to boot on a wake (a fresh execution boots the harness again)', () => {
+    expect(
+      awaitingAgentPhase([
+        rec('turn_started'),
+        rec('assistant', {}, 'claude_code'),
+        rec('session_starting'),
+        rec('turn_started'),
+      ]),
+    ).toBe('boot')
+  })
+
+  it('clears when a claude_code record answers the turn', () => {
+    expect(
+      awaitingAgentPhase([rec('turn_started'), rec('assistant', {}, 'claude_code')]),
+    ).toBeNull()
+  })
+})
+
+describe('deliveredUnechoedSends', () => {
+  const received = (id: string, body: string) => rec('message_received', { message_id: id, body })
+  const delivered = (id: string) => rec('message_delivered', { message_id: id })
+  const requeued = (id: string) => rec('message_requeued', { message_id: id })
+  const echo = (id: string | null) => ({
+    ...rec('user', {}, 'claude_code'),
+    session_message_id: id,
+  })
+
+  it('bridges the gap between delivery and the user-echo record', () => {
+    expect(deliveredUnechoedSends([received('m1', 'hi'), delivered('m1')])).toEqual([
+      { id: 'm1', body: 'hi' },
+    ])
+  })
+
+  it('retires the send once its echo record lands', () => {
+    expect(deliveredUnechoedSends([received('m1', 'hi'), delivered('m1'), echo('m1')])).toEqual([])
+  })
+
+  it('excludes pending (undelivered) and requeued messages', () => {
+    expect(deliveredUnechoedSends([received('m1', 'hi')])).toEqual([])
+    expect(
+      deliveredUnechoedSends([received('m1', 'hi'), delivered('m1'), requeued('m1')]),
+    ).toEqual([])
+  })
+
+  it('keeps delivery order and ignores unrelated echoes', () => {
+    expect(
+      deliveredUnechoedSends([
+        received('m1', 'first'),
+        received('m2', 'second'),
+        delivered('m1'),
+        delivered('m2'),
+        echo(null),
+      ]),
+    ).toEqual([
+      { id: 'm1', body: 'first' },
+      { id: 'm2', body: 'second' },
+    ])
+  })
+})
+
+describe('gutterFor', () => {
+  const item = (kind: TranscriptItem['kind'], gutter?: string): TranscriptItem =>
+    ({ key: 'k', kind, text: 'x', spaceBefore: false, gutter }) as TranscriptItem
+
+  it('marks user messages ◆ and assistant prose ⏺, overriding the SDK gutter', () => {
+    expect(gutterFor(item('user', '›'))).toBe('◆')
+    expect(gutterFor(item('assistant'))).toBe('⏺')
+  })
+
+  it('keeps the SDK glyph for tool activity and none for the rest', () => {
+    expect(gutterFor(item('tool', '●'))).toBe('●')
+    expect(gutterFor(item('tool_result', '⎿'))).toBe('⎿')
+    expect(gutterFor(item('thinking', '✻'))).toBe('✻')
+    expect(gutterFor(item('summary'))).toBe('')
+    expect(gutterFor(item('notice'))).toBe('')
   })
 })
 
