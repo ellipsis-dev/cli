@@ -54,7 +54,7 @@ export const SESSION_STATUSES = [
   'stopped',
 ] as const
 
-export const SEARCH_SCOPES = ['steps', 'recaps', 'both'] as const
+export const SEARCH_SCOPES = ['records', 'recaps', 'both'] as const
 
 function oneOf(kind: string, allowed: readonly string[], value: string): string {
   if (!allowed.includes(value)) {

@@ -20,8 +20,8 @@ import {
   formatDuration,
   pendingToolCalls,
   recordToItems,
-  setupOutputHook,
-  setupOutputLine,
+  sandboxOutputStep,
+  sandboxOutputLine,
   statusActivityText,
   oneLine,
   type CCEvent,
@@ -290,9 +290,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           api.getAgentSession(sessionId),
         ])
         if (page.records.length) {
+          // Inbox state (message_received/delivered/requeued) rides the record
+          // feed now (protocol v3) — the store folds it as records land.
           store.ingest({ type: 'records_append', records: page.records })
         }
-        store.ingest({ type: 'messages', messages: page.messages ?? [] })
         store.ingest({ type: 'session', session })
       } catch {
         // Transient fetch failure — the next tick retries.
@@ -897,7 +898,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                   : step.lines.slice(-FINISHED_LOG_LINES)
                 const hidden = step.lines.length - logLines.length
                 return (
-                  <Box key={step.hook} flexDirection="column">
+                  <Box key={step.step} flexDirection="column">
                     {/* The › cursor column is always reserved (a space when
                         unselected), so selection never shifts the row; the
                         selected step reads cyan like the transcript
@@ -918,7 +919,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                       <Box flexDirection="column" marginLeft={6}>
                         {hidden > 0 && <Text dimColor>… +{hidden} earlier lines</Text>}
                         {logLines.map((l, j) => (
-                          <Text key={`${step.hook}:${j}`} dimColor>
+                          <Text key={`${step.step}:${j}`} dimColor>
                             {oneLine(l, 110)}
                           </Text>
                         ))}
@@ -1167,17 +1168,23 @@ export function foldRun(foldKey: string, items: readonly TranscriptItem[]): Tran
   return run
 }
 
-// A setup hook name ("image.setup", "post_clone") as a startup phase.
-export function hookPhrase(hook: string): string {
-  switch (hook) {
+// A sandbox_output step identifier — payload.step ?? payload.phase — as a
+// human startup-phase label. Steps are null/'post_start'/'post_clone' and
+// phases 'setup'/'clone'/'hooks'; 'image.setup' is the legacy image step.
+// Unknown values pass through verbatim (§3.6).
+export function hookPhrase(step: string): string {
+  switch (step) {
+    case 'setup':
     case 'image.setup':
       return 'Building image'
-    case 'post_clone':
-      return 'Post-clone setup'
+    case 'clone':
+      return 'Fetching repositories'
     case 'post_start':
       return 'Post-start setup'
+    case 'post_clone':
+      return 'Post-clone setup'
     default:
-      return hook
+      return step
   }
 }
 
@@ -1186,7 +1193,7 @@ export function hookPhrase(hook: string): string {
 const RUNNING_TAIL_LINES = 5
 const FINISHED_LOG_LINES = 100
 
-export type SandboxStep = { hook: string; label: string; lines: string[] }
+export type SandboxStep = { step: string; label: string; lines: string[] }
 export type SandboxState = { steps: SandboxStep[]; ready: boolean }
 
 // The structural slice of a session record the derivation needs (the SDK's
@@ -1199,10 +1206,12 @@ type LifecycleRecordLike = {
 }
 
 // The sandbox startup story from the lifecycle records of the LATEST start:
-// one step per setup hook in first-seen order, each accumulating the log
-// lines of its chunked sandbox_setup_output records, plus whether the box
-// reached ready. sandbox_starting resets everything (a wake tells a fresh
-// story); null when no start has been seen. Pure, for tests.
+// one step per sandbox_output step (payload.step ?? payload.phase) in
+// first-seen order, each accumulating the log lines of its chunked
+// sandbox_output records, plus whether the box reached ready. sandbox_starting
+// resets everything (a wake tells a fresh story); sandbox_phase transitions
+// are part of the same family (they mark the story seen without adding a
+// step). null when no start has been seen. Pure, for tests.
 export function deriveSandboxState(
   records: readonly LifecycleRecordLike[],
   minFeedSeq: number,
@@ -1216,18 +1225,20 @@ export function deriveSandboxState(
       seen = true
       steps = []
       ready = false
-    } else if (record.record_type === 'sandbox_setup_output') {
+    } else if (record.record_type === 'sandbox_output') {
       seen = true
-      const hook = setupOutputHook(record.payload)
-      let step = steps.find((s) => s.hook === hook)
+      const key = sandboxOutputStep(record.payload)
+      let step = steps.find((s) => s.step === key)
       if (!step) {
-        step = { hook, label: hookPhrase(hook), lines: [] }
+        step = { step: key, label: hookPhrase(key), lines: [] }
         steps.push(step)
       }
       const lines = Array.isArray(record.payload.lines)
         ? record.payload.lines.filter((l): l is string => typeof l === 'string')
         : []
       step.lines.push(...lines)
+    } else if (record.record_type === 'sandbox_phase') {
+      seen = true
     } else if (record.record_type === 'sandbox_ready') {
       seen = true
       ready = true

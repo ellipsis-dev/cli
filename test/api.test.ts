@@ -192,17 +192,25 @@ describe('ApiClient sandbox variables', () => {
   })
 })
 
-describe('getSessionTranscripts', () => {
+describe('getSessionLog', () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it('hits the transcripts path and returns the response', async () => {
-    const body = { session_id: 'session_1', transcripts: [] }
+  it('hits the log path and returns the manifest', async () => {
+    const body = {
+      format: 'ellipsis_session_log@1',
+      session_id: 'session_1',
+      earliest_feed_seq: null,
+      archived_through_feed_seq: 0,
+      latest_feed_seq: 0,
+      caught_up: true,
+      segments: [],
+    }
     const fetchMock = vi.fn(async () => new Response(JSON.stringify(body), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const out = await new ApiClient('http://api.test', 't').getSessionTranscripts('session_1')
+    const out = await new ApiClient('http://api.test', 't').getSessionLog('session_1')
     expect(out).toEqual(body)
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/sessions/session_1/transcripts')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/sessions/session_1/log')
   })
 })
 

@@ -341,28 +341,34 @@ export interface ListAgentSessionsQuery {
 
 // ----------------------------- session records ---------------------------
 
-// The render switch on a session_record (session_records.source). The CLI
-// renders claude_code records natively and lifecycle records as system lines.
-// One process's raw transcript from GET /v1/sessions/{id}/transcripts: the
-// pointer metadata plus a short-lived presigned S3 GET for the .jsonl.gz
-// object itself (expires after expires_in seconds — fetch it immediately).
-export interface SessionTranscript {
-  process_id: string
-  // "claude_stream_json" (cloud) or "claude_transcript" (synced laptop).
-  format: string
-  event_count: number | null
-  bytes: number | null
-  written_at: string | null
-  // null = only periodic flushes so far (session still running); "failed" =
-  // the final write failed, so the tail past the last flush may be missing.
-  write_status: 'ok' | 'failed' | null
+// One immutable archived segment of the session log (GET /v1/sessions/{id}/log):
+// its feed_seq range plus a short-lived presigned S3 GET. Segments are gzip
+// members — download them in order and concatenate for the whole log.
+export interface SessionLogSegment {
+  start_feed_seq: number
+  end_feed_seq: number
+  record_count: number
+  bytes: number
   download_url: string
   expires_in: number
 }
 
-export interface ListSessionTranscriptsResponse {
+// The session-log manifest: the complete, ordered, downloadable history of a
+// session, archived into seq-ranged .jsonl.gz segments. For a running session
+// `latest_feed_seq` may exceed `archived_through_feed_seq`; `caught_up` says
+// whether the manifest is the whole story yet.
+export interface GetSessionLogResponse {
+  format: string
   session_id: string
-  transcripts: SessionTranscript[]
+  // The retention head: the first feed_seq still available (null = nothing
+  // recorded yet).
+  earliest_feed_seq: number | null
+  // The highest feed_seq covered by an archived segment (0 = none yet).
+  archived_through_feed_seq: number
+  // The feed head (the last allocated feed_seq).
+  latest_feed_seq: number
+  caught_up: boolean
+  segments: SessionLogSegment[]
 }
 
 // GET /v1/sessions/{id}/ide (`agent session ide`): the live sandbox's
@@ -382,7 +388,7 @@ export interface GetSessionPortResponse {
 
 // ----------------------------- session search ----------------------------
 
-export type SessionSearchScope = 'steps' | 'recaps' | 'both'
+export type SessionSearchScope = 'records' | 'recaps' | 'both'
 
 export interface SearchSessionsQuery {
   q: string
@@ -398,29 +404,29 @@ export interface SearchSessionsQuery {
   limit?: number
 }
 
-// One agent step matching the search, denormalized with enough session
+// One session record matching the search, denormalized with enough session
 // context to render a result row (backend LogSearchHit).
-export interface StepSearchHit {
-  step_id: string
+export interface RecordSearchHit {
+  id: string
+  session_execution_id: string | null
   agent_session_id: string
-  step_index: number
-  step_type: string
-  step_subtype: string | null
+  stream_seq: number
+  record_type: string
   created_at: string
   snippet: string
   [key: string]: unknown
 }
 
 // One search result session. `matched` lists which arms hit:
-// "steps" | "recap" | "pr" | "similar".
+// "records" | "recap" | "pr" | "similar".
 export interface SessionSearchResult {
   session: AgentSession
   matched: string[]
   recap_snippet: string | null
-  step_hits: StepSearchHit[]
-  // Total step hits within the search window; may exceed step_hits.length
+  record_hits: RecordSearchHit[]
+  // Total record hits within the search window; may exceed record_hits.length
   // (which the server caps), so "and N more" can render.
-  step_hit_count: number
+  record_hit_count: number
 }
 
 // The GITHUB_USER attributions among the results, keyed by attribution_id, so
@@ -563,58 +569,6 @@ export interface ListLinearTeamsResponse {
 
 export interface ListSentryOrganizationsResponse {
   organizations: SentryOrganizationSummary[]
-}
-
-// ---------------------------- sandbox builds -----------------------------
-// "docker build" for the Ellipsis sandbox: run a config's environment
-// definition (dockerfile_append + clone + image.setup [+ hooks]) with
-// streamed logs and no agent, pre-warming the image cache on success.
-
-export type SandboxBuildStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
-export type SandboxBuildPhase = 'image' | 'clone' | 'setup' | 'snapshot' | 'hooks'
-export type SandboxBuildCacheTier = 'exact' | 'incremental' | 'full'
-
-export interface SandboxBuild {
-  id: string
-  created_at: string
-  updated_at: string
-  config_id: string | null
-  config_sha: string
-  hooks_requested: boolean
-  status: SandboxBuildStatus
-  phase: SandboxBuildPhase | null
-  cache_tier: SandboxBuildCacheTier | null
-  phase_timings: Record<string, number>
-  failing_phase: SandboxBuildPhase | null
-  exit_code: number | null
-  status_reason: string | null
-  sandbox_id: string | null
-  result_image_id: string | null
-  started_at: string | null
-  finished_at: string | null
-}
-
-export interface StartSandboxBuildRequest {
-  config_yaml?: string
-  config_id?: string
-  hooks?: boolean
-}
-
-export interface ListSandboxBuildsResponse {
-  builds: SandboxBuild[]
-}
-
-export interface SandboxBuildLogLine {
-  build_id: string
-  seq: number
-  ts: string
-  phase: SandboxBuildPhase
-  line: string
-}
-
-export interface GetSandboxBuildLogsResponse {
-  build_id: string
-  lines: SandboxBuildLogLine[]
 }
 
 // -------------------------- sandbox variables ---------------------------

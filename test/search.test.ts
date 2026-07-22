@@ -128,8 +128,8 @@ describe('formatSearchResult', () => {
       session: session({ attribution_id: '5201153' }),
       matched: ['recap', 'similar'],
       recap_snippet: 'looked into the shift trade webhook retries',
-      step_hits: [],
-      step_hit_count: 0,
+      record_hits: [],
+      record_hit_count: 0,
     }
     expect(formatSearchResult(result, users, now)).toEqual([
       'session_1  completed  hbrooks  3 days ago  matched: recap, similar',
@@ -137,28 +137,28 @@ describe('formatSearchResult', () => {
     ])
   })
 
-  it('falls back to the best step snippet and shows the hit count', () => {
+  it('falls back to the best record snippet and shows the hit count', () => {
     const result: SessionSearchResult = {
       session: session(),
-      matched: ['steps'],
+      matched: ['records'],
       recap_snippet: null,
-      step_hits: [
+      record_hits: [
         {
-          step_id: 'step_1',
+          id: 'rec_1',
+          session_execution_id: 'exec_1',
           agent_session_id: 'session_1',
-          step_index: 4,
-          step_type: 'assistant',
-          step_subtype: null,
+          stream_seq: 4,
+          record_type: 'assistant',
           created_at: '2026-07-03T12:00:00+00:00',
           snippet: 'the webhook retries three times',
         },
       ],
-      step_hit_count: 7,
+      record_hit_count: 7,
     }
     expect(formatSearchResult(result, users, now)).toEqual([
-      'session_1  completed  3 days ago  matched: steps',
+      'session_1  completed  3 days ago  matched: records',
       '    the webhook retries three times',
-      '    7 matching steps',
+      '    7 matching records',
     ])
   })
 
@@ -167,8 +167,8 @@ describe('formatSearchResult', () => {
       session: session(),
       matched: ['pr'],
       recap_snippet: null,
-      step_hits: [],
-      step_hit_count: 0,
+      record_hits: [],
+      record_hit_count: 0,
     }
     expect(formatSearchResult(result, users, now)).toEqual([
       'session_1  completed  3 days ago  matched: pr',
@@ -259,14 +259,14 @@ describe('recordText / formatStepLine', () => {
       ),
     )
     expect(ready).toContain('Sandbox ready · acme/repo · full build')
-    // A setup-output chunk reads as the script's latest non-empty line.
+    // A sandbox-output chunk reads as the script's latest non-empty line.
     const chunk = formatStepLine(
       record(
-        { hook: 'image.setup', chunk: 3, lines: ['Installing pandas (3.0.3)', '  '] },
-        { source: 'lifecycle', record_type: 'sandbox_setup_output', stream_seq: -3 },
+        { phase: 'setup', chunk: 3, lines: ['Installing pandas (3.0.3)', '  '] },
+        { source: 'lifecycle', record_type: 'sandbox_output', stream_seq: -3 },
       ),
     )
-    expect(chunk).toContain('image.setup · Installing pandas (3.0.3)')
+    expect(chunk).toContain('setup · Installing pandas (3.0.3)')
   })
 
   it('truncates long text to about 120 characters', () => {

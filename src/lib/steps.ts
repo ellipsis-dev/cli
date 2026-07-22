@@ -4,7 +4,7 @@ import type { SessionRecord } from './types'
 
 // Re-exported for the record-view callers below and their historical
 // importers; the implementations live in the SDK's store layer now.
-export { lifecycleText, oneLine, setupOutputHook, setupOutputLine } from '@ellipsis-dev/sdk/store'
+export { lifecycleText, oneLine, sandboxOutputStep, sandboxOutputLine } from '@ellipsis-dev/sdk/store'
 
 // Record-rendering helpers shared by `session records` and `session connect`
 // (moved out of commands/session.tsx so connect.ts can use them without an

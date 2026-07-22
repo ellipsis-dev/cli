@@ -2,6 +2,7 @@ import type { Command } from 'commander'
 import React from 'react'
 import { render } from 'ink'
 import { SessionTranscriptStore } from '@ellipsis-dev/sdk/store'
+import { SESSION_STREAM_PROTOCOL_VERSION } from '@ellipsis-dev/sdk/stream'
 import { ApiClient } from '../lib/api'
 import { requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
 import { runAction } from '../lib/output'
@@ -126,9 +127,18 @@ export async function runConnect(
   const store = new SessionTranscriptStore()
   const page = await api.getAgentSessionRecordsPage(sessionId)
   const ordered = [...page.records].sort((a, b) => a.feed_seq - b.feed_seq)
+  // Seed the session + open inbox as a synthetic snapshot frame (protocol v3:
+  // the store folds the inbox from the snapshot projection and the message_*
+  // records that ride the feed), then replay the records to advance the cursor
+  // so streamSession resumes past the seeded history rather than re-replaying.
+  store.ingest({
+    type: 'snapshot',
+    protocol: SESSION_STREAM_PROTOCOL_VERSION,
+    earliest_feed_seq: page.earliest_feed_seq ?? null,
+    session,
+    messages: page.messages ?? [],
+  })
   if (ordered.length) store.ingest({ type: 'records_append', records: ordered })
-  store.ingest({ type: 'messages', messages: page.messages ?? [] })
-  store.ingest({ type: 'session', session })
 
   // Written by the app when it exits because the conversation closed (terminal;
   // nothing left to reconnect to), so the detach sign-off below stays honest.
