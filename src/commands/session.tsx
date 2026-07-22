@@ -31,7 +31,7 @@ import {
   type StreamFrame,
   type StreamOutcome,
 } from '@ellipsis-dev/sdk/stream'
-import { isConnectVisibleRecord, recordToItems } from '@ellipsis-dev/sdk/store'
+import { recordToItems } from '@ellipsis-dev/sdk/store'
 import { makeOpenSocket, resolveWsBase } from '../lib/stream'
 import type {
   AgentSession,
@@ -875,9 +875,13 @@ function renderFrameHuman(frame: StreamFrame, statusWord?: string): void {
     case 'records_append': {
       // Raw records, rendered client-side (the semantic-relay philosophy):
       // one line per transcript item, same shaping as `session connect`.
+      // Lifecycle records render too (recordToItems shapes them through
+      // lifecycleText): the startup narrative — scheduled, phase
+      // transitions with cache tier + duration, setup output, ready —
+      // belongs in a watch log; types without display copy (message_*/
+      // turn_* bookkeeping) shape to nothing.
       const records = (frame as { records: SessionRecord[] }).records
       for (const record of records) {
-        if (!isConnectVisibleRecord(record)) continue
         for (const item of recordToItems(record, `w${record.feed_seq}`)) {
           const line = item.detail ? `${item.text}  ${item.detail}` : item.text
           if (line.trim()) console.log(line)

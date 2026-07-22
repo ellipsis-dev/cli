@@ -188,7 +188,8 @@ Search and audit what agents have done:
 
 ```sh
 agent session search "webhook retries"       # transcripts, recaps, PRs, similarity
-agent session steps <session-id>             # stored transcript, one line per step
+agent session records <session-id>           # stored feed, one line per record
+agent session log <session-id>               # download the complete session log
 agent analytics reviewers --account-type bot # human vs bot PR analytics
 ```
 

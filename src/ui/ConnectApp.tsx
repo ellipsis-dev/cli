@@ -14,14 +14,17 @@ import {
   type OpenSocket,
 } from '@ellipsis-dev/sdk/stream'
 import {
+  cacheTierLabel,
   clampLines,
   collapseToolRuns,
   foldCosts,
   formatDuration,
+  lifecycleText,
   pendingToolCalls,
   recordToItems,
+  sandboxOutputLines,
   sandboxOutputStep,
-  sandboxOutputLine,
+  sandboxPhaseLabel,
   statusActivityText,
   oneLine,
   type CCEvent,
@@ -225,17 +228,18 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       )
     : null
 
-  // The sandbox startup story, derived from the lifecycle records of the
-  // latest start (a sandbox_starting record resets it, so a wake tells a
-  // fresh story): the ordered setup steps with their full log lines, plus
-  // whether the box reached ready. Collapsed, it renders as ONE line showing
-  // the current phase, rewritten in place ("Building image…" → "Post-clone
-  // setup… · <latest output line>" → "Ready!"); highlighting the block (↑
-  // from the composer) and pressing → opens the step list, and arrow keys
-  // drill into a step's logs (a running step shows a live 5-line tail, a
-  // finished one its stored log). The block persists after startup as the
-  // durable trace (the sandbox_ready transcript notice is suppressed below
-  // in its favour).
+  // The sandbox startup timeline, derived from the lifecycle records of the
+  // latest start (a session_starting wake/retry or sandbox_starting record
+  // resets it, so a wake tells a fresh story): dim session notes, one step
+  // per provisioning phase — opened by its sandbox_phase `started`
+  // transition, closed with its cache-tier/duration note — accumulating the
+  // log lines of its sandbox_output chunks, plus the sandbox_ready summary.
+  // Completed steps STACK as ✓ lines (the design-doc §3 timeline) instead of
+  // rewriting one line in place; the live step ticks under them with its
+  // latest output line. Highlighting the block (↑ from the composer) and
+  // pressing → opens the step list, and arrow keys drill into a step's logs.
+  // The block persists after startup as the durable trace (the sandbox_ready
+  // transcript notice is suppressed below in its favour).
   const sandbox = useMemo(
     () => deriveSandboxState(snapshot.records, props.minRenderFeedSeq),
     [snapshot.records, props.minRenderFeedSeq],
@@ -852,85 +856,100 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       {/* No banner: session identity (dashboard link, model, version) lives in
           the footer meta line, so the transcript starts right under the top
           padding and nothing is printed to scrollback before the app. */}
-      {/* Sandbox spawn/wake progress, at the top where startup belongs: the
-          ✻ header (ticking while infra is active) with the current phase on
-          one line under it, rewritten in place as phases pass. Highlighting
-          the block (↑) and pressing → swaps the line for the full step list;
-          →/← on a step shows/hides its logs (a live 5-line tail while the
-          step runs). The block stays after
-          startup — frozen at "Ready!" — as the durable trace. It is the
-          viewport's first entry, so it scrolls out of frame like any line. */}
+      {/* Sandbox spawn/wake progress, at the top where startup belongs: dim
+          session notes (scheduled / waking / retrying / resumed), then the ✻
+          header (ticking while infra is active; "Sandbox ready · cached image
+          · 29s" once up), then the phase timeline — completed phases stack as
+          ✓ lines with their cache-tier/duration notes, the live phase ticks
+          under them with its latest output line. Highlighting the block (↑)
+          and pressing → opens the step list; →/← on a step shows/hides its
+          logs (a live 5-line tail while the step runs). The block stays after
+          startup as the durable trace. It is the viewport's first entry, so
+          it scrolls out of frame like any line. */}
       {(infraActivity || sandbox) && entries.keys[0] === 'sandbox' && slice.start === 0 && (
         <Box flexDirection="column">
+          {sandbox?.notes
+            .filter((n) => !n.tail)
+            .map((n, i) => (
+              <Text key={`n${i}`} dimColor>
+                {'  '}· {oneLine(n.text, 110)}
+              </Text>
+            ))}
           {/* The › replaces the ✻ while highlighted (same 1-char slot), so
               the header never shifts; the block's text goes cyan with it. */}
           <Text>
             {navKey === 'sandbox' ? (
               <Text color="cyan">›</Text>
+            ) : sandbox?.ready && !infraActivity ? (
+              <Text color="green">✓</Text>
             ) : (
               <Text color="cyan">✻</Text>
             )}{' '}
             <Text color={navKey === 'sandbox' ? 'cyan' : undefined} dimColor={navKey !== 'sandbox'}>
-              {infraActivity ? `${infraActivity}… (${formatDuration(elapsed)})` : 'Starting sandbox…'}
+              {infraActivity
+                ? `${infraActivity}… (${formatDuration(elapsed)})`
+                : (sandbox?.readyLine ??
+                  (sandbox?.ready ? 'Sandbox ready' : 'Starting sandbox…'))}
+              {inputActive && navKey === 'sandbox' && !sandboxOpen ? ' (→: steps)' : ''}
             </Text>
           </Text>
-          {!sandboxOpen && sandboxPhaseLine(sandbox) && (
-            <Text>
-              {'  '}
-              <Text color={navKey === 'sandbox' ? 'cyan' : undefined} dimColor={navKey !== 'sandbox'}>
-                ⎿ {oneLine(sandboxPhaseLine(sandbox) as string, 110)}
-                {inputActive && navKey === 'sandbox' ? ' (→: steps)' : ''}
-              </Text>
-            </Text>
-          )}
-          {sandboxOpen && (
-            <Box flexDirection="column">
-              {(sandbox?.steps.length ?? 0) === 0 && (
-                <Text dimColor>{'    '}no setup output yet</Text>
-              )}
-              {sandbox?.steps.map((step, i) => {
-                const running =
-                  !sandbox.ready && infraActivity != null && i === sandbox.steps.length - 1
-                const cursor = Math.min(stepCursor, sandbox.steps.length - 1)
-                const selected = i === cursor
-                const logLines = running
-                  ? step.lines.slice(-RUNNING_TAIL_LINES)
-                  : step.lines.slice(-FINISHED_LOG_LINES)
-                const hidden = step.lines.length - logLines.length
-                return (
-                  <Box key={step.step} flexDirection="column">
-                    {/* The › cursor column is always reserved (a space when
-                        unselected), so selection never shifts the row; the
-                        selected step reads cyan like the transcript
-                        highlight. */}
-                    <Text>
-                      {'  '}
-                      <Text color="cyan">{selected ? '›' : ' '}</Text>{' '}
-                      <Text color={running ? 'cyan' : 'green'}>{running ? '✻' : '✓'}</Text>{' '}
-                      <Text color={selected ? 'cyan' : undefined} dimColor={!selected}>
-                        {step.label}
-                        {running ? '…' : ''}
-                      </Text>{' '}
-                      <Text color={selected ? 'cyan' : undefined} dimColor={!selected}>
-                        ({step.lines.length} log line{step.lines.length === 1 ? '' : 's'})
-                      </Text>
+          {sandbox?.steps.map((step, i) => {
+            const running = step.status === 'running' && !sandbox.ready && infraActivity != null
+            const cursor = Math.min(stepCursor, sandbox.steps.length - 1)
+            const selected = sandboxOpen && i === cursor
+            const logLines = running
+              ? step.lines.slice(-RUNNING_TAIL_LINES)
+              : step.lines.slice(-FINISHED_LOG_LINES)
+            const hidden = step.lines.length - logLines.length
+            const mark =
+              step.status === 'failed' ? (
+                <Text color="red">✗</Text>
+              ) : running ? (
+                <Text color="cyan">✻</Text>
+              ) : (
+                <Text color="green">✓</Text>
+              )
+            return (
+              <Box key={step.key} flexDirection="column">
+                {/* The › cursor column is always reserved (a space when
+                    unselected), so opening the panel never shifts the rows;
+                    the selected step reads cyan like the transcript
+                    highlight. */}
+                <Text>
+                  {'  '}
+                  <Text color="cyan">{selected ? '›' : ' '}</Text> {mark}{' '}
+                  <Text
+                    color={selected ? 'cyan' : step.status === 'failed' ? 'red' : undefined}
+                    dimColor={!selected && step.status !== 'failed'}
+                  >
+                    {oneLine(sandboxStepLine(step), 110)}
+                  </Text>
+                  {sandboxOpen && step.lines.length > 0 && (
+                    <Text color={selected ? 'cyan' : undefined} dimColor={!selected}>
+                      {' '}
+                      ({step.lines.length} log line{step.lines.length === 1 ? '' : 's'})
                     </Text>
-                    {selected && stepLogsOpen && (
-                      <Box flexDirection="column" marginLeft={6}>
-                        {hidden > 0 && <Text dimColor>… +{hidden} earlier lines</Text>}
-                        {logLines.map((l, j) => (
-                          <Text key={`${step.step}:${j}`} dimColor>
-                            {oneLine(l, 110)}
-                          </Text>
-                        ))}
-                      </Box>
-                    )}
-                  </Box>
-                )
-              })}
-              {sandbox?.ready && <Text dimColor>{'    '}Ready!</Text>}
-              <Text dimColor>{'    '}↑/↓ step · → logs · ← back · esc close</Text>
-            </Box>
+                  )}
+                </Text>
+                {(selected && stepLogsOpen ? logLines : []).map((l, j) => (
+                  <Text key={`${step.key}:${j}`} dimColor>
+                    {'      '}
+                    {j === 0 && hidden > 0 ? `… +${hidden} earlier · ` : ''}
+                    {oneLine(l, 104)}
+                  </Text>
+                ))}
+              </Box>
+            )
+          })}
+          {sandbox?.notes
+            .filter((n) => n.tail)
+            .map((n, i) => (
+              <Text key={`t${i}`} dimColor>
+                {'  '}· {oneLine(n.text, 110)}
+              </Text>
+            ))}
+          {sandboxOpen && (
+            <Text dimColor>{'    '}↑/↓ step · → logs · ← back · esc close</Text>
           )}
         </Box>
       )}
@@ -1129,8 +1148,9 @@ export function estimateItemRows(item: TranscriptItem, width: number, clamp: boo
   return rows
 }
 
-// Estimated rows of the sandbox startup block in its current shape (header +
-// phase line collapsed; header + step list + open logs + hint expanded).
+// Estimated rows of the sandbox startup block in its current shape: notes +
+// header + one row per timeline step, plus the selected step's open log
+// lines and the key hint when the panel is open.
 function sandboxBlockRows(
   sandbox: SandboxState | null,
   open: boolean,
@@ -1138,15 +1158,15 @@ function sandboxBlockRows(
   stepCursor: number,
   infraActive: boolean,
 ): number {
-  if (!open) return 1 + (sandboxPhaseLine(sandbox) ? 1 : 0)
   const steps = sandbox?.steps ?? []
-  let rows = 1 + Math.max(1, steps.length) + (sandbox?.ready ? 1 : 0) + 1
-  if (logsOpen && steps.length > 0) {
+  let rows = (sandbox?.notes.length ?? 0) + 1 + steps.length
+  if (open) rows += 1 // the key hint
+  if (open && logsOpen && steps.length > 0) {
     const i = Math.min(stepCursor, steps.length - 1)
     const step = steps[i]
-    const running = sandbox != null && !sandbox.ready && infraActive && i === steps.length - 1
-    const shown = Math.min(step.lines.length, running ? RUNNING_TAIL_LINES : FINISHED_LOG_LINES)
-    rows += shown + (step.lines.length > shown ? 1 : 0)
+    const running =
+      sandbox != null && !sandbox.ready && infraActive && step.status === 'running'
+    rows += Math.min(step.lines.length, running ? RUNNING_TAIL_LINES : FINISHED_LOG_LINES)
   }
   return rows
 }
@@ -1193,8 +1213,31 @@ export function hookPhrase(step: string): string {
 const RUNNING_TAIL_LINES = 5
 const FINISHED_LOG_LINES = 100
 
-export type SandboxStep = { step: string; label: string; lines: string[] }
-export type SandboxState = { steps: SandboxStep[]; ready: boolean }
+export type SandboxStepStatus = 'running' | 'done' | 'failed'
+export type SandboxStep = {
+  key: string
+  label: string
+  status: SandboxStepStatus
+  // "cached image · 1.2s" — the completed/failed transition's cache-tier
+  // detail and duration, for the step's closing summary.
+  note: string | null
+  lines: string[]
+  // Created from output chunks alone (a feed recorded before sandbox_phase
+  // transitions existed) — such steps close on the next step, not on a
+  // transition.
+  inferred: boolean
+}
+// A session-subject lifecycle line (scheduled / starting / waking / retrying /
+// resumed / idle). `tail` = it happened after the box was ready, so it renders
+// below the steps instead of above the header.
+export type SandboxNote = { text: string; tail: boolean }
+export type SandboxState = {
+  notes: SandboxNote[]
+  steps: SandboxStep[]
+  ready: boolean
+  // "Sandbox ready · cached image · 29s" — replaces the header once ready.
+  readyLine: string | null
+}
 
 // The structural slice of a session record the derivation needs (the SDK's
 // SessionRecordWire is not exported from its store entry).
@@ -1205,58 +1248,157 @@ type LifecycleRecordLike = {
   payload: Record<string, unknown>
 }
 
-// The sandbox startup story from the lifecycle records of the LATEST start:
-// one step per sandbox_output step (payload.step ?? payload.phase) in
-// first-seen order, each accumulating the log lines of its chunked
-// sandbox_output records, plus whether the box reached ready. sandbox_starting
-// resets everything (a wake tells a fresh story); sandbox_phase transitions
-// are part of the same family (they mark the story seen without adding a
-// step). null when no start has been seen. Pure, for tests.
+function msLabel(ms: unknown): string | null {
+  if (typeof ms !== 'number' || !isFinite(ms) || ms < 0) return null
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`
+}
+
+// Human label for a timeline step: hooks sub-items keep their hook phrasing,
+// other sub-items (a clone's "owner/repo") read as themselves, whole phases
+// go through the SDK's open-vocabulary phase labels.
+function stepLabel(phase: string, step: string | null): string {
+  if (step) return phase === 'hooks' ? hookPhrase(step) : step
+  return sandboxPhaseLabel(phase)
+}
+
+// Session-subject record types that render as dim timeline notes. closed /
+// cancelled are exit conditions the app already reports on its way out.
+const NOTE_RECORD_TYPES = new Set([
+  'session_scheduled',
+  'session_retrying',
+  'session_resumed',
+  'session_idle',
+])
+
+// The sandbox startup timeline from the lifecycle records of the LATEST
+// start: session-subject notes, plus one step per provisioning phase — opened
+// by its sandbox_phase `started` transition, closed (with cache-tier/duration
+// note) by `completed`/`failed` — with sandbox_output chunks attaching their
+// lines to the matching step (exact phase:step, then the bare phase, then an
+// inferred step for feeds that predate phase transitions). session_starting
+// begins a fresh story (a wake or infra retry drops the previous one);
+// sandbox_ready closes it with the header summary line. null when no
+// lifecycle record has been seen. Pure, for tests.
 export function deriveSandboxState(
   records: readonly LifecycleRecordLike[],
   minFeedSeq: number,
 ): SandboxState | null {
   let seen = false
+  let notes: SandboxNote[] = []
   let steps: SandboxStep[] = []
   let ready = false
+  let readyLine: string | null = null
   for (const record of records) {
     if (record.feed_seq <= minFeedSeq || record.source !== 'lifecycle') continue
-    if (record.record_type === 'sandbox_starting') {
+    const p = record.payload
+    if (record.record_type === 'session_starting') {
+      seen = true
+      // A wake or an infra retry restarts the story; the very first claim
+      // keeps the session_scheduled note above it.
+      const wakeIndex = typeof p.wake_index === 'number' ? p.wake_index : 0
+      const attempt = typeof p.attempt === 'number' ? p.attempt : 0
+      if (wakeIndex > 0 || attempt > 0) notes = []
+      steps = []
+      ready = false
+      readyLine = null
+      const text = lifecycleText(record.record_type, p)
+      if (text) notes.push({ text, tail: false })
+    } else if (NOTE_RECORD_TYPES.has(record.record_type)) {
+      seen = true
+      const text = lifecycleText(record.record_type, p)
+      if (text) notes.push({ text, tail: ready })
+    } else if (record.record_type === 'sandbox_starting') {
       seen = true
       steps = []
       ready = false
-    } else if (record.record_type === 'sandbox_output') {
-      seen = true
-      const key = sandboxOutputStep(record.payload)
-      let step = steps.find((s) => s.step === key)
-      if (!step) {
-        step = { step: key, label: hookPhrase(key), lines: [] }
-        steps.push(step)
-      }
-      const lines = Array.isArray(record.payload.lines)
-        ? record.payload.lines.filter((l): l is string => typeof l === 'string')
-        : []
-      step.lines.push(...lines)
+      readyLine = null
     } else if (record.record_type === 'sandbox_phase') {
       seen = true
+      const phase = typeof p.phase === 'string' && p.phase ? p.phase : 'setup'
+      const step = typeof p.step === 'string' && p.step ? p.step : null
+      const key = step ? `${phase}:${step}` : phase
+      let entry = steps.find((s) => s.key === key)
+      if (!entry) {
+        entry = {
+          key,
+          label: stepLabel(phase, step),
+          status: 'running',
+          note: null,
+          lines: [],
+          inferred: false,
+        }
+        steps.push(entry)
+      }
+      entry.inferred = false
+      if (p.status === 'completed' || p.status === 'failed') {
+        entry.status = p.status === 'completed' ? 'done' : 'failed'
+        const detail =
+          p.detail && typeof p.detail === 'object'
+            ? (p.detail as Record<string, unknown>)
+            : {}
+        const bits = [cacheTierLabel(detail.cache_tier), msLabel(p.duration_ms)].filter(
+          (b): b is string => b != null,
+        )
+        entry.note = bits.length ? bits.join(' · ') : null
+      }
+    } else if (record.record_type === 'sandbox_output') {
+      seen = true
+      const phase = typeof p.phase === 'string' && p.phase ? p.phase : 'setup'
+      const step = typeof p.step === 'string' && p.step ? p.step : null
+      const outputKey = sandboxOutputStep(p)
+      let entry =
+        (step ? steps.find((s) => s.key === `${phase}:${step}`) : undefined) ??
+        steps.find((s) => s.key === phase) ??
+        steps.find((s) => s.key === outputKey)
+      if (!entry) {
+        // No transition opened a home for this output: an inferred step (old
+        // feeds). A new inferred step means the previous inferred one ended.
+        for (const s of steps) if (s.inferred && s.status === 'running') s.status = 'done'
+        entry = {
+          key: outputKey,
+          label: hookPhrase(outputKey),
+          status: 'running',
+          note: null,
+          lines: [],
+          inferred: true,
+        }
+        steps.push(entry)
+      }
+      entry.lines.push(...sandboxOutputLines(p))
     } else if (record.record_type === 'sandbox_ready') {
       seen = true
       ready = true
+      for (const s of steps) if (s.status === 'running') s.status = 'done'
+      const timings =
+        p.phase_timings && typeof p.phase_timings === 'object'
+          ? Object.values(p.phase_timings as Record<string, unknown>)
+          : []
+      const totalSeconds = timings.reduce<number>(
+        (acc, v) => (typeof v === 'number' && isFinite(v) ? acc + v : acc),
+        0,
+      )
+      const bits = [
+        cacheTierLabel(p.cache_tier),
+        totalSeconds > 0 ? formatDuration(Math.round(totalSeconds)) : null,
+      ].filter((b): b is string => b != null)
+      readyLine = ['Sandbox ready', ...bits].join(' · ')
     }
   }
-  return seen ? { steps, ready } : null
+  return seen ? { notes, steps, ready, readyLine } : null
 }
 
-// The collapsed one-liner under the ✻ header: the CURRENT phase only,
-// rewritten in place as phases pass — the latest step with its latest log
-// line, or "Ready!" once the box is up. Pure, for tests.
-export function sandboxPhaseLine(state: SandboxState | null): string | null {
-  if (!state) return null
-  if (state.ready) return 'Ready!'
-  const last = state.steps[state.steps.length - 1]
-  if (!last) return null
-  const lastLine = last.lines[last.lines.length - 1]
-  return lastLine ? `${last.label}… · ${lastLine}` : `${last.label}…`
+// One timeline step as its collapsed display line: a running step shows its
+// label with the latest log line, a finished one its closing note (cache
+// tier, duration), a failed one says so. Pure, for tests.
+export function sandboxStepLine(step: SandboxStep): string {
+  if (step.status === 'running') {
+    const last = step.lines[step.lines.length - 1]
+    return last ? `${step.label}… · ${last}` : `${step.label}…`
+  }
+  if (step.status === 'failed') {
+    return step.note ? `${step.label} failed · ${step.note}` : `${step.label} failed`
+  }
+  return step.note ? `${step.label} · ${step.note}` : step.label
 }
 
 // Long bodies collapse to this many lines until ctrl+r expands them.
