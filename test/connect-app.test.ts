@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  awaitingAgentPhase,
   cursorLineDown,
   cursorLineUp,
+  deliveredUnechoedSends,
   deriveSandboxState,
   estimateItemRows,
   foldRun,
+  gutterFor,
   hookPhrase,
   sandboxStepLine,
   viewportSlice,
@@ -23,6 +26,71 @@ describe('deriveSandboxState', () => {
     expect(deriveSandboxState([rec('assistant', {}, 'claude_code')], 0)).toBeNull()
   })
 
+  it('walks the session headline: scheduled → starting → ready', () => {
+    const scheduled = deriveSandboxState([rec('session_scheduled', { source: 'cli' })], 0)
+    expect(scheduled?.headline).toBe('Session scheduled…')
+    expect(scheduled?.done).toBe(false)
+    expect(scheduled?.sandboxLine).toBeNull()
+
+    const starting = deriveSandboxState(
+      [
+        rec('session_scheduled', { source: 'cli', config_name: 'my-agent' }),
+        rec('session_starting', { attempt: 0, wake_index: 0 }),
+      ],
+      0,
+    )
+    expect(starting?.headline).toBe('Session starting…')
+    expect(starting?.done).toBe(false)
+
+    const ready = deriveSandboxState(
+      [
+        rec('session_starting', { attempt: 0, wake_index: 0 }),
+        rec('sandbox_starting', {}),
+        rec('sandbox_ready', { cache_tier: 'exact' }),
+      ],
+      0,
+    )
+    expect(ready?.headline).toBe('Session ready!')
+    expect(ready?.done).toBe(true)
+    expect(ready?.sandboxDone).toBe(true)
+  })
+
+  it('carries the config name as its own child line, not in the headline', () => {
+    const state = deriveSandboxState(
+      [rec('session_scheduled', { source: 'cli', config_name: 'deployer' })],
+      0,
+    )
+    expect(state?.headline).toBe('Session scheduled…')
+    expect(state?.configName).toBe('deployer')
+    expect(state?.configCommitSha).toBeNull()
+  })
+
+  it('carries the config commit sha when the backend sends it', () => {
+    const state = deriveSandboxState(
+      [
+        rec('session_scheduled', {
+          source: 'cli',
+          config_name: 'deployer',
+          config_commit_sha: 'abc1234def5678',
+        }),
+      ],
+      0,
+    )
+    expect(state?.configCommitSha).toBe('abc1234def5678')
+  })
+
+  it('keeps the config name across the starting transition (no flash)', () => {
+    const state = deriveSandboxState(
+      [
+        rec('session_scheduled', { source: 'cli', config_name: 'deployer' }),
+        rec('session_starting', { attempt: 0, wake_index: 0 }),
+      ],
+      0,
+    )
+    expect(state?.headline).toBe('Session starting…')
+    expect(state?.configName).toBe('deployer')
+  })
+
   it('builds the phase timeline from sandbox_phase transitions', () => {
     const state = deriveSandboxState(
       [
@@ -39,7 +107,8 @@ describe('deriveSandboxState', () => {
       0,
     )
     expect(state).not.toBeNull()
-    expect(state?.ready).toBe(false)
+    expect(state?.done).toBe(false)
+    expect(state?.sandboxLine).toBe('Sandbox starting…')
     expect(state?.steps.map((s) => [s.key, s.status])).toEqual([
       ['image', 'done'],
       ['clone', 'running'],
@@ -122,7 +191,7 @@ describe('deriveSandboxState', () => {
     expect(state?.steps[1].label).toBe('Post-clone setup')
   })
 
-  it('collects session-subject notes and closes on sandbox_ready with a summary', () => {
+  it('closes on sandbox_ready: sandbox summary line + Session ready! headline', () => {
     const state = deriveSandboxState(
       [
         rec('session_scheduled', { source: 'cli' }),
@@ -137,14 +206,15 @@ describe('deriveSandboxState', () => {
       ],
       0,
     )
-    expect(state?.notes.map((n) => n.text)).toEqual(['Session scheduled', 'Session starting…'])
-    expect(state?.ready).toBe(true)
-    expect(state?.readyLine).toBe('Sandbox ready · cached image · 29s')
+    expect(state?.headline).toBe('Session ready!')
+    expect(state?.done).toBe(true)
+    expect(state?.sandboxLine).toBe('Sandbox ready · cached image · 29s')
+    expect(state?.sandboxDone).toBe(true)
     // A phase still open at ready closes as done.
     expect(state?.steps[0].status).toBe('done')
   })
 
-  it('starts a fresh story on a wake and notes it', () => {
+  it('starts a fresh story on a wake: Waking headline, ready via session_resumed', () => {
     const state = deriveSandboxState(
       [
         rec('session_scheduled', { source: 'cli' }),
@@ -156,17 +226,56 @@ describe('deriveSandboxState', () => {
         rec('session_starting', { attempt: 0, wake_index: 1 }),
         rec('sandbox_starting'),
         rec('sandbox_phase', { phase: 'restore', status: 'started' }),
+      ],
+      0,
+    )
+    expect(state?.headline).toBe('Waking the session…')
+    expect(state?.done).toBe(false)
+    expect(state?.sandboxLine).toBe('Sandbox starting…')
+    expect(state?.steps.map((s) => s.key)).toEqual(['restore'])
+    expect(state?.steps[0].label).toBe('Restoring workspace')
+
+    const resumed = deriveSandboxState(
+      [
+        rec('session_starting', { attempt: 0, wake_index: 1 }),
+        rec('sandbox_starting'),
+        rec('sandbox_ready', { cache_tier: 'exact' }),
         rec('session_resumed', { wake_index: 1 }),
       ],
       0,
     )
-    expect(state?.notes.map((n) => n.text)).toEqual([
-      'Waking the session…',
-      'Resumed the conversation',
-    ])
-    expect(state?.ready).toBe(false)
-    expect(state?.steps.map((s) => s.key)).toEqual(['restore'])
-    expect(state?.steps[0].label).toBe('Restoring workspace')
+    expect(resumed?.headline).toBe('Session ready!')
+    expect(resumed?.done).toBe(true)
+  })
+
+  it('parks the headline on session_idle', () => {
+    const state = deriveSandboxState(
+      [
+        rec('session_starting', { attempt: 0, wake_index: 0 }),
+        rec('sandbox_starting'),
+        rec('sandbox_ready', {}),
+        rec('session_idle', {}),
+      ],
+      0,
+    )
+    expect(state?.headline).toBe('Session idle — your next message wakes it')
+    expect(state?.done).toBe(true)
+  })
+
+  it('shows Retrying as the headline on an infra retry', () => {
+    const state = deriveSandboxState(
+      [
+        rec('session_starting', { attempt: 0, wake_index: 0 }),
+        rec('sandbox_starting'),
+        rec('session_retrying', { reason: 'sandbox provisioning failed', attempt: 1 }),
+      ],
+      0,
+    )
+    expect(state?.headline).toBe('Retrying · sandbox provisioning failed')
+    expect(state?.done).toBe(false)
+    // The failed start's sandbox children drop with the fresh story.
+    expect(state?.sandboxLine).toBeNull()
+    expect(state?.steps).toHaveLength(0)
   })
 
   it('ignores records at or below the render cursor (--no-records)', () => {
@@ -205,6 +314,107 @@ describe('sandboxStepLine', () => {
     expect(sandboxStepLine(step({ status: 'failed', note: '4.0s' }))).toBe(
       'Fetching repositories failed · 4.0s',
     )
+  })
+})
+
+describe('awaitingAgentPhase', () => {
+  it('is null with no pending turn', () => {
+    expect(awaitingAgentPhase([])).toBeNull()
+    expect(awaitingAgentPhase([rec('session_starting'), rec('sandbox_ready')])).toBeNull()
+  })
+
+  it("reports 'boot' for a fresh execution's first turn (Claude Code starting)", () => {
+    expect(
+      awaitingAgentPhase([rec('session_starting'), rec('sandbox_ready'), rec('turn_started')]),
+    ).toBe('boot')
+  })
+
+  it("reports 'turn' once the harness has spoken this execution", () => {
+    expect(
+      awaitingAgentPhase([
+        rec('session_starting'),
+        rec('turn_started'),
+        rec('assistant', {}, 'claude_code'),
+        rec('turn_started'),
+      ]),
+    ).toBe('turn')
+  })
+
+  it('resets to boot on a wake (a fresh execution boots the harness again)', () => {
+    expect(
+      awaitingAgentPhase([
+        rec('turn_started'),
+        rec('assistant', {}, 'claude_code'),
+        rec('session_starting'),
+        rec('turn_started'),
+      ]),
+    ).toBe('boot')
+  })
+
+  it('clears when a claude_code record answers the turn', () => {
+    expect(
+      awaitingAgentPhase([rec('turn_started'), rec('assistant', {}, 'claude_code')]),
+    ).toBeNull()
+  })
+})
+
+describe('deliveredUnechoedSends', () => {
+  const received = (id: string, body: string) => rec('message_received', { message_id: id, body })
+  const delivered = (id: string) => rec('message_delivered', { message_id: id })
+  const requeued = (id: string) => rec('message_requeued', { message_id: id })
+  const echo = (id: string | null) => ({
+    ...rec('user', {}, 'claude_code'),
+    session_message_id: id,
+  })
+
+  it('bridges the gap between delivery and the user-echo record', () => {
+    expect(deliveredUnechoedSends([received('m1', 'hi'), delivered('m1')])).toEqual([
+      { id: 'm1', body: 'hi' },
+    ])
+  })
+
+  it('retires the send once its echo record lands', () => {
+    expect(deliveredUnechoedSends([received('m1', 'hi'), delivered('m1'), echo('m1')])).toEqual([])
+  })
+
+  it('excludes pending (undelivered) and requeued messages', () => {
+    expect(deliveredUnechoedSends([received('m1', 'hi')])).toEqual([])
+    expect(
+      deliveredUnechoedSends([received('m1', 'hi'), delivered('m1'), requeued('m1')]),
+    ).toEqual([])
+  })
+
+  it('keeps delivery order and ignores unrelated echoes', () => {
+    expect(
+      deliveredUnechoedSends([
+        received('m1', 'first'),
+        received('m2', 'second'),
+        delivered('m1'),
+        delivered('m2'),
+        echo(null),
+      ]),
+    ).toEqual([
+      { id: 'm1', body: 'first' },
+      { id: 'm2', body: 'second' },
+    ])
+  })
+})
+
+describe('gutterFor', () => {
+  const item = (kind: TranscriptItem['kind'], gutter?: string): TranscriptItem =>
+    ({ key: 'k', kind, text: 'x', spaceBefore: false, gutter }) as TranscriptItem
+
+  it('marks user messages ◆ and assistant prose ⏺, overriding the SDK gutter', () => {
+    expect(gutterFor(item('user', '›'))).toBe('◆')
+    expect(gutterFor(item('assistant'))).toBe('⏺')
+  })
+
+  it('keeps the SDK glyph for tool activity and none for the rest', () => {
+    expect(gutterFor(item('tool', '●'))).toBe('●')
+    expect(gutterFor(item('tool_result', '⎿'))).toBe('⎿')
+    expect(gutterFor(item('thinking', '✻'))).toBe('✻')
+    expect(gutterFor(item('summary'))).toBe('')
+    expect(gutterFor(item('notice'))).toBe('')
   })
 })
 
