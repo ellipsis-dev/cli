@@ -244,8 +244,9 @@ export function registerSession(program: Command): void {
 
           // Say which agent the server picked when it came from the defaults
           // ladder, so a bare `agent` never silently runs an unexpected config.
-          // The connect UI shows it as its opening notice (anything printed
-          // before the app would land in scrollback); every other mode prints it.
+          // The connect UI shows the config in its footer meta line (anything
+          // printed before the app would land in scrollback); every other
+          // mode prints this note.
           let configNote: string | undefined
           if (session.resolved_config_name) {
             if (session.resolution_source === 'repo_default') {
@@ -270,7 +271,7 @@ export function registerSession(program: Command): void {
               await watchSessionStreaming(api, session.id, FALLBACK_POLL_INTERVAL_SECONDS, false)
               return
             }
-            await startConnect(session, configNote)
+            await startConnect(session)
             return
           }
 
@@ -809,7 +810,15 @@ export function registerSession(program: Command): void {
 // terminal status reached before the sandbox ever ran (a preflight/budget gate),
 // so there is nothing to wait for out here.
 export async function startConnect(session: AgentSession, notice?: string): Promise<void> {
-  await runConnect(session.id, true, false, notice)
+  // The start response carries the resolved config identity; hand it to the
+  // connect UI for the footer meta line (a later GET may not resolve the name).
+  await runConnect(
+    session.id,
+    true,
+    false,
+    notice,
+    session.resolved_config_name ?? session.agent_config_id ?? undefined,
+  )
 }
 
 // `--watch` entry point: stream the session's output live over WebSocket, and
