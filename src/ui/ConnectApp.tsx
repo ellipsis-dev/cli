@@ -64,8 +64,8 @@ export interface ConnectAppProps {
   // Records at or below this feed_seq are not RENDERED (--no-records skips
   // replaying history on screen without re-streaming it). 0 renders everything.
   minRenderFeedSeq: number
-  // The clickable dashboard link for this session (app.ellipsis.dev/…/sessions/{id}),
-  // shown in the footer status line.
+  // The clickable dashboard link for this session
+  // (app.ellipsis.dev/{login}?session={id}), shown in the footer status line.
   sessionUrl: string
   // A one-line caveat shown as the app's opening notice (e.g. "watch-only:
   // this conversation is closed"). null for the normal connect.
@@ -73,6 +73,9 @@ export interface ConnectAppProps {
   // The session's model (backend tokens_model, fixed at creation), shown in
   // the footer meta line.
   model?: string | null
+  // The session's agent config (resolved name, falling back to the config
+  // id), shown in the footer meta line when the session has one.
+  configName?: string | null
   // Written (not read) by the app: set true when the app exits because the
   // conversation closed, so the caller skips the "detached — still running"
   // sign-off (the session is not still running).
@@ -114,9 +117,13 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // ("resume with: …") each scroll one padding row into scrollback instead
   // of the app's first line, so the sandbox startup notes stay visible.
   const [termRows, setTermRows] = useState(stdout?.rows ?? 24)
+  const [termCols, setTermCols] = useState(stdout?.columns ?? 80)
   useEffect(() => {
     if (!stdout) return
-    const onResize = (): void => setTermRows(stdout.rows)
+    const onResize = (): void => {
+      setTermRows(stdout.rows)
+      setTermCols(stdout.columns)
+    }
     stdout.on('resize', onResize)
     return () => {
       stdout.off('resize', onResize)
@@ -136,9 +143,32 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
 
   const [elapsed, setElapsed] = useState(0)
   const [notice, setNotice] = useState<string | null>(props.initialNotice ?? null)
-  const [input, setInput] = useState('')
+  // The composer's text and caret position (0..text.length), one state so
+  // rapid keypresses between renders can't desync them. Left/right move the
+  // caret, up/down walk the lines of a multi-line input like a normal text
+  // editor, and up on line 1 hands focus to the transcript (navKey below).
+  const [composer, setComposer] = useState({ text: '', cursor: 0 })
   // ctrl+r toggles full vs. collapsed tool output across the whole transcript.
   const [expanded, setExpanded] = useState(false)
+  // Transcript navigation: the key of the highlighted line ('sandbox' for the
+  // startup block, else a TranscriptItem key), or null while the composer has
+  // focus. Up from the composer's first line enters at the newest line; down
+  // past the newest line (or esc) returns to the composer. The highlighted
+  // line renders a › gutter in cyan.
+  const [navKey, setNavKey] = useState<string | null>(null)
+  // Lines opened in place with → while highlighted: a grp:* fold expands into
+  // its tool calls, a clamped long body un-clamps. ← closes them again.
+  const [openedKeys, setOpenedKeys] = useState<ReadonlySet<string>>(new Set())
+  // The transcript viewport: the key of the entry pinned to the top of the
+  // window, or null to follow the bottom (the default — new content stays in
+  // view). The scroll wheel / trackpad moves it; moving the ↑/↓ highlight out
+  // of frame snaps it so the highlighted entry comes back into view.
+  const [scrollKey, setScrollKey] = useState<string | null>(null)
+  // Whether the terminal's mouse reporting is armed (wheel/trackpad scrolls
+  // the transcript). Capturing the mouse steals native text selection, so
+  // ctrl+s releases it for copy/paste and re-arms it — the terminal's own
+  // bypass (shift-drag, or option-drag in iTerm2) works either way.
+  const [mouseCapture, setMouseCapture] = useState(true)
   // Messages you've sent that the server hasn't acknowledged yet — shown as a
   // queued region below the composer, exactly like Claude Code. From the first
   // acknowledgement on (a messages frame or the user-echo record carrying the
@@ -200,11 +230,12 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // fresh story): the ordered setup steps with their full log lines, plus
   // whether the box reached ready. Collapsed, it renders as ONE line showing
   // the current phase, rewritten in place ("Building image…" → "Post-clone
-  // setup… · <latest output line>" → "Ready!"); ctrl+s opens the step list
-  // and arrow keys drill into a step's logs (a running step shows a live
-  // 5-line tail, a finished one its stored log). The block persists after
-  // startup as the durable trace (the sandbox_ready transcript notice is
-  // suppressed below in its favour).
+  // setup… · <latest output line>" → "Ready!"); highlighting the block (↑
+  // from the composer) and pressing → opens the step list, and arrow keys
+  // drill into a step's logs (a running step shows a live 5-line tail, a
+  // finished one its stored log). The block persists after startup as the
+  // durable trace (the sandbox_ready transcript notice is suppressed below
+  // in its favour).
   const sandbox = useMemo(
     () => deriveSandboxState(snapshot.records, props.minRenderFeedSeq),
     [snapshot.records, props.minRenderFeedSeq],
@@ -380,7 +411,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const submit = useCallback(
     (raw: string): void => {
       const text = raw.trim()
-      setInput('')
+      setComposer({ text: '', cursor: 0 })
       if (!text) return
       if (text === '/exit' || text === '/quit') {
         exit()
@@ -425,17 +456,182 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   )
 
   const inputActive = canSend && isRawModeSupported
+
+  // Mouse reporting (SGR), so wheel/trackpad scroll reaches the app as input
+  // instead of scrolling the terminal's (empty) scrollback. Capturing the
+  // mouse steals native text selection, so ctrl+s toggles the capture off
+  // for normal select/copy (the terminal's shift/option-drag bypass works
+  // while armed, too). Turned off again on unmount.
+  useEffect(() => {
+    if (!inputActive || !mouseCapture || !stdout) return
+    stdout.write('\u001B[?1000h\u001B[?1006h')
+    return () => {
+      stdout.write('\u001B[?1006l\u001B[?1000l')
+    }
+  }, [inputActive, mouseCapture, stdout])
+
+  // The rendered transcript lines, in order: collapsed (the default) folds
+  // consecutive tool activity into "Ran N …" notices, except folds opened in
+  // place with → (openedKeys), which render their tool calls right below the
+  // fold line so ← can close them again. Expanded (ctrl+r) shows everything.
+  const visible = useMemo(() => {
+    const pendingKeys = new Set(pendingTools.map((t) => t.key))
+    const base = pendingKeys.size ? items.filter((i) => !pendingKeys.has(i.key)) : items
+    if (expanded) return items
+    const folded = collapseToolRuns(base)
+    if (openedKeys.size === 0) return folded
+    const out: TranscriptItem[] = []
+    for (const item of folded) {
+      out.push(item)
+      if (item.key.startsWith('grp:') && openedKeys.has(item.key)) {
+        out.push(...foldRun(item.key, base))
+      }
+    }
+    return out
+  }, [items, expanded, pendingTools, openedKeys])
+
+  // Everything ↑/↓ can highlight, top to bottom: the sandbox startup block
+  // (when it renders), then the transcript lines. Navigation tracks keys, not
+  // indices, so streamed appends don't shift the highlight. Each entry also
+  // carries an estimated on-screen height (rows), which drives the viewport:
+  // only the slice that fits the window renders, scrolled by wheel/trackpad
+  // and snapped to the highlight.
+  const infraActivity = statusActivityText(statusWord)
+  const entries = useMemo(() => {
+    const width = Math.max(20, termCols - 3)
+    const keys: string[] = []
+    const heights: number[] = []
+    const byKey = new Map<string, TranscriptItem>()
+    if (infraActivity || sandbox) {
+      keys.push('sandbox')
+      heights.push(
+        sandboxBlockRows(sandbox, sandboxOpen, stepLogsOpen, stepCursor, infraActivity != null),
+      )
+    }
+    for (const item of visible) {
+      keys.push(item.key)
+      byKey.set(item.key, item)
+      heights.push(
+        estimateItemRows(item, width, !expanded && !openedKeys.has(item.key)),
+      )
+    }
+    return { keys, heights, byKey }
+  }, [
+    infraActivity,
+    sandbox,
+    visible,
+    sandboxOpen,
+    stepLogsOpen,
+    stepCursor,
+    expanded,
+    openedKeys,
+    termCols,
+  ])
+  const navKeys = entries.keys
+
+  // Rows available to the transcript viewport: the window minus the shell
+  // row, top padding, the footer (composer + meta + queued + notice), the
+  // live-activity reserve while the agent works, and the two possible
+  // "… N above/below" indicator rows. Heights are estimates, so this leans
+  // conservative rather than overflow the window into scrollback.
+  const viewBudget = useMemo(() => {
+    const width = Math.max(20, termCols - 3)
+    const composerRows = inputActive ? 3 + composer.text.split('\n').length : 0
+    const liveReserve =
+      statusWord === 'working'
+        ? 2 + (snapshot.liveText ? Math.ceil(snapshot.liveText.length / width) + 1 : 0)
+        : 0
+    const footerRows =
+      1 + (notice ? 1 : 0) + queuedDisplay.length + composerRows + 1 /* footer margin */
+    return Math.max(3, termRows - 1 - TOP_PAD - footerRows - liveReserve - 2)
+  }, [
+    termRows,
+    termCols,
+    inputActive,
+    composer.text,
+    statusWord,
+    snapshot.liveText,
+    notice,
+    queuedDisplay.length,
+  ])
+
+  // The viewport slice for a given scroll anchor (pure math in viewportSlice;
+  // a stale/missing scroll key falls back to following the bottom).
+  const sliceFor = useCallback(
+    (anchorKey: string | null): { start: number; end: number } => {
+      if (anchorKey !== null) {
+        const idx = entries.keys.indexOf(anchorKey)
+        if (idx >= 0) return viewportSlice(entries.heights, viewBudget, { type: 'top', index: idx })
+      }
+      return viewportSlice(entries.heights, viewBudget, { type: 'bottom' })
+    },
+    [entries, viewBudget],
+  )
+
+  // Wheel/trackpad scroll by whole entries; scrolling down to the newest
+  // entry re-pins the viewport to the bottom so new content follows again.
+  const wheelScroll = useCallback(
+    (delta: number): void => {
+      const cur = sliceFor(scrollKey)
+      const newStart = Math.max(0, Math.min(cur.start + delta, entries.keys.length - 1))
+      const next = viewportSlice(entries.heights, viewBudget, { type: 'top', index: newStart })
+      setScrollKey(next.end >= entries.keys.length ? null : entries.keys[next.start])
+    },
+    [sliceFor, scrollKey, entries, viewBudget],
+  )
+
+  // Snap the viewport so the entry at idx is in frame: above the window it
+  // becomes the top edge, below it becomes the bottom edge (bottom-pinned
+  // when it's the newest entry).
+  const ensureVisible = useCallback(
+    (idx: number): void => {
+      const cur = sliceFor(scrollKey)
+      if (idx < cur.start) {
+        setScrollKey(entries.keys[idx])
+      } else if (idx >= cur.end) {
+        if (idx >= entries.keys.length - 1) setScrollKey(null)
+        else {
+          const snapped = viewportSlice(entries.heights, viewBudget, { type: 'end', index: idx })
+          setScrollKey(entries.keys[snapped.start])
+        }
+      }
+    },
+    [sliceFor, scrollKey, entries, viewBudget],
+  )
+
+  const insertAtCursor = useCallback((ch: string): void => {
+    setComposer(({ text, cursor }) => ({
+      text: text.slice(0, cursor) + ch + text.slice(cursor),
+      cursor: cursor + ch.length,
+    }))
+  }, [])
+
   useInput(
     (ch, key) => {
-      if (key.return) {
-        submit(input)
+      // SGR mouse reports (enabled above) arrive as escape sequences that
+      // ink's key parser passes through as plain text — catch them before
+      // they reach any text handling. Wheel up/down (buttons 64/65) scroll
+      // the viewport; everything else (clicks, drags) is swallowed.
+      if (ch && MOUSE_SEQ_RE.test(ch)) {
+        let delta = 0
+        for (const m of ch.matchAll(/\[<(\d+);\d+;\d+[Mm]/g)) {
+          if (m[1] === '64') delta -= 1
+          else if (m[1] === '65') delta += 1
+        }
+        if (delta !== 0) wheelScroll(delta)
         return
       }
       if (key.escape) {
-        // Modal-first: an open sandbox panel closes before esc means "stop".
+        // Modal-first: an open sandbox panel closes, then transcript
+        // navigation drops back to the composer, before esc means "stop".
         if (sandboxOpen) {
           setSandboxOpen(false)
           setStepLogsOpen(false)
+          return
+        }
+        if (navKey !== null) {
+          setNavKey(null)
+          setScrollKey(null)
           return
         }
         if (working) submit('/stop')
@@ -445,12 +641,18 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         setExpanded((v) => !v)
         return
       }
-      // ctrl+s opens the sandbox step list; ↑/↓ pick a step, → opens its
-      // logs, ← closes them. Opening lands on the newest (= running) step.
+      // ctrl+s releases/re-arms the mouse capture: released, the terminal
+      // gets the mouse back for normal select/copy; armed, wheel/trackpad
+      // scrolls the transcript. (The sandbox step list is opened by
+      // highlighting the startup block with ↑ and pressing →.)
       if (key.ctrl && ch === 's') {
-        setSandboxOpen((v) => !v)
-        setStepLogsOpen(false)
-        setStepCursor(Math.max(0, (sandbox?.steps.length ?? 0) - 1))
+        const next = !mouseCapture
+        setMouseCapture(next)
+        setNotice(
+          next
+            ? 'mouse scrolling restored'
+            : 'mouse released for select/copy · ctrl+s to restore scrolling',
+        )
         return
       }
       if (sandboxOpen) {
@@ -467,16 +669,103 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           return
         }
         if (key.leftArrow) {
-          setStepLogsOpen(false)
+          // ← with logs open hides them; with logs hidden it backs out of
+          // the panel (to the nav highlight if that's how it was opened).
+          if (stepLogsOpen) setStepLogsOpen(false)
+          else setSandboxOpen(false)
           return
         }
+      } else if (navKey !== null) {
+        // Transcript navigation: ↑/↓ walk the lines (snapping the viewport
+        // so the highlight stays in frame), →/enter opens the highlighted
+        // one, ← closes it, typing drops back to the composer.
+        const idx = navKeys.indexOf(navKey)
+        if (key.upArrow) {
+          const target = idx === -1 ? navKeys.length - 1 : Math.max(0, idx - 1)
+          if (navKeys.length > 0) {
+            setNavKey(navKeys[target])
+            ensureVisible(target)
+          }
+          return
+        }
+        if (key.downArrow) {
+          if (idx === -1 || idx >= navKeys.length - 1) {
+            setNavKey(null)
+            setScrollKey(null)
+          } else {
+            setNavKey(navKeys[idx + 1])
+            ensureVisible(idx + 1)
+          }
+          return
+        }
+        if (key.rightArrow || key.return) {
+          if (navKey === 'sandbox') {
+            setSandboxOpen(true)
+            setStepLogsOpen(false)
+            setStepCursor(Math.max(0, (sandbox?.steps.length ?? 0) - 1))
+          } else {
+            const item = visible.find((i) => i.key === navKey)
+            if (item && (navKey.startsWith('grp:') || isCollapsible(item))) {
+              setOpenedKeys((prev) => new Set(prev).add(navKey))
+            }
+          }
+          return
+        }
+        if (key.leftArrow) {
+          if (openedKeys.has(navKey)) {
+            setOpenedKeys((prev) => {
+              const next = new Set(prev)
+              next.delete(navKey)
+              return next
+            })
+          }
+          return
+        }
+        if (ch && !key.ctrl && !key.meta) {
+          setNavKey(null)
+          setScrollKey(null)
+          insertAtCursor(ch)
+        }
+        return
+      }
+      if (key.return) {
+        submit(composer.text)
+        return
+      }
+      if (key.upArrow) {
+        // Up inside a multi-line input climbs a line; up on line 1 moves
+        // focus into the transcript, landing on the newest line.
+        const up = cursorLineUp(composer.text, composer.cursor)
+        if (up !== null) setComposer((c) => ({ ...c, cursor: up }))
+        else if (navKeys.length > 0) {
+          setNavKey(navKeys[navKeys.length - 1])
+          setScrollKey(null)
+        }
+        return
+      }
+      if (key.downArrow) {
+        const down = cursorLineDown(composer.text, composer.cursor)
+        if (down !== null) setComposer((c) => ({ ...c, cursor: down }))
+        return
+      }
+      if (key.leftArrow) {
+        setComposer((c) => ({ ...c, cursor: Math.max(0, c.cursor - 1) }))
+        return
+      }
+      if (key.rightArrow) {
+        setComposer((c) => ({ ...c, cursor: Math.min(c.text.length, c.cursor + 1) }))
+        return
       }
       if (key.backspace || key.delete) {
-        setInput((p) => p.slice(0, -1))
+        setComposer(({ text, cursor }) =>
+          cursor > 0
+            ? { text: text.slice(0, cursor - 1) + text.slice(cursor), cursor: cursor - 1 }
+            : { text, cursor },
+        )
         return
       }
       if (key.ctrl || key.meta) return
-      if (ch) setInput((p) => p + ch)
+      if (ch) insertAtCursor(ch)
     },
     { isActive: inputActive },
   )
@@ -490,35 +779,36 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // fold only counts what actually ran. The pieces are memoized on
   // [items, expanded] (pendingTools derives from items), so the elapsed-second
   // ticks reuse the same elements and don't re-lay-out the transcript.
-  const { lines, runningHug } = useMemo(() => {
-    const pendingKeys = new Set(pendingTools.map((t) => t.key))
-    const visible = expanded
-      ? items
-      : collapseToolRuns(pendingKeys.size ? items.filter((i) => !pendingKeys.has(i.key)) : items)
-    const last = visible[visible.length - 1]
-    return {
-      lines: visible.map((item) => (
-        <TranscriptLine key={item.key} item={item} expanded={expanded} />
-      )),
-      // Whether the live "Running …" line should hug the block above it: in
-      // expanded mode the pending ● call itself is the last line; collapsed,
-      // only when the trailing fold ("Ran N …", key grp:*) is the same burst
-      // the pending call belongs to — otherwise the line opens its own block.
-      runningHug: expanded ? pendingKeys.size > 0 : (last?.key.startsWith('grp:') ?? false),
-    }
-  }, [items, expanded, pendingTools])
+  // The viewport slice actually rendered this frame; atBottom means the
+  // newest entry is in frame (live activity lines render only then).
+  const slice = useMemo(() => sliceFor(scrollKey), [sliceFor, scrollKey])
+  const atBottom = slice.end >= entries.keys.length
+  // Whether the live "Running …" line should hug the block above it: in
+  // expanded mode the pending ● call itself is the last line; collapsed,
+  // when the trailing fold ("Ran N …", key grp:*) — or an opened fold's
+  // trailing tool line — is the same burst the pending call belongs to.
+  // Otherwise the line opens its own block.
+  const lastVisible = visible[visible.length - 1]
+  const runningHug = expanded
+    ? pendingTools.length > 0
+    : lastVisible != null &&
+      (lastVisible.key.startsWith('grp:') ||
+        lastVisible.kind === 'tool' ||
+        lastVisible.kind === 'tool_result')
 
   // The persistent footer status line: the current status, the running spend
   // (cumulative total + the last turn's cost), and the session identity — the
-  // dashboard link rendered as the session id, the model, and the CLI version.
-  // Command hints live in --help. The total prefers the server's ledger figure
-  // (live via the session frames' cost columns, climbing mid-turn); the
-  // CC-derived result total is the fallback against older backends.
+  // dashboard link rendered as the session id, the agent config (when the
+  // session has one), the model, and the CLI version. Command hints live in
+  // --help. The total prefers the server's ledger figure (live via the
+  // session frames' cost columns, climbing mid-turn); the CC-derived result
+  // total is the fallback against older backends.
   const totalStr = `$${(serverCostUsd ?? cost.total ?? 0).toFixed(2)}`
   const lastStepStr = cost.lastStep != null ? ` (Last step: $${cost.lastStep.toFixed(2)})` : ''
   const metaLine = [
     `${statusWord} · ${totalStr} total${lastStepStr}`,
     hyperlink(props.sessionUrl, sessionId),
+    ...(props.configName ? [`config: ${props.configName}`] : []),
     ...(props.model ? [props.model] : []),
     `v${VERSION}`,
   ].join(' · ')
@@ -536,7 +826,6 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   //   unresolved call).
   const liveText = snapshot.liveText
   const liveTokens = snapshot.liveOutputTokens
-  const infraActivity = statusActivityText(statusWord)
   const generating = statusWord === 'working' && (liveText !== '' || liveTokens != null)
   const generatingBits = [
     formatDuration(elapsed),
@@ -564,24 +853,32 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           padding and nothing is printed to scrollback before the app. */}
       {/* Sandbox spawn/wake progress, at the top where startup belongs: the
           ✻ header (ticking while infra is active) with the current phase on
-          one line under it, rewritten in place as phases pass. ctrl+s swaps
-          the line for the full step list; →/← on a step shows/hides its logs
-          (a live 5-line tail while the step runs). The block stays after
-          startup — frozen at "Ready!" — as the durable trace. */}
-      {(infraActivity || sandbox) && (
+          one line under it, rewritten in place as phases pass. Highlighting
+          the block (↑) and pressing → swaps the line for the full step list;
+          →/← on a step shows/hides its logs (a live 5-line tail while the
+          step runs). The block stays after
+          startup — frozen at "Ready!" — as the durable trace. It is the
+          viewport's first entry, so it scrolls out of frame like any line. */}
+      {(infraActivity || sandbox) && entries.keys[0] === 'sandbox' && slice.start === 0 && (
         <Box flexDirection="column">
+          {/* The › replaces the ✻ while highlighted (same 1-char slot), so
+              the header never shifts; the block's text goes cyan with it. */}
           <Text>
-            <Text color="cyan">✻</Text>{' '}
-            <Text dimColor>
+            {navKey === 'sandbox' ? (
+              <Text color="cyan">›</Text>
+            ) : (
+              <Text color="cyan">✻</Text>
+            )}{' '}
+            <Text color={navKey === 'sandbox' ? 'cyan' : undefined} dimColor={navKey !== 'sandbox'}>
               {infraActivity ? `${infraActivity}… (${formatDuration(elapsed)})` : 'Starting sandbox…'}
             </Text>
           </Text>
           {!sandboxOpen && sandboxPhaseLine(sandbox) && (
             <Text>
               {'  '}
-              <Text dimColor>
+              <Text color={navKey === 'sandbox' ? 'cyan' : undefined} dimColor={navKey !== 'sandbox'}>
                 ⎿ {oneLine(sandboxPhaseLine(sandbox) as string, 110)}
-                {inputActive ? ' (ctrl+s: steps)' : ''}
+                {inputActive && navKey === 'sandbox' ? ' (→: steps)' : ''}
               </Text>
             </Text>
           )}
@@ -601,15 +898,19 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                 const hidden = step.lines.length - logLines.length
                 return (
                   <Box key={step.hook} flexDirection="column">
+                    {/* The › cursor column is always reserved (a space when
+                        unselected), so selection never shifts the row; the
+                        selected step reads cyan like the transcript
+                        highlight. */}
                     <Text>
                       {'  '}
                       <Text color="cyan">{selected ? '›' : ' '}</Text>{' '}
                       <Text color={running ? 'cyan' : 'green'}>{running ? '✻' : '✓'}</Text>{' '}
-                      <Text dimColor={!selected}>
+                      <Text color={selected ? 'cyan' : undefined} dimColor={!selected}>
                         {step.label}
                         {running ? '…' : ''}
                       </Text>{' '}
-                      <Text dimColor>
+                      <Text color={selected ? 'cyan' : undefined} dimColor={!selected}>
                         ({step.lines.length} log line{step.lines.length === 1 ? '' : 's'})
                       </Text>
                     </Text>
@@ -627,19 +928,41 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                 )
               })}
               {sandbox?.ready && <Text dimColor>{'    '}Ready!</Text>}
-              <Text dimColor>{'    '}↑/↓ step · → logs · ← hide logs · ctrl+s collapse</Text>
+              <Text dimColor>{'    '}↑/↓ step · → logs · ← back · esc close</Text>
             </Box>
           )}
         </Box>
       )}
-      {/* The transcript grows through the middle of the terminal, pinning the
-          composer + meta to the bottom edge (flexGrow fills the slack). */}
+      {/* The transcript viewport grows through the middle of the terminal,
+          pinning the composer + meta to the bottom edge (flexGrow fills the
+          slack). Only the slice that fits the window renders; dim markers
+          show what's out of frame above/below. */}
       <Box flexDirection="column" flexGrow={1}>
-        {lines}
+        {slice.start > 0 && (
+          <Text dimColor>… {slice.start} earlier (scroll or ↑)</Text>
+        )}
+        {entries.keys.slice(slice.start, slice.end).map((k) => {
+          if (k === 'sandbox') return null
+          const item = entries.byKey.get(k)
+          if (!item) return null
+          return (
+            <TranscriptLine
+              key={k}
+              item={item}
+              expanded={expanded}
+              opened={openedKeys.has(k)}
+              selected={navKey === k}
+            />
+          )
+        })}
+        {!atBottom && (
+          <Text dimColor>… {entries.keys.length - slice.end} newer (scroll or ↓)</Text>
+        )}
         {/* The live tool-call status, attached to the burst it belongs to: hugs
             the collapsed "Ran N …" fold (or the expanded ● call) above it, and
-            disappears into the fold's count once the result lands. */}
-        {runningTool && (
+            disappears into the fold's count once the result lands. Live lines
+            only render while the viewport follows the bottom. */}
+        {atBottom && runningTool && (
           <Box marginTop={runningHug ? 0 : 1}>
             <Text>
               <Text color="cyan">✻</Text>{' '}
@@ -652,12 +975,15 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         {/* The in-progress assistant response, streamed token-by-token from delta
             frames, with its live status hugging beneath; replaced by the
             committed step when it lands. */}
-        {liveText && (
+        {/* Indented to the same 2-column gutter as the committed assistant
+            item it becomes, so the text doesn't jump when it lands. */}
+        {atBottom && liveText && (
           <Box marginTop={1}>
+            <Box width={2} flexShrink={0} />
             <Text>{liveText}</Text>
           </Box>
         )}
-        {generating && (
+        {atBottom && generating && (
           <Box marginTop={liveText ? 0 : 1}>
             <Text>
               <Text color="cyan">✻</Text>{' '}
@@ -673,9 +999,32 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             bottom borders are drawn, so the rules span the terminal width. */}
         {inputActive && (
           <Box borderStyle="single" borderLeft={false} borderRight={false} borderDimColor>
-            <Text color="cyan">› </Text>
-            <Text>{input}</Text>
-            <Text inverse> </Text>
+            {/* One parent Text so a multi-line input flows as a single block
+                (sibling Texts in a row Box would render as columns). The
+                caret is the inverse cell at the cursor, hidden while the
+                transcript has focus (navKey). A caret sitting on a newline
+                renders as an inverse space at that line's end. The key
+                remounts the node on every content change: ink reuses the
+                previous measurement when nested text mutates in place, and
+                the stale (narrower) width wraps the caret onto the border
+                row below. */}
+            <Text key={`${composer.text}:${composer.cursor}:${navKey === null}`}>
+              <Text color="cyan">› </Text>
+              {composer.text.slice(0, composer.cursor)}
+              {navKey === null && (
+                <Text inverse>
+                  {composer.cursor < composer.text.length &&
+                  composer.text[composer.cursor] !== '\n'
+                    ? composer.text[composer.cursor]
+                    : ' '}
+                </Text>
+              )}
+              {composer.cursor < composer.text.length
+                ? navKey === null && composer.text[composer.cursor] !== '\n'
+                  ? composer.text.slice(composer.cursor + 1)
+                  : composer.text.slice(composer.cursor)
+                : ''}
+            </Text>
           </Box>
         )}
         {queuedDisplay.length > 0 && (
@@ -696,6 +1045,126 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
 // Compact token count for the live footer: 1400 -> "1.4k", 900 -> "900".
 function formatTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+}
+
+// Where the caret lands after ↑ in the composer: the same column on the
+// previous line (clamped to that line's length, text-editor style), or null
+// when the caret is already on the first line — the signal to move focus up
+// into the transcript. Pure, for tests.
+export function cursorLineUp(text: string, cursor: number): number | null {
+  const lineStart = cursor > 0 ? text.lastIndexOf('\n', cursor - 1) + 1 : 0
+  if (lineStart === 0) return null
+  const col = cursor - lineStart
+  const prevStart = lineStart >= 2 ? text.lastIndexOf('\n', lineStart - 2) + 1 : 0
+  const prevLen = lineStart - 1 - prevStart
+  return prevStart + Math.min(col, prevLen)
+}
+
+// Where the caret lands after ↓: the same column on the next line (clamped),
+// or null when already on the last line. Pure, for tests.
+export function cursorLineDown(text: string, cursor: number): number | null {
+  const nextNewline = text.indexOf('\n', cursor)
+  if (nextNewline < 0) return null
+  const lineStart = cursor > 0 ? text.lastIndexOf('\n', cursor - 1) + 1 : 0
+  const col = cursor - lineStart
+  const nextStart = nextNewline + 1
+  const nextEnd = text.indexOf('\n', nextStart)
+  const nextLen = (nextEnd < 0 ? text.length : nextEnd) - nextStart
+  return nextStart + Math.min(col, nextLen)
+}
+
+// One or more SGR mouse reports (\x1b[<button;x;yM), and nothing else — ink's
+// key parser doesn't recognise them and would pass them through as text (the
+// leading escape of the first report is already stripped by ink).
+const MOUSE_SEQ_RE = /^(?:\u001B?\[<\d+;\d+;\d+[Mm])+$/
+
+// The viewport slice over a list of entry heights: which contiguous run of
+// entries fits in `budget` rows, anchored to the bottom (follow newest), to
+// a top entry (scrolled), or with an entry pinned to the bottom edge (the
+// ↓-snap when the highlight walks below the frame). Always includes at least
+// the anchor entry, even when it alone overflows the budget. Pure, for tests.
+export function viewportSlice(
+  heights: readonly number[],
+  budget: number,
+  anchor: { type: 'bottom' } | { type: 'top'; index: number } | { type: 'end'; index: number },
+): { start: number; end: number } {
+  const n = heights.length
+  if (n === 0) return { start: 0, end: 0 }
+  if (anchor.type === 'top') {
+    const start = Math.max(0, Math.min(anchor.index, n - 1))
+    let used = 0
+    let end = start
+    while (end < n) {
+      if (used + heights[end] > budget && end > start) break
+      used += heights[end]
+      end++
+    }
+    return { start, end }
+  }
+  const endIdx = anchor.type === 'bottom' ? n - 1 : Math.max(0, Math.min(anchor.index, n - 1))
+  let used = 0
+  let start = endIdx + 1
+  while (start > 0) {
+    if (used + heights[start - 1] > budget && start <= endIdx) break
+    used += heights[start - 1]
+    start--
+  }
+  return { start, end: endIdx + 1 }
+}
+
+// Estimated rows a transcript item occupies on screen: its (possibly
+// clamped) body lines, wrapped at the given width, plus the "+N lines"
+// marker and the blank spacer row. An estimate is enough — the viewport
+// budget leans conservative. Pure, for tests.
+export function estimateItemRows(item: TranscriptItem, width: number, clamp: boolean): number {
+  const clamped =
+    clamp && isCollapsible(item)
+      ? clampLines(item.text, COLLAPSE_LINES)
+      : { body: item.text, more: 0 }
+  let rows = (item.spaceBefore ? 1 : 0) + (clamped.more > 0 ? 1 : 0)
+  for (const line of clamped.body.split('\n')) {
+    rows += Math.max(1, Math.ceil(line.length / width))
+  }
+  return rows
+}
+
+// Estimated rows of the sandbox startup block in its current shape (header +
+// phase line collapsed; header + step list + open logs + hint expanded).
+function sandboxBlockRows(
+  sandbox: SandboxState | null,
+  open: boolean,
+  logsOpen: boolean,
+  stepCursor: number,
+  infraActive: boolean,
+): number {
+  if (!open) return 1 + (sandboxPhaseLine(sandbox) ? 1 : 0)
+  const steps = sandbox?.steps ?? []
+  let rows = 1 + Math.max(1, steps.length) + (sandbox?.ready ? 1 : 0) + 1
+  if (logsOpen && steps.length > 0) {
+    const i = Math.min(stepCursor, steps.length - 1)
+    const step = steps[i]
+    const running = sandbox != null && !sandbox.ready && infraActive && i === steps.length - 1
+    const shown = Math.min(step.lines.length, running ? RUNNING_TAIL_LINES : FINISHED_LOG_LINES)
+    rows += shown + (step.lines.length > shown ? 1 : 0)
+  }
+  return rows
+}
+
+// The run of tool/tool_result items a collapsed fold stands for. A fold's key
+// is grp:<first item's key> (see the SDK's collapseToolRuns), so the run is
+// the consecutive tool activity starting at that item in the unfolded list.
+// Pure, for tests.
+export function foldRun(foldKey: string, items: readonly TranscriptItem[]): TranscriptItem[] {
+  const firstKey = foldKey.slice('grp:'.length)
+  const start = items.findIndex((i) => i.key === firstKey)
+  if (start < 0) return []
+  const run: TranscriptItem[] = []
+  for (let i = start; i < items.length; i++) {
+    const item = items[i]
+    if (item.kind !== 'tool' && item.kind !== 'tool_result') break
+    run.push(item)
+  }
+  return run
 }
 
 // A setup hook name ("image.setup", "post_clone") as a startup phase.
@@ -831,42 +1300,57 @@ function styleFor(item: TranscriptItem): {
 const TranscriptLine = React.memo(function TranscriptLine({
   item,
   expanded,
+  opened,
+  selected,
 }: {
   item: TranscriptItem
   expanded: boolean
+  // This line was opened in place with → while highlighted (un-clamps it).
+  opened: boolean
+  // This line is the transcript-navigation highlight: › gutter, cyan text.
+  selected: boolean
 }): React.ReactElement {
   const mt = item.spaceBefore ? 1 : 0
   const { gutterColor, textColor, dim, bold } = styleFor(item)
 
-  // Plain assistant prose: no gutter, just spaced text.
-  if (item.kind === 'assistant') {
-    return (
-      <Box marginTop={mt}>
-        <Text>{item.text}</Text>
-      </Box>
-    )
-  }
+  // Every line (assistant prose included) reserves the same 2-column gutter,
+  // so the › highlight fills the slot IN PLACE of whatever glyph lives there
+  // and the text never shifts when the selection lands on it.
 
   // Long tool results and user turns collapse to a compact body with a
-  // "+N lines" marker unless ctrl+r has expanded the transcript.
+  // "+N lines" marker unless ctrl+r has expanded the transcript or → opened
+  // this line.
   const clamped =
-    !expanded && isCollapsible(item)
+    !expanded && !opened && isCollapsible(item)
       ? clampLines(item.text, COLLAPSE_LINES)
       : { body: item.text, more: 0 }
 
   return (
     <Box marginTop={mt}>
       <Box width={2}>
-        <Text color={gutterColor} dimColor={dim && !item.isError}>
-          {item.gutter ?? ''}
+        <Text
+          color={selected ? 'cyan' : gutterColor}
+          dimColor={!selected && dim && !item.isError}
+        >
+          {/* Unselected user turns swap the SDK's › gutter for a plain >,
+              so › on screen always means "the selection is here". */}
+          {selected ? '›' : item.gutter === '›' ? '>' : (item.gutter ?? '')}
         </Text>
       </Box>
       <Box flexDirection="column" flexGrow={1}>
-        <Text color={textColor} dimColor={dim} bold={bold}>
+        <Text color={selected ? 'cyan' : textColor} dimColor={!selected && dim} bold={bold}>
           {clamped.body}
-          {item.detail ? <Text dimColor>{item.detail}</Text> : null}
+          {item.detail ? (
+            <Text color={selected ? 'cyan' : undefined} dimColor={!selected}>
+              {item.detail}
+            </Text>
+          ) : null}
         </Text>
-        {clamped.more > 0 && <Text dimColor>… +{clamped.more} lines (ctrl+r to expand)</Text>}
+        {clamped.more > 0 && (
+          <Text dimColor>
+            … +{clamped.more} lines ({selected ? '→' : 'ctrl+r'} to expand)
+          </Text>
+        )}
       </Box>
     </Box>
   )

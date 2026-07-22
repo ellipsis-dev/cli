@@ -2,15 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { cliAuthUrl, configUrl, hyperlink, sessionUrl } from '../src/lib/urls'
 
 describe('sessionUrl', () => {
-  it('builds the session detail path scoped by account login', () => {
+  it('builds the account page link with the session query param', () => {
     expect(sessionUrl('https://app.ellipsis.dev', 'octocat', 'session_8f2c')).toBe(
-      'https://app.ellipsis.dev/octocat/sessions/session_8f2c',
+      'https://app.ellipsis.dev/octocat?session=session_8f2c',
     )
   })
 
   it('encodes the login and session id', () => {
     expect(sessionUrl('https://app.ellipsis.dev', 'a/b', 's d')).toBe(
-      'https://app.ellipsis.dev/a%2Fb/sessions/s%20d',
+      'https://app.ellipsis.dev/a%2Fb?session=s%20d',
     )
   })
 })

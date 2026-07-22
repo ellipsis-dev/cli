@@ -90,10 +90,13 @@ export async function runConnect(
   sessionId: string,
   showRecords: boolean,
   readOnly = false,
-  // An extra opening notice from the caller (e.g. `start --connect` reporting
-  // which config the defaults ladder picked) — shown in the app instead of
+  // An extra opening notice from the caller — shown in the app instead of
   // printed beforehand, which would land in scrollback behind the app.
   startupNotice?: string,
+  // The agent config name from the caller (e.g. `start --connect`, whose
+  // start response carries resolved_config_name); when absent it is derived
+  // from the fetched session. Shown in the footer meta line.
+  configName?: string,
 ): Promise<void> {
   const api = new ApiClient()
   const token = requireToken()
@@ -107,6 +110,9 @@ export async function runConnect(
     readOnly && c.canSend ? 'read-only (--no-input) — following without the composer' : c.reason
   const notice = [startupNotice, reason].filter(Boolean).join(' · ') || null
   const url = sessionUrl(resolveAppBase(), me.customer_login, sessionId)
+  // The config identity for the footer meta line: the caller's resolved name
+  // first, then whatever the session itself carries.
+  const config = configName ?? session.resolved_config_name ?? session.agent_config_id ?? null
 
   // No scrollback preamble: the app owns the whole surface, Claude Code-style.
   // The footer carries the session identity/status; a watch-only reason
@@ -147,6 +153,7 @@ export async function runConnect(
       initialNotice: notice,
       // The session's one model, fixed at creation (backend tokens_model).
       model: typeof session.tokens_model === 'string' ? session.tokens_model : null,
+      configName: config,
       exitState,
     }),
   )

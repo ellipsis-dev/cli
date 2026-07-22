@@ -3,8 +3,10 @@
 // and the customer's account login (from GET /v1/me — the routes are scoped by
 // login). Mirrors the backend's link format in github_brand.py.
 
+// Sessions open on the account page with the session picked out by query
+// param (the app routes /{login}?session={id}).
 export function sessionUrl(appBase: string, accountLogin: string, sessionId: string): string {
-  return `${appBase}/${encodeURIComponent(accountLogin)}/sessions/${encodeURIComponent(sessionId)}`
+  return `${appBase}/${encodeURIComponent(accountLogin)}?session=${encodeURIComponent(sessionId)}`
 }
 
 // The agent (config) detail page is keyed by the config id (agent_id == config_id).
