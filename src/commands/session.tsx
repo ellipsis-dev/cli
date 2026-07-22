@@ -123,6 +123,10 @@ export function registerSession(program: Command): void {
     .option('--cpu <n>', 'sandbox vCPUs (e.g. 2 or 0.5)', toNumber)
     .option('--memory <size>', 'sandbox memory (e.g. 8GB)')
     .option('--timeout <duration>', 'sandbox timeout (e.g. 30m or 1h)')
+    .option(
+      '--rebuild',
+      'skip the sandbox image cache: fresh full build (image layers, clones, image.setup), whose snapshot refreshes the cache',
+    )
     .option('--budget <usd>', 'per-run spend limit in USD for this session (limits.run)', toNumber)
     .option(
       '-p, --prompt <text>',
@@ -163,6 +167,7 @@ export function registerSession(program: Command): void {
           cpu?: number
           memory?: string
           timeout?: string
+          rebuild?: boolean
           budget?: number
           prompt?: string
           metadata: Record<string, string>
@@ -224,6 +229,9 @@ export function registerSession(program: Command): void {
           // Appended to the initial user query at build time; gives this
           // session instructions on top of the config's shared system prompt.
           if (promptText) req.prompt = promptText
+          // Skip the image cache for the initial provision (wakes cache as
+          // usual); the fresh build's snapshot becomes the new cache entry.
+          if (opts.rebuild) req.force_rebuild = true
           // A promptless connect (a bare `agent`) starts the session idle:
           // no fabricated kickoff message, Claude Code waits at the prompt
           // for whatever is typed into the composer, like a local `claude`.
@@ -236,11 +244,14 @@ export function registerSession(program: Command): void {
 
           // Say which agent the server picked when it came from the defaults
           // ladder, so a bare `agent` never silently runs an unexpected config.
-          if (!opts.json && session.resolved_config_name) {
+          // The connect UI shows it as its opening notice (anything printed
+          // before the app would land in scrollback); every other mode prints it.
+          let configNote: string | undefined
+          if (session.resolved_config_name) {
             if (session.resolution_source === 'repo_default') {
-              console.log(`using config "${session.resolved_config_name}" (repo default)`)
+              configNote = `using config "${session.resolved_config_name}" (repo default)`
             } else if (session.resolution_source === 'account_default') {
-              console.log(`using config "${session.resolved_config_name}" (account default)`)
+              configNote = `using config "${session.resolved_config_name}" (account default)`
             }
           }
 
@@ -250,6 +261,7 @@ export function registerSession(program: Command): void {
             const ellipsisBlock = (session.agent_config as Record<string, unknown> | undefined)
               ?.ellipsis as { interactive?: boolean } | undefined
             if (ellipsisBlock?.interactive === false) {
+              if (configNote) console.log(configNote)
               console.log(
                 'this agent is not interactive; watching output instead of connecting',
               )
@@ -258,9 +270,11 @@ export function registerSession(program: Command): void {
               await watchSessionStreaming(api, session.id, FALLBACK_POLL_INTERVAL_SECONDS, false)
               return
             }
-            await startConnect(session)
+            await startConnect(session, configNote)
             return
           }
+
+          if (!opts.json && configNote) console.log(configNote)
 
           if (opts.watch) {
             if (!opts.json) {
@@ -794,8 +808,8 @@ export function registerSession(program: Command): void {
 // (creating sandbox → spawning agent process) as it happens and reports a
 // terminal status reached before the sandbox ever ran (a preflight/budget gate),
 // so there is nothing to wait for out here.
-export async function startConnect(session: AgentSession): Promise<void> {
-  await runConnect(session.id, true)
+export async function startConnect(session: AgentSession, notice?: string): Promise<void> {
+  await runConnect(session.id, true, false, notice)
 }
 
 // `--watch` entry point: stream the session's output live over WebSocket, and

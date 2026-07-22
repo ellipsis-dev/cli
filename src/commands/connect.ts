@@ -90,6 +90,10 @@ export async function runConnect(
   sessionId: string,
   showRecords: boolean,
   readOnly = false,
+  // An extra opening notice from the caller (e.g. `start --connect` reporting
+  // which config the defaults ladder picked) — shown in the app instead of
+  // printed beforehand, which would land in scrollback behind the app.
+  startupNotice?: string,
 ): Promise<void> {
   const api = new ApiClient()
   const token = requireToken()
@@ -101,6 +105,7 @@ export async function runConnect(
   const canSend = readOnly ? false : c.canSend
   const reason =
     readOnly && c.canSend ? 'read-only (--no-input) — following without the composer' : c.reason
+  const notice = [startupNotice, reason].filter(Boolean).join(' · ') || null
   const url = sessionUrl(resolveAppBase(), me.customer_login, sessionId)
 
   // No scrollback preamble: the app owns the whole surface, Claude Code-style.
@@ -122,6 +127,14 @@ export async function runConnect(
   // Written by the app when it exits because the conversation closed (terminal;
   // nothing left to reconnect to), so the detach sign-off below stays honest.
   const exitState = { closed: false }
+  // Start the app at the top of a fresh window: newlines scroll whatever is on
+  // screen (the shell prompt, anything a caller printed) into scrollback, then
+  // the cursor homes to row 1. Without this the first paint begins mid-screen,
+  // overflows the window, and the app's opening lines (the sandbox startup
+  // notes) end up stranded above the fold.
+  if (process.stdout.isTTY) {
+    process.stdout.write('\n'.repeat(process.stdout.rows ?? 24) + '\x1b[H')
+  }
   const app = render(
     React.createElement(ConnectApp, {
       api,
@@ -131,7 +144,7 @@ export async function runConnect(
       canSend,
       minRenderFeedSeq: showRecords ? 0 : store.cursor,
       sessionUrl: url,
-      initialNotice: reason ?? null,
+      initialNotice: notice,
       // The session's one model, fixed at creation (backend tokens_model).
       model: typeof session.tokens_model === 'string' ? session.tokens_model : null,
       exitState,
@@ -141,7 +154,9 @@ export async function runConnect(
 
   if (canSend && !exitState.closed) {
     // The session keeps running after a detach; hand back the exact command
-    // that re-opens this conversation.
-    console.log(`\nresume with: agent session connect ${sessionId}`)
+    // that re-opens this conversation. No leading newline: the single row this
+    // line scrolls is absorbed by the app's top padding (see ConnectApp), so
+    // the sign-off never scrolls the app's first content line out of the window.
+    console.log(`resume with: agent session connect ${sessionId}`)
   }
 }

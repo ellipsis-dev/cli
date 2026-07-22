@@ -18,7 +18,6 @@ import {
   collapseToolRuns,
   foldCosts,
   formatDuration,
-  isConnectVisibleRecord,
   pendingToolCalls,
   recordToItems,
   setupOutputHook,
@@ -88,6 +87,11 @@ function isWorkingStatus(status: string): boolean {
   return ['scheduled', 'starting', 'working', 'retrying'].includes(status)
 }
 
+// Blank rows rendered above the app's first line: two of visual breathing
+// room above the ✻ startup header, plus two of sacrificial slack — see the
+// termRows comment in ConnectApp for what the slack absorbs.
+const TOP_PAD = 4
+
 // One local send awaiting server acknowledgement: messageId is null while the
 // POST is in flight, then the created SessionMessage's id (protocol v2 §4.2) —
 // the chip retires the moment the store acknowledges that id (a messages
@@ -102,9 +106,13 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const { stdout } = useStdout()
 
   // Terminal height, tracked across resizes, so the app fills the whole
-  // window Claude Code-style: banner at top, composer + meta pinned to the
-  // bottom, the transcript growing through the space between. One row is
-  // left for the shell cursor so the first paint never scrolls.
+  // window Claude Code-style: composer + meta pinned to the bottom edge (one
+  // row below is left for the shell cursor), the transcript growing through
+  // the space between, and TOP_PAD blank rows of padding above the first
+  // line. The padding is deliberate slack: terminals that consume an extra
+  // row (observed in practice) and the caller's post-exit sign-off line
+  // ("resume with: …") each scroll one padding row into scrollback instead
+  // of the app's first line, so the sandbox startup notes stay visible.
   const [termRows, setTermRows] = useState(stdout?.rows ?? 24)
   useEffect(() => {
     if (!stdout) return
@@ -154,11 +162,13 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // The committed transcript, derived from the store's record log. Keys ride
   // feed_seq (the shared per-session order), so items are stable across
   // re-derivations.
+  // Lifecycle records are excluded entirely: the sandbox story renders as the
+  // one-line progress block up top (sandboxProgress), not as transcript rows.
   const items = useMemo(
     () =>
       snapshot.records
         .filter((r) => r.feed_seq > props.minRenderFeedSeq)
-        .filter(isConnectVisibleRecord)
+        .filter((r) => r.source !== 'lifecycle')
         .flatMap((r) => recordToItems(r, `s${r.feed_seq}`)),
     [snapshot.records, props.minRenderFeedSeq],
   )
@@ -185,21 +195,23 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       )
     : null
 
-  // The setup script's latest output line while the sandbox spawns (streamed
-  // sandbox_setup_output lifecycle chunks) — the sub-line under "Starting
-  // sandbox…" that says WHAT the box is doing. sandbox_ready retires it.
-  const setupLine = useMemo(() => {
-    for (let i = snapshot.records.length - 1; i >= 0; i--) {
-      const record = snapshot.records[i]
-      if (record.source !== 'lifecycle') continue
-      if (record.record_type === 'sandbox_ready') return null
-      if (record.record_type === 'sandbox_setup_output') {
-        const line = setupOutputLine(record.payload)
-        return line ? `${setupOutputHook(record.payload)} · ${line}` : null
-      }
-    }
-    return null
-  }, [snapshot.records])
+  // The sandbox startup story, derived from the lifecycle records of the
+  // latest start (a sandbox_starting record resets it, so a wake tells a
+  // fresh story): the ordered setup steps with their full log lines, plus
+  // whether the box reached ready. Collapsed, it renders as ONE line showing
+  // the current phase, rewritten in place ("Building image…" → "Post-clone
+  // setup… · <latest output line>" → "Ready!"); ctrl+s opens the step list
+  // and arrow keys drill into a step's logs (a running step shows a live
+  // 5-line tail, a finished one its stored log). The block persists after
+  // startup as the durable trace (the sandbox_ready transcript notice is
+  // suppressed below in its favour).
+  const sandbox = useMemo(
+    () => deriveSandboxState(snapshot.records, props.minRenderFeedSeq),
+    [snapshot.records, props.minRenderFeedSeq],
+  )
+  const [sandboxOpen, setSandboxOpen] = useState(false)
+  const [stepCursor, setStepCursor] = useState(0)
+  const [stepLogsOpen, setStepLogsOpen] = useState(false)
 
   // Bodies of the server's PENDING inbox messages — the durable queued signal.
   const serverQueued = useMemo(
@@ -420,12 +432,44 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         return
       }
       if (key.escape) {
+        // Modal-first: an open sandbox panel closes before esc means "stop".
+        if (sandboxOpen) {
+          setSandboxOpen(false)
+          setStepLogsOpen(false)
+          return
+        }
         if (working) submit('/stop')
         return
       }
       if (key.ctrl && ch === 'r') {
         setExpanded((v) => !v)
         return
+      }
+      // ctrl+s opens the sandbox step list; ↑/↓ pick a step, → opens its
+      // logs, ← closes them. Opening lands on the newest (= running) step.
+      if (key.ctrl && ch === 's') {
+        setSandboxOpen((v) => !v)
+        setStepLogsOpen(false)
+        setStepCursor(Math.max(0, (sandbox?.steps.length ?? 0) - 1))
+        return
+      }
+      if (sandboxOpen) {
+        if (key.upArrow) {
+          setStepCursor((c) => Math.max(0, c - 1))
+          return
+        }
+        if (key.downArrow) {
+          setStepCursor((c) => Math.min(Math.max(0, (sandbox?.steps.length ?? 0) - 1), c + 1))
+          return
+        }
+        if (key.rightArrow) {
+          setStepLogsOpen(true)
+          return
+        }
+        if (key.leftArrow) {
+          setStepLogsOpen(false)
+          return
+        }
       }
       if (key.backspace || key.delete) {
         setInput((p) => p.slice(0, -1))
@@ -510,28 +554,81 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   ].join(' · ')
 
   return (
-    <Box flexDirection="column" minHeight={termRows - 1}>
+    <Box flexDirection="column" minHeight={Math.max(0, termRows - 1)}>
+      {/* Top padding — see the termRows comment: absorbs terminal row-
+          accounting quirks and the post-exit sign-off so the first content
+          line never scrolls out of the window. */}
+      <Box height={TOP_PAD} flexShrink={0} />
       {/* No banner: session identity (dashboard link, model, version) lives in
-          the footer meta line, so the transcript starts at the top edge and
-          nothing is printed to scrollback before the app. */}
-      {/* Sandbox spawn/wake progress, at the top where startup belongs;
-          re-renders in place and disappears once the session is live. */}
-      {infraActivity && (
+          the footer meta line, so the transcript starts right under the top
+          padding and nothing is printed to scrollback before the app. */}
+      {/* Sandbox spawn/wake progress, at the top where startup belongs: the
+          ✻ header (ticking while infra is active) with the current phase on
+          one line under it, rewritten in place as phases pass. ctrl+s swaps
+          the line for the full step list; →/← on a step shows/hides its logs
+          (a live 5-line tail while the step runs). The block stays after
+          startup — frozen at "Ready!" — as the durable trace. */}
+      {(infraActivity || sandbox) && (
         <Box flexDirection="column">
           <Text>
             <Text color="cyan">✻</Text>{' '}
             <Text dimColor>
-              {infraActivity}… ({formatDuration(elapsed)})
+              {infraActivity ? `${infraActivity}… (${formatDuration(elapsed)})` : 'Starting sandbox…'}
             </Text>
           </Text>
-          {/* What the spawn is actually doing: the setup script's latest
-              output line, streamed from the backend as it runs (a cold
-              dependency install is most of a slow start). */}
-          {setupLine && (
+          {!sandboxOpen && sandboxPhaseLine(sandbox) && (
             <Text>
               {'  '}
-              <Text dimColor>⎿ {oneLine(setupLine, 110)}</Text>
+              <Text dimColor>
+                ⎿ {oneLine(sandboxPhaseLine(sandbox) as string, 110)}
+                {inputActive ? ' (ctrl+s: steps)' : ''}
+              </Text>
             </Text>
+          )}
+          {sandboxOpen && (
+            <Box flexDirection="column">
+              {(sandbox?.steps.length ?? 0) === 0 && (
+                <Text dimColor>{'    '}no setup output yet</Text>
+              )}
+              {sandbox?.steps.map((step, i) => {
+                const running =
+                  !sandbox.ready && infraActivity != null && i === sandbox.steps.length - 1
+                const cursor = Math.min(stepCursor, sandbox.steps.length - 1)
+                const selected = i === cursor
+                const logLines = running
+                  ? step.lines.slice(-RUNNING_TAIL_LINES)
+                  : step.lines.slice(-FINISHED_LOG_LINES)
+                const hidden = step.lines.length - logLines.length
+                return (
+                  <Box key={step.hook} flexDirection="column">
+                    <Text>
+                      {'  '}
+                      <Text color="cyan">{selected ? '›' : ' '}</Text>{' '}
+                      <Text color={running ? 'cyan' : 'green'}>{running ? '✻' : '✓'}</Text>{' '}
+                      <Text dimColor={!selected}>
+                        {step.label}
+                        {running ? '…' : ''}
+                      </Text>{' '}
+                      <Text dimColor>
+                        ({step.lines.length} log line{step.lines.length === 1 ? '' : 's'})
+                      </Text>
+                    </Text>
+                    {selected && stepLogsOpen && (
+                      <Box flexDirection="column" marginLeft={6}>
+                        {hidden > 0 && <Text dimColor>… +{hidden} earlier lines</Text>}
+                        {logLines.map((l, j) => (
+                          <Text key={`${step.hook}:${j}`} dimColor>
+                            {oneLine(l, 110)}
+                          </Text>
+                        ))}
+                      </Box>
+                    )}
+                  </Box>
+                )
+              })}
+              {sandbox?.ready && <Text dimColor>{'    '}Ready!</Text>}
+              <Text dimColor>{'    '}↑/↓ step · → logs · ← hide logs · ctrl+s collapse</Text>
+            </Box>
           )}
         </Box>
       )}
@@ -599,6 +696,87 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
 // Compact token count for the live footer: 1400 -> "1.4k", 900 -> "900".
 function formatTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+}
+
+// A setup hook name ("image.setup", "post_clone") as a startup phase.
+export function hookPhrase(hook: string): string {
+  switch (hook) {
+    case 'image.setup':
+      return 'Building image'
+    case 'post_clone':
+      return 'Post-clone setup'
+    case 'post_start':
+      return 'Post-start setup'
+    default:
+      return hook
+  }
+}
+
+// A running step's live log tail height, and how much of a finished step's
+// log the panel shows before eliding the head with a "+N earlier lines" row.
+const RUNNING_TAIL_LINES = 5
+const FINISHED_LOG_LINES = 100
+
+export type SandboxStep = { hook: string; label: string; lines: string[] }
+export type SandboxState = { steps: SandboxStep[]; ready: boolean }
+
+// The structural slice of a session record the derivation needs (the SDK's
+// SessionRecordWire is not exported from its store entry).
+type LifecycleRecordLike = {
+  feed_seq: number
+  source: string
+  record_type: string
+  payload: Record<string, unknown>
+}
+
+// The sandbox startup story from the lifecycle records of the LATEST start:
+// one step per setup hook in first-seen order, each accumulating the log
+// lines of its chunked sandbox_setup_output records, plus whether the box
+// reached ready. sandbox_starting resets everything (a wake tells a fresh
+// story); null when no start has been seen. Pure, for tests.
+export function deriveSandboxState(
+  records: readonly LifecycleRecordLike[],
+  minFeedSeq: number,
+): SandboxState | null {
+  let seen = false
+  let steps: SandboxStep[] = []
+  let ready = false
+  for (const record of records) {
+    if (record.feed_seq <= minFeedSeq || record.source !== 'lifecycle') continue
+    if (record.record_type === 'sandbox_starting') {
+      seen = true
+      steps = []
+      ready = false
+    } else if (record.record_type === 'sandbox_setup_output') {
+      seen = true
+      const hook = setupOutputHook(record.payload)
+      let step = steps.find((s) => s.hook === hook)
+      if (!step) {
+        step = { hook, label: hookPhrase(hook), lines: [] }
+        steps.push(step)
+      }
+      const lines = Array.isArray(record.payload.lines)
+        ? record.payload.lines.filter((l): l is string => typeof l === 'string')
+        : []
+      step.lines.push(...lines)
+    } else if (record.record_type === 'sandbox_ready') {
+      seen = true
+      ready = true
+    }
+  }
+  return seen ? { steps, ready } : null
+}
+
+// The collapsed one-liner under the ✻ header: the CURRENT phase only,
+// rewritten in place as phases pass — the latest step with its latest log
+// line, or "Ready!" once the box is up. Pure, for tests.
+export function sandboxPhaseLine(state: SandboxState | null): string | null {
+  if (!state) return null
+  if (state.ready) return 'Ready!'
+  const last = state.steps[state.steps.length - 1]
+  if (!last) return null
+  const lastLine = last.lines[last.lines.length - 1]
+  return lastLine ? `${last.label}… · ${lastLine}` : `${last.label}…`
 }
 
 // Long bodies collapse to this many lines until ctrl+r expands them.
