@@ -167,7 +167,37 @@ export async function runConnect(
       exitState,
     }),
   )
-  await app.waitUntilExit()
+  // Guard against the revoked-TTY spin. When the controlling terminal is torn
+  // down abruptly (terminal app force-quit/crash, SSH drop, login-session
+  // teardown) rather than closed gracefully, macOS revoke()s the tty: stdin's
+  // fd stays open but every poll fires immediately, so libuv busy-loops on
+  // kevent64 at 100% CPU forever. Ink won't exit on its own because the live
+  // WebSocket + timers keep the event loop alive, and the process is reparented
+  // to launchd (ppid 1). Only interactive (TTY) runs are exposed — a headless
+  // `--no-input` follow reads from a non-TTY stdin and legitimately may be
+  // orphaned inside a sandbox, so we leave it alone.
+  const detach = (): void => app.unmount()
+  let orphanWatch: ReturnType<typeof setInterval> | undefined
+  if (process.stdin.isTTY) {
+    // Prompt teardown when the fd surfaces its failure as a stream event...
+    process.stdin.on('error', detach)
+    process.stdin.on('end', detach)
+    process.stdin.on('close', detach)
+    // ...and a backstop for the revoke case, where the error may never surface:
+    // reparenting to init is the unambiguous "our terminal is gone" signal.
+    orphanWatch = setInterval(() => {
+      if (process.ppid === 1) app.unmount()
+    }, 2000)
+    orphanWatch.unref()
+  }
+  try {
+    await app.waitUntilExit()
+  } finally {
+    if (orphanWatch) clearInterval(orphanWatch)
+    process.stdin.off('error', detach)
+    process.stdin.off('end', detach)
+    process.stdin.off('close', detach)
+  }
 
   if (canSend && !exitState.closed) {
     // The session keeps running after a detach; hand back the exact command
