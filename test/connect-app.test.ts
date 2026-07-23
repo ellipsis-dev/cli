@@ -318,8 +318,10 @@ describe('sandboxStepLine', () => {
 })
 
 describe('awaitingAgentPhase', () => {
-  it('is null with no pending turn', () => {
+  it('is null with no turn in flight — including the bare interactive session', () => {
     expect(awaitingAgentPhase([])).toBeNull()
+    // A no-prompt `agent` session sits at 'working' status waiting for its
+    // first message: no turn, no Claude Code process, nothing to narrate.
     expect(awaitingAgentPhase([rec('session_starting'), rec('sandbox_ready')])).toBeNull()
   })
 
@@ -329,15 +331,24 @@ describe('awaitingAgentPhase', () => {
     ).toBe('boot')
   })
 
-  it("reports 'turn' once the harness has spoken this execution", () => {
+  it("reports 'turn' through a running turn's lull, even after the harness spoke", () => {
     expect(
       awaitingAgentPhase([
         rec('session_starting'),
         rec('turn_started'),
         rec('assistant', {}, 'claude_code'),
-        rec('turn_started'),
       ]),
     ).toBe('turn')
+  })
+
+  it('clears when the turn completes or fails', () => {
+    const turn = [
+      rec('turn_started'),
+      rec('assistant', {}, 'claude_code'),
+      rec('turn_completed'),
+    ]
+    expect(awaitingAgentPhase(turn)).toBeNull()
+    expect(awaitingAgentPhase([rec('turn_started'), rec('turn_failed')])).toBeNull()
   })
 
   it('resets to boot on a wake (a fresh execution boots the harness again)', () => {
@@ -345,16 +356,11 @@ describe('awaitingAgentPhase', () => {
       awaitingAgentPhase([
         rec('turn_started'),
         rec('assistant', {}, 'claude_code'),
+        rec('turn_completed'),
         rec('session_starting'),
         rec('turn_started'),
       ]),
     ).toBe('boot')
-  })
-
-  it('clears when a claude_code record answers the turn', () => {
-    expect(
-      awaitingAgentPhase([rec('turn_started'), rec('assistant', {}, 'claude_code')]),
-    ).toBeNull()
   })
 })
 
