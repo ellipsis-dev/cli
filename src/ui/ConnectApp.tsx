@@ -18,7 +18,6 @@ import {
   clampLines,
   collapseToolRuns,
   foldCosts,
-  formatDuration,
   lifecycleText,
   pendingToolCalls,
   recordToItems,
@@ -200,12 +199,11 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // re-derivations.
   // Lifecycle records are excluded entirely: the sandbox story renders as the
   // one-line progress block up top (sandboxProgress), not as transcript rows.
-  const items = useMemo(
-    () =>
-      snapshot.records
-        .filter((r) => r.feed_seq > props.minRenderFeedSeq)
-        .filter((r) => r.source !== 'lifecycle')
-        .flatMap((r) => recordToItems(r, `s${r.feed_seq}`)),
+  // Each turn's closing summary is reshaped into stepMeta — the right-hand
+  // metadata column on the turn's final assistant message (see
+  // reshapeTranscript).
+  const { items, stepMeta } = useMemo(
+    () => reshapeTranscript(snapshot.records, props.minRenderFeedSeq),
     [snapshot.records, props.minRenderFeedSeq],
   )
 
@@ -239,7 +237,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // log lines of its sandbox_output chunks, plus the sandbox_ready summary.
   // Completed steps STACK as ✓ lines (the design-doc §3 timeline) instead of
   // rewriting one line in place; the live step ticks under them with its
-  // latest output line. Highlighting the block (↑ from the composer) and
+  // last RUNNING_TAIL_LINES log lines as a dim tail beneath it. Highlighting the block (↑ from the composer) and
   // pressing → opens the step list, and arrow keys drill into a step's logs.
   // The block persists after startup as the durable trace (the sandbox_ready
   // transcript notice is suppressed below in its favour).
@@ -531,15 +529,19 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     const byKey = new Map<string, TranscriptItem>()
     if (infraActivity || sandbox) {
       keys.push('sandbox')
-      heights.push(
-        sandboxBlockRows(sandbox, sandboxOpen, stepLogsOpen, stepCursor, infraActivity != null),
-      )
+      heights.push(sandboxBlockRows(sandbox, sandboxOpen, stepLogsOpen, stepCursor))
     }
     for (const item of visible) {
       keys.push(item.key)
       byKey.set(item.key, item)
+      // Assistant messages wrap inside their 80% column (the right 20% is
+      // the metadata gutter), so their height estimate uses that width.
       heights.push(
-        estimateItemRows(item, width, !expanded && !openedKeys.has(item.key)),
+        estimateItemRows(
+          item,
+          item.kind === 'assistant' ? Math.max(20, Math.floor(width * 0.8)) : width,
+          !expanded && !openedKeys.has(item.key),
+        ),
       )
     }
     return { keys, heights, byKey }
@@ -573,8 +575,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const viewBudget = useMemo(() => {
     const width = Math.max(20, termCols - 3)
     const composerRows = inputActive ? 3 + composer.text.split('\n').length : 0
+    // Live prose wraps inside the same 80% column its committed form uses.
+    const liveWidth = Math.max(20, Math.floor(width * 0.8))
     const liveReserve = working
-      ? 2 + (snapshot.liveText ? Math.ceil(snapshot.liveText.length / width) + 1 : 0)
+      ? 2 + (snapshot.liveText ? Math.ceil(snapshot.liveText.length / liveWidth) + 1 : 0)
       : 0
     // The in-flight sends render inside the transcript area (below the
     // slice), so their rows come out of the viewport budget: spacer +
@@ -843,20 +847,19 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         lastVisible.kind === 'tool' ||
         lastVisible.kind === 'tool_result')
 
-  // The persistent footer status line: the current status, the running spend
-  // (cumulative total + the last turn's cost), and the session identity — the
-  // dashboard link rendered as the session id, the agent config (when the
-  // session has one), the model, and the CLI version. Command hints live in
+  // The persistent footer status line: status · running spend · model ·
+  // session id (the dashboard link) · agent config (when the session has
+  // one) · CLI version. Per-step costs live on the transcript's metadata
+  // column, so the footer carries the total alone. Command hints live in
   // --help. The total prefers the server's ledger figure (live via the
   // session frames' cost columns, climbing mid-turn); the CC-derived result
   // total is the fallback against older backends.
   const totalStr = `$${(serverCostUsd ?? cost.total ?? 0).toFixed(2)}`
-  const lastStepStr = cost.lastStep != null ? ` (Last step: $${cost.lastStep.toFixed(2)})` : ''
   const metaLine = [
-    `${statusWord} · ${totalStr} total${lastStepStr}`,
-    hyperlink(props.sessionUrl, sessionId),
-    ...(props.configName ? [`config: ${props.configName}`] : []),
+    `${statusWord} · ${totalStr} total`,
     ...(props.model ? [props.model] : []),
+    hyperlink(props.sessionUrl, sessionId),
+    ...(props.configName ? [props.configName] : []),
     `v${VERSION}`,
   ].join(' · ')
   // Three distinct, factual activity signals — never whimsy. All render IN the
@@ -874,20 +877,17 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const liveText = snapshot.liveText
   const liveTokens = snapshot.liveOutputTokens
   const generating = statusWord === 'working' && (liveText !== '' || liveTokens != null)
+  // The live lines' ticking readouts render in the right-hand metadata
+  // column (like every other duration), so the left side is just the label.
   const generatingBits = [
-    formatDuration(elapsed),
+    humanDuration(elapsed),
     ...(liveTokens != null ? [`↓ ${formatTokens(liveTokens)} tokens`] : []),
-    ...(inputActive ? ['esc to interrupt'] : []),
   ].join(' · ')
   const runningTool = statusWord === 'working' && !generating && pendingTools.length > 0
   const runningToolLabel =
     pendingTools.length === 1
       ? `Running ${pendingTools[0].text}${pendingTools[0].detail ?? ''}`
       : `Running ${pendingTools.length} tool calls (${[...new Set(pendingTools.map((t) => t.text))].join(', ')})`
-  const runningToolBits = [
-    formatDuration(toolElapsed),
-    ...(inputActive ? ['esc to interrupt'] : []),
-  ].join(' · ')
 
   return (
     <Box flexDirection="column" minHeight={Math.max(0, termRows - 1)}>
@@ -895,21 +895,29 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           accounting quirks and the post-exit sign-off so the first content
           line never scrolls out of the window. */}
       <Box height={TOP_PAD} flexShrink={0} />
-      {/* No banner: session identity (dashboard link, model, version) lives in
-          the footer meta line, so the transcript starts right under the top
-          padding and nothing is printed to scrollback before the app. */}
+      {/* The one-line opener is the whole banner — the rest of the session
+          identity (dashboard link, model, version) lives in the footer meta
+          line, so nothing is printed to scrollback before the app. */}
       {/* The startup story, session-first, at most three levels deep:
               ✻ Session starting…
                 ✻ Sandbox starting…
                   ✓ Preparing image · incremental build · 3.4s
                   ✻ Running setup…
-          While in progress the whole hierarchy shows, the live level ticking.
-          Once ready it COLLAPSES to the single "✓ Session ready!" line —
-          highlighting it (↑ from the composer) and pressing → drills back
-          into the hierarchy, →/← on a phase shows/hides its logs. It is the
-          viewport's first entry, so it scrolls out of frame like any line. */}
+          While in progress the whole hierarchy shows, the live level ticking
+          with its log tail. Once ready the hierarchy STAYS, all ✓ with the
+          logs hidden — the durable trace of how the session came up.
+          Highlighting it (↑ from the composer) and pressing → opens the
+          panel, →/← on a phase shows/hides its logs. It is the viewport's
+          first entry, so it scrolls out of frame like any line. */}
       {(infraActivity || sandbox) && entries.keys[0] === 'sandbox' && slice.start === 0 && (
         <Box flexDirection="column">
+          {/* The conversation's opening line: where it lives. Plain text —
+              an OSC 8 hyperlink here gets broken by ink's wrapping and
+              swallows the label; the clickable dashboard link lives in the
+              footer meta line. */}
+          <Box marginBottom={1}>
+            <Text bold>✦ Connected to ellipsis.dev</Text>
+          </Box>
           {/* Level 1: the session headline. The › replaces the mark while
               highlighted (same 1-char slot), so the header never shifts. */}
           <Text>
@@ -920,24 +928,29 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             ) : (
               <Text color="cyan">✻</Text>
             )}{' '}
-            <Text color={navKey === 'sandbox' ? 'cyan' : undefined} dimColor={navKey !== 'sandbox'}>
+            {/* The settled headline ("Session ready!") reads bold in the
+                default (white) foreground over the dim trace beneath it;
+                while starting it stays dim like the rest of the block. */}
+            <Text
+              color={navKey === 'sandbox' ? 'cyan' : undefined}
+              dimColor={navKey !== 'sandbox' && !(sandbox?.done && !infraActivity)}
+              bold={sandbox?.done && !infraActivity}
+            >
               {/* A live status word overrides a stale done-headline: on a
                   wake the status flips before the new session_starting
                   record lands, and "Session ready!" must not linger. */}
               {sandbox?.done && !infraActivity
                 ? sandbox.headline
-                : `${(!sandbox || sandbox.done ? (infraActivity ?? 'Session starting') : sandbox.headline).replace(/…$/, '')}… (${formatDuration(elapsed)})`}
+                : `${(!sandbox || sandbox.done ? (infraActivity ?? 'Session starting') : sandbox.headline).replace(/…$/, '')}… (${humanDuration(elapsed)})`}
               {inputActive && navKey === 'sandbox' && !sandboxOpen && sandbox?.sandboxLine
                 ? ' (→: details)'
                 : ''}
             </Text>
           </Text>
           {/* Levels 2+3: the config line, the sandbox line and its phases —
-              always visible while starting, behind → once the session is
-              ready. */}
-          {sandbox &&
-            (sandbox.configName || sandbox.sandboxLine) &&
-            (!sandbox.done || sandboxOpen || infraActivity) && (
+              always visible, live while starting and as the all-✓ trace once
+              the session is ready (logs behind →). */}
+          {sandbox && (sandbox.configName || sandbox.sandboxLine) && (
             <Box flexDirection="column">
               {sandbox.configName && (
                 <Text>
@@ -970,6 +983,8 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                   ? step.lines.slice(-RUNNING_TAIL_LINES)
                   : step.lines.slice(-FINISHED_LOG_LINES)
                 const hidden = step.lines.length - logLines.length
+                const showLogs = running || (selected && stepLogsOpen)
+                const logIndent = step.child ? '            ' : '          '
                 const mark =
                   step.status === 'failed' ? (
                     <Text color="red">✗</Text>
@@ -985,7 +1000,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                         rows; the selected phase reads cyan like the
                         transcript highlight. */}
                     <Text>
-                      {'    '}
+                      {step.child ? '      ' : '    '}
                       <Text color="cyan">{selected ? '›' : ' '}</Text> {mark}{' '}
                       <Text
                         color={selected ? 'cyan' : step.status === 'failed' ? 'red' : undefined}
@@ -1000,10 +1015,20 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                         </Text>
                       )}
                     </Text>
-                    {(selected && stepLogsOpen ? logLines : []).map((l, j) => (
+                    {/* A running step's live tail always shows (the last
+                        RUNNING_TAIL_LINES lines, ticking as chunks land);
+                        a finished step's logs stay behind →. Indented two
+                        columns past the step's label so the lines read as
+                        its children, headed by an elision line when more
+                        scrolled past. */}
+                    {showLogs && hidden > 0 && (
+                      <Text dimColor>
+                        {logIndent}… +{hidden} earlier line{hidden === 1 ? '' : 's'}
+                      </Text>
+                    )}
+                    {(showLogs ? logLines : []).map((l, j) => (
                       <Text key={`${step.key}:${j}`} dimColor>
-                        {'        '}
-                        {j === 0 && hidden > 0 ? `… +${hidden} earlier · ` : ''}
+                        {logIndent}
                         {oneLine(l, 100)}
                       </Text>
                     ))}
@@ -1033,6 +1058,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             <TranscriptLine
               key={k}
               item={item}
+              meta={stepMeta.get(k)}
               expanded={expanded}
               opened={openedKeys.has(k)}
               selected={navKey === k}
@@ -1042,59 +1068,96 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         {!atBottom && (
           <Text dimColor>… {entries.keys.length - slice.end} newer (scroll or ↓)</Text>
         )}
+        {/* Sends the agent has TAKEN (delivered, echo record still in
+            flight): full-colour ◆ rows rendered ABOVE the live activity
+            lines — the running turn is the response to THIS message, so its
+            stream belongs below it. Rendering them after the live lines
+            made the Generating line flash in above the message for the echo
+            gap. */}
+        {atBottom &&
+          inFlightSends
+            .filter((q) => q.state === 'accepted')
+            .map((q) => (
+              <Box key={q.key} marginTop={1}>
+                <Box width={2} flexShrink={0}>
+                  <Text color="cyan">◆</Text>
+                </Box>
+                <Box width="80%">
+                  <Text bold>{q.text}</Text>
+                </Box>
+              </Box>
+            ))}
         {/* The live tool-call status, attached to the burst it belongs to: hugs
             the collapsed "Ran N …" fold (or the expanded ● call) above it, and
             disappears into the fold's count once the result lands. Live lines
             only render while the viewport follows the bottom. */}
         {atBottom && runningTool && (
           <Box marginTop={runningHug ? 0 : 1}>
-            <Text>
-              <Text color="cyan">✻</Text>{' '}
-              <Text dimColor>
-                {runningToolLabel}… ({runningToolBits})
-              </Text>
-            </Text>
+            <Box width={2} flexShrink={0}>
+              <Text color="cyan">✻</Text>
+            </Box>
+            <Box width="80%">
+              <Text dimColor>{runningToolLabel}…</Text>
+            </Box>
+            <Box flexGrow={1} justifyContent="flex-end">
+              <Text dimColor>({humanDuration(toolElapsed)})</Text>
+            </Box>
           </Box>
         )}
         {/* The in-progress assistant response, streamed token-by-token from delta
             frames, with its live status hugging beneath; replaced by the
             committed step when it lands. */}
-        {/* Indented to the same 2-column gutter as the committed assistant
-            item it becomes, so the text doesn't jump when it lands. */}
+        {/* Indented to the same 2-column gutter and wrapped in the same 80%
+            column as the committed assistant item it becomes, so the text
+            doesn't jump when it lands. */}
         {atBottom && liveText && (
           <Box marginTop={1}>
             <Box width={2} flexShrink={0} />
-            <Text>{liveText}</Text>
+            <Box width="80%">
+              <Text>{liveText}</Text>
+            </Box>
           </Box>
         )}
         {atBottom && generating && (
           <Box marginTop={liveText ? 0 : 1}>
-            <Text>
-              <Text color="cyan">✻</Text>{' '}
-              <Text dimColor>Generating… ({generatingBits})</Text>
-            </Text>
+            <Box width={2} flexShrink={0}>
+              <Text color="cyan">✻</Text>
+            </Box>
+            <Box width="80%">
+              <Text dimColor>Generating…</Text>
+            </Box>
+            <Box flexGrow={1} justifyContent="flex-end">
+              <Text dimColor>({generatingBits})</Text>
+            </Box>
           </Box>
         )}
-        {/* Your in-flight sends, at the chat's bottom edge the moment you hit
-            enter: dim ◆ rows stamped (sending…) while the POST is in flight,
-            (queued) once the server accepts, then FULL COLOUR the moment the
-            agent takes the message — it holds that spot through the echo gap
-            (which spans a whole sandbox wake) until the agent's own user-echo
-            transcript item replaces it. */}
+        {/* Your not-yet-taken sends, at the chat's bottom edge the moment
+            you hit enter: dim ◆ rows with their pipeline state in the
+            right-hand metadata column — (sending…) while the POST is in
+            flight, (queued…) once the server accepts. The moment the agent
+            takes the message it turns full colour and moves ABOVE the live
+            lines (the accepted rows before the tool/generating status),
+            holding that spot through the echo gap (which spans a whole
+            sandbox wake) until the agent's own user-echo transcript item
+            replaces it. */}
         {atBottom &&
-          inFlightSends.map((q) => (
-            <Box key={q.key} marginTop={1}>
-              <Box width={2} flexShrink={0}>
-                <Text color="cyan" dimColor={q.state !== 'accepted'}>
-                  ◆
-                </Text>
+          inFlightSends
+            .filter((q) => q.state !== 'accepted')
+            .map((q) => (
+              <Box key={q.key} marginTop={1}>
+                <Box width={2} flexShrink={0}>
+                  <Text color="cyan" dimColor>
+                    ◆
+                  </Text>
+                </Box>
+                <Box width="80%">
+                  <Text dimColor>{q.text}</Text>
+                </Box>
+                <Box flexGrow={1} justifyContent="flex-end">
+                  <Text dimColor>{q.state === 'sending' ? '(sending…)' : '(queued…)'}</Text>
+                </Box>
               </Box>
-              <Text bold={q.state === 'accepted'} dimColor={q.state !== 'accepted'}>
-                {q.text}
-                {q.state === 'sending' ? ' (sending…)' : q.state === 'queued' ? ' (queued)' : ''}
-              </Text>
-            </Box>
-          ))}
+            ))}
         {/* The fallback live line: a turn is actually in flight (or a send
             is on its way to starting one) but nothing else says so — no
             tokens streaming, no tool pending, no infra startup block
@@ -1112,14 +1175,17 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           !infraActivity &&
           (awaitingAgent !== null || sendPending) && (
           <Box marginTop={1}>
-            <Text>
-              <Text color="cyan">✻</Text>{' '}
+            <Box width={2} flexShrink={0}>
+              <Text color="cyan">✻</Text>
+            </Box>
+            <Box width="80%">
               <Text dimColor>
-                {awaitingAgent === 'boot' ? 'Starting the agent' : 'Working'}… (
-                {formatDuration(elapsed)}
-                {inputActive ? ' · esc to interrupt' : ''})
+                {awaitingAgent === 'boot' ? 'Starting the agent' : 'Working'}…
               </Text>
-            </Text>
+            </Box>
+            <Box flexGrow={1} justifyContent="flex-end">
+              <Text dimColor>({humanDuration(elapsed)})</Text>
+            </Box>
           </Box>
         )}
       </Box>
@@ -1258,23 +1324,26 @@ function sandboxBlockRows(
   open: boolean,
   logsOpen: boolean,
   stepCursor: number,
-  infraActive: boolean,
 ): number {
-  let rows = 1 // the headline
+  // The "Connected to ellipsis.dev" opener + its blank row, then the headline.
+  let rows = 3
   const expanded =
-    sandbox != null &&
-    (sandbox.configName != null || sandbox.sandboxLine != null) &&
-    (!sandbox.done || open || infraActive)
+    sandbox != null && (sandbox.configName != null || sandbox.sandboxLine != null)
   if (!expanded) return rows
   if (sandbox.configName != null) rows += 1
   const steps = sandbox.steps
   if (sandbox.sandboxLine != null) rows += 1 + steps.length
   if (open) rows += 1 // the key hint
-  if (open && logsOpen && steps.length > 0) {
-    const i = Math.min(stepCursor, steps.length - 1)
-    const step = steps[i]
+  const cursor = Math.min(stepCursor, Math.max(0, steps.length - 1))
+  for (const [i, step] of steps.entries()) {
     const running = step.status === 'running' && !sandbox.sandboxDone
-    rows += Math.min(step.lines.length, running ? RUNNING_TAIL_LINES : FINISHED_LOG_LINES)
+    // A running step always shows its live tail; a finished step's logs
+    // show only while selected in the open panel with logs toggled on.
+    // Shown lines plus the "+N earlier lines" heading when some are elided.
+    if (running || (open && logsOpen && i === cursor)) {
+      const shown = Math.min(step.lines.length, running ? RUNNING_TAIL_LINES : FINISHED_LOG_LINES)
+      rows += shown + (step.lines.length > shown ? 1 : 0)
+    }
   }
   return rows
 }
@@ -1334,12 +1403,18 @@ export type SandboxStep = {
   // transitions existed) — such steps close on the next step, not on a
   // transition.
   inferred: boolean
+  // Rendered one level under its bare-phase sibling: the key is phase:step
+  // AND an entry keyed exactly `phase` exists (the image phase's build/
+  // container/smoke children under "Preparing image"). Hook steps have no
+  // bare-phase sibling and stay flat.
+  child: boolean
 }
 // The startup story as a THREE-LEVEL hierarchy, session-first: the headline
 // is the SESSION's state ("Session scheduled…" → "Session starting…" →
 // "Session ready!"), the sandbox is one child line under it, and the
-// provisioning phases are children of the sandbox. `done` collapses the
-// whole block to the single ✓ headline (drill back in with →).
+// provisioning phases are children of the sandbox. `done` stops the
+// headline's ticking timer; the hierarchy stays on screen as the all-✓
+// trace, its logs hidden behind → in the panel.
 export type SandboxState = {
   // The current top-level line ("Session scheduled…", "Session starting…",
   // "Waking the session…", "Retrying…", "Session ready!").
@@ -1369,6 +1444,71 @@ type LifecycleRecordLike = {
   payload: Record<string, unknown>
   // The inbox message a user-echo transcript record answers for (§3.3).
   session_message_id?: string | null
+}
+
+// The committed transcript items, with each turn's closing `result` summary
+// reshaped: the "turn complete" label drops, the cost becomes the STEP's own
+// (result events carry Claude Code's cumulative session total, tracked
+// across the WHOLE feed so a --no-records first turn still subtracts the
+// hidden history; a total below the previous one is a fresh process after a
+// wake, whose step cost is the new total itself), and a summary directly
+// following an assistant message moves into stepMeta — rendered as the
+// right-hand metadata column on that message instead of its own line. An
+// error summary keeps its label and its own (red) line: an error is content,
+// not metadata. A summary with no assistant line to hang on stays a line
+// too. Pure, for tests.
+export function reshapeTranscript(
+  records: readonly LifecycleRecordLike[],
+  minRenderFeedSeq: number,
+): { items: TranscriptItem[]; stepMeta: ReadonlyMap<string, string> } {
+  const items: TranscriptItem[] = []
+  const stepMeta = new Map<string, string>()
+  let prevTotalUsd = 0
+  for (const r of records) {
+    if (r.source === 'lifecycle') continue
+    const p = r.payload
+    const isResult = r.source === 'claude_code' && p.type === 'result'
+    let stepBits: string[] | null = null
+    if (isResult) {
+      stepBits = []
+      if (typeof p.duration_ms === 'number') {
+        stepBits.push(`(${humanDuration(p.duration_ms / 1000)})`)
+      }
+      if (typeof p.total_cost_usd === 'number') {
+        const step =
+          p.total_cost_usd >= prevTotalUsd ? p.total_cost_usd - prevTotalUsd : p.total_cost_usd
+        prevTotalUsd = p.total_cost_usd
+        stepBits.push(`$${step.toFixed(2)}`)
+      }
+    }
+    if (r.feed_seq <= minRenderFeedSeq) continue
+    // recordToItems reads only the structural slice (source, record_type,
+    // payload); its SessionRecordWire param type isn't exported from the
+    // SDK's store entry, hence the cast.
+    for (const item of recordToItems(
+      r as Parameters<typeof recordToItems>[0],
+      `s${r.feed_seq}`,
+    )) {
+      if (item.kind === 'summary' && stepBits !== null) {
+        if (item.isError) {
+          items.push({
+            ...item,
+            text: ['turn ended with an error', stepBits.join(' · ')]
+              .filter(Boolean)
+              .join(' '),
+          })
+          continue
+        }
+        if (stepBits.length === 0) continue
+        const prev = items[items.length - 1]
+        if (prev?.kind === 'assistant') stepMeta.set(prev.key, stepBits.join(' · '))
+        else items.push({ ...item, text: stepBits.join(' · ') })
+        continue
+      }
+      items.push(item)
+    }
+  }
+  return { items, stepMeta }
 }
 
 // Whether a turn is IN FLIGHT (a turn_started record without its
@@ -1439,16 +1579,63 @@ export function deliveredUnechoedSends(
   return out
 }
 
+// A duration in seconds as compact human-readable components. Precision
+// scales down with size: under 1s reads as milliseconds ("428ms"), under 5s
+// keeps one decimal ("1.2s", trimming a trailing .0), and everything longer
+// reads as whole h/m/s components with zero parts dropped ("10s", "1m 2s",
+// "2m", "1h 3m 30s"). The one duration format everywhere in the app, always
+// shown parenthesized: "(10s)". Pure, for tests.
+export function humanDuration(seconds: number): string {
+  const clamped = Math.max(0, seconds)
+  if (clamped === 0) return '0s'
+  if (clamped < 1) return `${Math.round(clamped * 1000)}ms`
+  if (clamped < 5) {
+    const s = clamped.toFixed(1)
+    return s.endsWith('.0') ? `${Math.round(clamped)}s` : `${s}s`
+  }
+  const total = Math.round(clamped)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const bits: string[] = []
+  if (h > 0) bits.push(`${h}h`)
+  if (m > 0) bits.push(`${m}m`)
+  if (s > 0 || bits.length === 0) bits.push(`${s}s`)
+  return bits.join(' ')
+}
+
 function msLabel(ms: unknown): string | null {
   if (typeof ms !== 'number' || !isFinite(ms) || ms < 0) return null
-  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`
+  return humanDuration(ms / 1000)
+}
+
+// The image phase's provisioning sub-steps as sentences: the Modal
+// dockerfile build, the Sandbox.create container start (minutes for a
+// multi-GB image), and the post-create smoke test. The step vocabulary is
+// open by contract, so unknown steps pass through verbatim.
+function imageStepLabel(step: string): string {
+  switch (step) {
+    case 'build':
+      return 'Building image'
+    case 'container':
+      return 'Starting container'
+    case 'smoke':
+      return 'Smoke check'
+    default:
+      return step
+  }
 }
 
 // Human label for a timeline step: hooks sub-items keep their hook phrasing,
-// other sub-items (a clone's "owner/repo") read as themselves, whole phases
-// go through the SDK's open-vocabulary phase labels.
+// image sub-items read as sentences, other sub-items (a clone's
+// "owner/repo") read as themselves, whole phases go through the SDK's
+// open-vocabulary phase labels.
 function stepLabel(phase: string, step: string | null): string {
-  if (step) return phase === 'hooks' ? hookPhrase(step) : step
+  if (step) {
+    if (phase === 'hooks') return hookPhrase(step)
+    if (phase === 'image') return imageStepLabel(step)
+    return step
+  }
   return sandboxPhaseLabel(phase)
 }
 
@@ -1529,6 +1716,7 @@ export function deriveSandboxState(
           note: null,
           lines: [],
           inferred: false,
+          child: false,
         }
         steps.push(entry)
       }
@@ -1539,10 +1727,12 @@ export function deriveSandboxState(
           p.detail && typeof p.detail === 'object'
             ? (p.detail as Record<string, unknown>)
             : {}
-        const bits = [cacheTierLabel(detail.cache_tier), msLabel(p.duration_ms)].filter(
-          (b): b is string => b != null,
-        )
-        entry.note = bits.length ? bits.join(' · ') : null
+        // "full build (2s)", "(42s)", or a bare tier — the duration always
+        // parenthesized (the app-wide duration format).
+        const tier = cacheTierLabel(detail.cache_tier)
+        const dur = msLabel(p.duration_ms)
+        const bits = [...(tier ? [tier] : []), ...(dur ? [`(${dur})`] : [])]
+        entry.note = bits.length ? bits.join(' ') : null
       }
     } else if (record.record_type === 'sandbox_output') {
       seen = true
@@ -1564,6 +1754,7 @@ export function deriveSandboxState(
           note: null,
           lines: [],
           inferred: true,
+          child: false,
         }
         steps.push(entry)
       }
@@ -1579,17 +1770,24 @@ export function deriveSandboxState(
         (acc, v) => (typeof v === 'number' && isFinite(v) ? acc + v : acc),
         0,
       )
-      const bits = [
-        cacheTierLabel(p.cache_tier),
-        totalSeconds > 0 ? formatDuration(Math.round(totalSeconds)) : null,
-      ].filter((b): b is string => b != null)
-      sandboxLine = ['Sandbox ready', ...bits].join(' · ')
+      const tier = cacheTierLabel(p.cache_tier)
+      sandboxLine =
+        ['Sandbox ready', ...(tier ? [tier] : [])].join(' · ') +
+        (totalSeconds > 0 ? ` (${humanDuration(totalSeconds)})` : '')
       sandboxDone = true
-      // The box coming up is the session-level outcome too: the block
-      // collapses to the ✓ headline (drill in with →).
+      // The box coming up is the session-level outcome too: the headline
+      // settles on ✓ over the all-done step trace.
       headline = 'Session ready!'
       done = true
     }
+  }
+  // Nest a phase:step entry one level under its bare-phase sibling, when
+  // one exists (the image phase opens "Preparing image" then its build/
+  // container/smoke steps). Keyed generically on the phase prefix, so any
+  // phase that gains steps nests the same way.
+  for (const s of steps) {
+    const colon = s.key.indexOf(':')
+    s.child = colon > 0 && steps.some((o) => o.key === s.key.slice(0, colon))
   }
   return seen
     ? { headline, done, configName, configCommitSha, sandboxLine, sandboxDone, steps }
@@ -1597,17 +1795,18 @@ export function deriveSandboxState(
 }
 
 // One timeline step as its collapsed display line: a running step shows its
-// label with the latest log line, a finished one its closing note (cache
-// tier, duration), a failed one says so. Pure, for tests.
+// label (its live log tail renders as dim lines BENEATH it, not inline), a
+// finished one its closing note (cache tier, parenthesized duration), a
+// failed one says so. A note that leads with its "(duration)" attaches with
+// a space ("Building image (42s)"); a tier-led note takes the dot separator
+// ("Preparing image · full build (2s)"). Pure, for tests.
 export function sandboxStepLine(step: SandboxStep): string {
   if (step.status === 'running') {
-    const last = step.lines[step.lines.length - 1]
-    return last ? `${step.label}… · ${last}` : `${step.label}…`
+    return `${step.label}…`
   }
-  if (step.status === 'failed') {
-    return step.note ? `${step.label} failed · ${step.note}` : `${step.label} failed`
-  }
-  return step.note ? `${step.label} · ${step.note}` : step.label
+  const base = step.status === 'failed' ? `${step.label} failed` : step.label
+  if (!step.note) return base
+  return step.note.startsWith('(') ? `${base} ${step.note}` : `${base} · ${step.note}`
 }
 
 // Long bodies collapse to this many lines until ctrl+r expands them.
@@ -1623,14 +1822,17 @@ function isCollapsible(item: TranscriptItem): boolean {
 }
 
 // The sender icon in the 2-column gutter: ◆ (cyan) marks a message you sent
-// (the --prompt initial message included — it's a user message), ⏺ marks the
-// assistant's prose. Everything else keeps the SDK's glyph (● tool calls,
-// ⎿ results, ✻ thinking) or none. The › selection highlight replaces the
-// icon in the same slot, so a selected line always reads differently from
-// its resting state. Pure, for tests.
+// (the --prompt initial message included — it's a user message), ● marks the
+// assistant's prose (default foreground; the tool-call ● is green + bold, so
+// the two never read the same), ✦ (dim) marks system/notice lines — the
+// infrastructure speaking. Everything else keeps the SDK's glyph (⎿ results,
+// ✻ thinking) or none. The › selection highlight replaces the icon in the
+// same slot, so a selected line always reads differently from its resting
+// state. Pure, for tests.
 export function gutterFor(item: TranscriptItem): string {
   if (item.kind === 'user') return '◆'
-  if (item.kind === 'assistant') return '⏺'
+  if (item.kind === 'assistant') return '●'
+  if (item.kind === 'system' || item.kind === 'notice') return '✦'
   return item.gutter ?? ''
 }
 
@@ -1675,11 +1877,15 @@ function styleFor(item: TranscriptItem): {
 
 const TranscriptLine = React.memo(function TranscriptLine({
   item,
+  meta,
   expanded,
   opened,
   selected,
 }: {
   item: TranscriptItem
+  // The step's metadata ("4s · $0.10"), attached to a turn's closing
+  // assistant message and rendered right-aligned in the right-hand column.
+  meta?: string
   expanded: boolean
   // This line was opened in place with → while highlighted (un-clamps it).
   opened: boolean
@@ -1701,6 +1907,10 @@ const TranscriptLine = React.memo(function TranscriptLine({
       ? clampLines(item.text, COLLAPSE_LINES)
       : { body: item.text, more: 0 }
 
+  // Assistant messages keep to the left 80% of the row, leaving the right
+  // 20% as the metadata column (the turn's duration + step cost when this
+  // message closed one). Other kinds span the full width as before.
+  const isAssistant = item.kind === 'assistant'
   return (
     <Box marginTop={mt}>
       <Box width={2}>
@@ -1711,7 +1921,11 @@ const TranscriptLine = React.memo(function TranscriptLine({
           {selected ? '›' : gutterFor(item)}
         </Text>
       </Box>
-      <Box flexDirection="column" flexGrow={1}>
+      <Box
+        flexDirection="column"
+        width={isAssistant ? '80%' : undefined}
+        flexGrow={isAssistant ? undefined : 1}
+      >
         <Text color={selected ? 'cyan' : textColor} dimColor={!selected && dim} bold={bold}>
           {clamped.body}
           {item.detail ? (
@@ -1726,6 +1940,11 @@ const TranscriptLine = React.memo(function TranscriptLine({
           </Text>
         )}
       </Box>
+      {meta != null && (
+        <Box flexGrow={1} justifyContent="flex-end">
+          <Text dimColor>{meta}</Text>
+        </Box>
+      )}
     </Box>
   )
 })

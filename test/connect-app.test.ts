@@ -9,6 +9,8 @@ import {
   foldRun,
   gutterFor,
   hookPhrase,
+  humanDuration,
+  reshapeTranscript,
   sandboxStepLine,
   viewportSlice,
   type SandboxStep,
@@ -114,7 +116,7 @@ describe('deriveSandboxState', () => {
       ['clone', 'running'],
     ])
     expect(state?.steps[0].label).toBe('Preparing image')
-    expect(state?.steps[0].note).toBe('cached image · 1.2s')
+    expect(state?.steps[0].note).toBe('cached image (1.2s)')
   })
 
   it('attaches output chunks to the transition-opened step', () => {
@@ -148,8 +150,107 @@ describe('deriveSandboxState', () => {
     expect(state?.steps.map((s) => s.key)).toEqual(['hooks:post_clone'])
     expect(state?.steps[0].label).toBe('Post-clone setup')
     expect(state?.steps[0].status).toBe('done')
-    expect(state?.steps[0].note).toBe('800ms')
+    expect(state?.steps[0].note).toBe('(800ms)')
     expect(state?.steps[0].lines).toEqual(['npm ci'])
+    // No bare 'hooks' phase entry ever opens, so hook steps stay flat.
+    expect(state?.steps[0].child).toBe(false)
+  })
+
+  it('nests the image build/container/smoke steps under Preparing image', () => {
+    const state = deriveSandboxState(
+      [
+        rec('sandbox_starting', { repositories: ['o/r'] }),
+        rec('sandbox_phase', { phase: 'image', status: 'started' }),
+        rec('sandbox_phase', { phase: 'image', step: 'build', status: 'started' }),
+        rec('sandbox_output', {
+          phase: 'image',
+          step: 'build',
+          chunk: 0,
+          lines: ['#1 FROM base'],
+        }),
+        rec('sandbox_output', {
+          phase: 'image',
+          step: 'build',
+          chunk: 1,
+          lines: ['#2 RUN npm ci'],
+        }),
+        rec('sandbox_phase', {
+          phase: 'image',
+          step: 'build',
+          status: 'completed',
+          duration_ms: 42000,
+        }),
+        rec('sandbox_phase', { phase: 'image', step: 'container', status: 'started' }),
+        rec('sandbox_phase', {
+          phase: 'image',
+          step: 'container',
+          status: 'completed',
+          duration_ms: 829000,
+        }),
+        rec('sandbox_phase', { phase: 'image', step: 'smoke', status: 'started' }),
+        rec('sandbox_phase', {
+          phase: 'image',
+          step: 'smoke',
+          status: 'completed',
+          duration_ms: 1200,
+        }),
+        rec('sandbox_phase', {
+          phase: 'image',
+          status: 'completed',
+          duration_ms: 873000,
+          detail: { cache_tier: 'full' },
+        }),
+      ],
+      0,
+    )
+    expect(state?.steps.map((s) => [s.key, s.label, s.status, s.child])).toEqual([
+      ['image', 'Preparing image', 'done', false],
+      ['image:build', 'Building image', 'done', true],
+      ['image:container', 'Starting container', 'done', true],
+      ['image:smoke', 'Smoke check', 'done', true],
+    ])
+    // The live builder log attaches to the build step, not the bare phase.
+    expect(state?.steps[0].lines).toEqual([])
+    expect(state?.steps[1].lines).toEqual(['#1 FROM base', '#2 RUN npm ci'])
+    expect(state?.steps[1].note).toBe('(42s)')
+    expect(state?.steps[2].note).toBe('(13m 49s)')
+    expect(state?.steps[3].note).toBe('(1.2s)')
+    expect(state?.steps[0].note).toBe('full build (14m 33s)')
+  })
+
+  it('keeps the sandbox_ready total on phase_timings, never the step durations', () => {
+    const state = deriveSandboxState(
+      [
+        rec('sandbox_starting', {}),
+        rec('sandbox_phase', { phase: 'image', status: 'started' }),
+        rec('sandbox_phase', { phase: 'image', step: 'build', status: 'started' }),
+        rec('sandbox_phase', {
+          phase: 'image',
+          step: 'build',
+          status: 'completed',
+          duration_ms: 42000,
+        }),
+        rec('sandbox_phase', { phase: 'image', status: 'completed', duration_ms: 43000 }),
+        rec('sandbox_ready', {
+          cache_tier: 'full',
+          phase_timings: { image: 43, clone: 17 },
+        }),
+      ],
+      0,
+    )
+    expect(state?.sandboxLine).toBe('Sandbox ready · full build (1m)')
+  })
+
+  it('renders unknown image steps verbatim without nesting surprises (open vocabulary)', () => {
+    const state = deriveSandboxState(
+      [
+        rec('sandbox_phase', { phase: 'image', step: 'warm_cache', status: 'started' }),
+      ],
+      0,
+    )
+    expect(state?.steps[0].label).toBe('warm_cache')
+    // No bare image entry in this feed, so the step stays flat.
+    expect(state?.steps[0].child).toBe(false)
   })
 
   it('marks a failed transition and keeps its duration', () => {
@@ -161,7 +262,7 @@ describe('deriveSandboxState', () => {
       0,
     )
     expect(state?.steps[0].status).toBe('failed')
-    expect(sandboxStepLine(state!.steps[0])).toBe('Running setup failed · 4.0s')
+    expect(sandboxStepLine(state!.steps[0])).toBe('Running setup failed (4s)')
   })
 
   it('renders unknown phases generically (open vocabulary)', () => {
@@ -208,7 +309,7 @@ describe('deriveSandboxState', () => {
     )
     expect(state?.headline).toBe('Session ready!')
     expect(state?.done).toBe(true)
-    expect(state?.sandboxLine).toBe('Sandbox ready · cached image · 29s')
+    expect(state?.sandboxLine).toBe('Sandbox ready · cached image (29s)')
     expect(state?.sandboxDone).toBe(true)
     // A phase still open at ready closes as done.
     expect(state?.steps[0].status).toBe('done')
@@ -293,26 +394,27 @@ describe('sandboxStepLine', () => {
     note: null,
     lines: [],
     inferred: false,
+    child: false,
     ...over,
   })
 
-  it('shows a running step with its latest output line', () => {
+  it('shows a running step as its bare label (the log tail renders beneath, not inline)', () => {
     expect(sandboxStepLine(step({}))).toBe('Fetching repositories…')
     expect(sandboxStepLine(step({ lines: ['a', 'HEAD is now at x'] }))).toBe(
-      'Fetching repositories… · HEAD is now at x',
+      'Fetching repositories…',
     )
   })
 
   it('shows a done step with its closing note', () => {
     expect(sandboxStepLine(step({ status: 'done' }))).toBe('Fetching repositories')
-    expect(sandboxStepLine(step({ status: 'done', note: 'cached image · 1.2s' }))).toBe(
-      'Fetching repositories · cached image · 1.2s',
+    expect(sandboxStepLine(step({ status: 'done', note: 'cached image (1.2s)' }))).toBe(
+      'Fetching repositories · cached image (1.2s)',
     )
   })
 
   it('says failed', () => {
-    expect(sandboxStepLine(step({ status: 'failed', note: '4.0s' }))).toBe(
-      'Fetching repositories failed · 4.0s',
+    expect(sandboxStepLine(step({ status: 'failed', note: '(4s)' }))).toBe(
+      'Fetching repositories failed (4s)',
     )
   })
 })
@@ -406,13 +508,88 @@ describe('deliveredUnechoedSends', () => {
   })
 })
 
+describe('reshapeTranscript', () => {
+  const assistant = (text: string) =>
+    rec('cc', { type: 'assistant', message: { content: [{ type: 'text', text }] } }, 'claude_code')
+  const result = (over: Record<string, unknown> = {}) =>
+    rec(
+      'cc',
+      { type: 'result', duration_ms: 4000, total_cost_usd: 0.1, is_error: false, ...over },
+      'claude_code',
+    )
+
+  it('attaches the step meta to the closing assistant message and drops the summary row', () => {
+    const { items, stepMeta } = reshapeTranscript([assistant('done!'), result()], 0)
+    expect(items.map((i) => i.kind)).toEqual(['assistant'])
+    expect(stepMeta.get(items[0].key)).toBe('(4s) · $0.10')
+  })
+
+  it('shows each step its own incremental cost, not the cumulative total', () => {
+    const { items, stepMeta } = reshapeTranscript(
+      [
+        assistant('one'),
+        result({ total_cost_usd: 0.1 }),
+        assistant('two'),
+        result({ total_cost_usd: 0.25, duration_ms: 2000 }),
+      ],
+      0,
+    )
+    expect(stepMeta.get(items[0].key)).toBe('(4s) · $0.10')
+    expect(stepMeta.get(items[1].key)).toBe('(2s) · $0.15')
+  })
+
+  it('treats a lower total as a fresh process (wake reset): the step cost is the new total', () => {
+    const { items, stepMeta } = reshapeTranscript(
+      [
+        assistant('before the wake'),
+        result({ total_cost_usd: 0.25 }),
+        assistant('after the wake'),
+        result({ total_cost_usd: 0.05 }),
+      ],
+      0,
+    )
+    expect(stepMeta.get(items[1].key)).toBe('(4s) · $0.05')
+  })
+
+  it('subtracts history hidden below the render cursor (--no-records)', () => {
+    const hidden = [assistant('old'), result({ total_cost_usd: 0.1 })]
+    const cursor = hidden[hidden.length - 1].feed_seq
+    const { items, stepMeta } = reshapeTranscript(
+      [...hidden, assistant('new'), result({ total_cost_usd: 0.18, duration_ms: 3000 })],
+      cursor,
+    )
+    expect(items.map((i) => i.kind)).toEqual(['assistant'])
+    expect(stepMeta.get(items[0].key)).toBe('(3s) · $0.08')
+  })
+
+  it('keeps an error summary as its own line, label intact', () => {
+    const { items, stepMeta } = reshapeTranscript(
+      [assistant('oops'), result({ is_error: true })],
+      0,
+    )
+    expect(items.map((i) => i.kind)).toEqual(['assistant', 'summary'])
+    expect(items[1].text).toBe('turn ended with an error (4s) · $0.10')
+    expect(items[1].isError).toBe(true)
+    expect(stepMeta.size).toBe(0)
+  })
+
+  it('keeps the summary as its own line when no assistant message precedes it', () => {
+    const { items, stepMeta } = reshapeTranscript([result()], 0)
+    expect(items.map((i) => i.kind)).toEqual(['summary'])
+    expect(items[0].text).toBe('(4s) · $0.10')
+    expect(stepMeta.size).toBe(0)
+  })
+})
+
 describe('gutterFor', () => {
   const item = (kind: TranscriptItem['kind'], gutter?: string): TranscriptItem =>
     ({ key: 'k', kind, text: 'x', spaceBefore: false, gutter }) as TranscriptItem
 
-  it('marks user messages ◆ and assistant prose ⏺, overriding the SDK gutter', () => {
+  it('marks user messages ◆, assistant prose ●, and system lines ✦, overriding the SDK gutter', () => {
     expect(gutterFor(item('user', '›'))).toBe('◆')
-    expect(gutterFor(item('assistant'))).toBe('⏺')
+    expect(gutterFor(item('assistant'))).toBe('●')
+    expect(gutterFor(item('system'))).toBe('✦')
+    expect(gutterFor(item('notice'))).toBe('✦')
   })
 
   it('keeps the SDK glyph for tool activity and none for the rest', () => {
@@ -420,7 +597,31 @@ describe('gutterFor', () => {
     expect(gutterFor(item('tool_result', '⎿'))).toBe('⎿')
     expect(gutterFor(item('thinking', '✻'))).toBe('✻')
     expect(gutterFor(item('summary'))).toBe('')
-    expect(gutterFor(item('notice'))).toBe('')
+  })
+})
+
+describe('humanDuration', () => {
+  it('scales precision down with size: ms under 1s, one decimal under 5s', () => {
+    expect(humanDuration(0.428)).toBe('428ms')
+    expect(humanDuration(1.2)).toBe('1.2s')
+    expect(humanDuration(4.7)).toBe('4.7s')
+    expect(humanDuration(3)).toBe('3s')
+  })
+
+  it('reads as compact h/m/s components, dropping zero parts', () => {
+    expect(humanDuration(0)).toBe('0s')
+    expect(humanDuration(3)).toBe('3s')
+    expect(humanDuration(62)).toBe('1m 2s')
+    expect(humanDuration(120)).toBe('2m')
+    expect(humanDuration(3600)).toBe('1h')
+    expect(humanDuration(3810)).toBe('1h 3m 30s')
+    expect(humanDuration(5400)).toBe('1h 30m')
+  })
+
+  it('rounds fractional seconds and clamps negatives', () => {
+    expect(humanDuration(1.2)).toBe('1.2s')
+    expect(humanDuration(59.7)).toBe('1m')
+    expect(humanDuration(-5)).toBe('0s')
   })
 })
 
