@@ -14,7 +14,7 @@
     "dev": "tsx src/cli.tsx",
     "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "compile": "bun build src/cli.tsx --compile --outfile agent",
+    "compile": "./scripts/compile.sh",
     "start": "node dist/cli.js",
     "test": "vitest run",
     "test:watch": "vitest"
