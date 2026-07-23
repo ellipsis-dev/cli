@@ -531,9 +531,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     const byKey = new Map<string, TranscriptItem>()
     if (infraActivity || sandbox) {
       keys.push('sandbox')
-      heights.push(
-        sandboxBlockRows(sandbox, sandboxOpen, stepLogsOpen, stepCursor, infraActivity != null),
-      )
+      heights.push(sandboxBlockRows(sandbox, sandboxOpen, stepLogsOpen, stepCursor))
     }
     for (const item of visible) {
       keys.push(item.key)
@@ -903,11 +901,12 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                 ✻ Sandbox starting…
                   ✓ Preparing image · incremental build · 3.4s
                   ✻ Running setup…
-          While in progress the whole hierarchy shows, the live level ticking.
-          Once ready it COLLAPSES to the single "✓ Session ready!" line —
-          highlighting it (↑ from the composer) and pressing → drills back
-          into the hierarchy, →/← on a phase shows/hides its logs. It is the
-          viewport's first entry, so it scrolls out of frame like any line. */}
+          While in progress the whole hierarchy shows, the live level ticking
+          with its log tail. Once ready the hierarchy STAYS, all ✓ with the
+          logs hidden — the durable trace of how the session came up.
+          Highlighting it (↑ from the composer) and pressing → opens the
+          panel, →/← on a phase shows/hides its logs. It is the viewport's
+          first entry, so it scrolls out of frame like any line. */}
       {(infraActivity || sandbox) && entries.keys[0] === 'sandbox' && slice.start === 0 && (
         <Box flexDirection="column">
           {/* Level 1: the session headline. The › replaces the mark while
@@ -933,11 +932,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             </Text>
           </Text>
           {/* Levels 2+3: the config line, the sandbox line and its phases —
-              always visible while starting, behind → once the session is
-              ready. */}
-          {sandbox &&
-            (sandbox.configName || sandbox.sandboxLine) &&
-            (!sandbox.done || sandboxOpen || infraActivity) && (
+              always visible, live while starting and as the all-✓ trace once
+              the session is ready (logs behind →). */}
+          {sandbox && (sandbox.configName || sandbox.sandboxLine) && (
             <Box flexDirection="column">
               {sandbox.configName && (
                 <Text>
@@ -1261,13 +1258,10 @@ function sandboxBlockRows(
   open: boolean,
   logsOpen: boolean,
   stepCursor: number,
-  infraActive: boolean,
 ): number {
   let rows = 1 // the headline
   const expanded =
-    sandbox != null &&
-    (sandbox.configName != null || sandbox.sandboxLine != null) &&
-    (!sandbox.done || open || infraActive)
+    sandbox != null && (sandbox.configName != null || sandbox.sandboxLine != null)
   if (!expanded) return rows
   if (sandbox.configName != null) rows += 1
   const steps = sandbox.steps
@@ -1349,8 +1343,9 @@ export type SandboxStep = {
 // The startup story as a THREE-LEVEL hierarchy, session-first: the headline
 // is the SESSION's state ("Session scheduled…" → "Session starting…" →
 // "Session ready!"), the sandbox is one child line under it, and the
-// provisioning phases are children of the sandbox. `done` collapses the
-// whole block to the single ✓ headline (drill back in with →).
+// provisioning phases are children of the sandbox. `done` stops the
+// headline's ticking timer; the hierarchy stays on screen as the all-✓
+// trace, its logs hidden behind → in the panel.
 export type SandboxState = {
   // The current top-level line ("Session scheduled…", "Session starting…",
   // "Waking the session…", "Retrying…", "Session ready!").
@@ -1620,8 +1615,8 @@ export function deriveSandboxState(
       ].filter((b): b is string => b != null)
       sandboxLine = ['Sandbox ready', ...bits].join(' · ')
       sandboxDone = true
-      // The box coming up is the session-level outcome too: the block
-      // collapses to the ✓ headline (drill in with →).
+      // The box coming up is the session-level outcome too: the headline
+      // settles on ✓ over the all-done step trace.
       headline = 'Session ready!'
       done = true
     }
