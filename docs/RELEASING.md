@@ -20,8 +20,15 @@ takes a version input in the Actions UI). On a tag push it:
 4. Regenerates `Formula/agent.rb` in the tap repo from the template and pushes
    it, so `brew install ellipsis-dev/cli/agent` picks up the new version.
 
-The only manual steps (Hunter cuts releases) are: ensure CI is green, bump the
-`package.json` version, commit it as `chore(release): vX.Y.Z`, then create and
-push the matching `vX.Y.Z` tag. The tag version must equal the `package.json`
-version, because the formula's `test do` block asserts `agent --version` equals
-the released version.
+The only manual steps (Hunter cuts releases) are: ensure CI is green, then
+create and push the `vX.Y.Z` tag on the main commit to release. No
+`package.json` bump commit is needed — the workflow's `npm version` step
+stamps the tag's version into `package.json` before building, so the field on
+main goes stale by design (releases since v1.4.0 tag main directly).
+
+Because the field is stale, local builds don't read their version from it:
+`bun run compile` (scripts/compile.sh) stamps the binary from
+`git describe --tags`, so `./agent --version` reports exactly what it was
+built from — `1.6.0` on a clean tagged checkout, `1.6.0-2-g08ea24d-dirty` two
+commits past the tag with uncommitted changes. Only `tsx` dev runs fall back
+to the stale `package.json` field.

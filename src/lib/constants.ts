@@ -1,9 +1,16 @@
 import pkg from '../../package.json'
 
-// package.json is the single source of truth for the version; tsup (esbuild),
-// `bun build --compile`, and tsx all inline this JSON import, so the binary,
-// `--version`, and the User-Agent below never drift from the published version.
-export const VERSION: string = pkg.version
+// The version, in precedence order:
+// 1. BUILD_GIT_VERSION — stamped by scripts/compile.sh (`bun run compile`)
+//    from `git describe`, so a locally built binary reports exactly the
+//    commit it was built from ("1.6.0-2-g08ea24d") instead of package.json's
+//    stale field (releases stopped bumping it; see docs/RELEASING.md).
+// 2. pkg.version — release builds (the workflow rewrites package.json from
+//    the tag, then runs `bun build` directly, without the define) and tsx
+//    dev runs.
+declare const BUILD_GIT_VERSION: string | undefined
+export const VERSION: string =
+  typeof BUILD_GIT_VERSION === 'string' ? BUILD_GIT_VERSION : pkg.version
 
 // Sent on every API/WebSocket request so the server can record which client
 // started a session (stored on the session as client_version, shown for
