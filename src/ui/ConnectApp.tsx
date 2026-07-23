@@ -1566,13 +1566,21 @@ export function deliveredUnechoedSends(
   return out
 }
 
-// A duration in seconds as compact human-readable components: "3s",
-// "1m 2s", "1h 3m 30s". Zero components drop ("2m", "1h 30s"); sub-minute
-// durations always read as seconds ("0s" when nothing has elapsed). The one
-// duration format everywhere in the app, always shown parenthesized:
-// "(10s)". Pure, for tests.
+// A duration in seconds as compact human-readable components. Precision
+// scales down with size: under 1s reads as milliseconds ("428ms"), under 5s
+// keeps one decimal ("1.2s", trimming a trailing .0), and everything longer
+// reads as whole h/m/s components with zero parts dropped ("10s", "1m 2s",
+// "2m", "1h 3m 30s"). The one duration format everywhere in the app, always
+// shown parenthesized: "(10s)". Pure, for tests.
 export function humanDuration(seconds: number): string {
-  const total = Math.max(0, Math.round(seconds))
+  const clamped = Math.max(0, seconds)
+  if (clamped === 0) return '0s'
+  if (clamped < 1) return `${Math.round(clamped * 1000)}ms`
+  if (clamped < 5) {
+    const s = clamped.toFixed(1)
+    return s.endsWith('.0') ? `${Math.round(clamped)}s` : `${s}s`
+  }
+  const total = Math.round(clamped)
   const h = Math.floor(total / 3600)
   const m = Math.floor((total % 3600) / 60)
   const s = total % 60
@@ -1585,7 +1593,7 @@ export function humanDuration(seconds: number): string {
 
 function msLabel(ms: unknown): string | null {
   if (typeof ms !== 'number' || !isFinite(ms) || ms < 0) return null
-  return ms >= 1000 ? humanDuration(ms / 1000) : `${Math.round(ms)}ms`
+  return humanDuration(ms / 1000)
 }
 
 // The image phase's provisioning sub-steps as sentences: the Modal

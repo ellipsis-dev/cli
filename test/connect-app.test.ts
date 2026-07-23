@@ -116,7 +116,7 @@ describe('deriveSandboxState', () => {
       ['clone', 'running'],
     ])
     expect(state?.steps[0].label).toBe('Preparing image')
-    expect(state?.steps[0].note).toBe('cached image (1s)')
+    expect(state?.steps[0].note).toBe('cached image (1.2s)')
   })
 
   it('attaches output chunks to the transition-opened step', () => {
@@ -214,7 +214,7 @@ describe('deriveSandboxState', () => {
     expect(state?.steps[1].lines).toEqual(['#1 FROM base', '#2 RUN npm ci'])
     expect(state?.steps[1].note).toBe('(42s)')
     expect(state?.steps[2].note).toBe('(13m 49s)')
-    expect(state?.steps[3].note).toBe('(1s)')
+    expect(state?.steps[3].note).toBe('(1.2s)')
     expect(state?.steps[0].note).toBe('full build (14m 33s)')
   })
 
@@ -407,8 +407,8 @@ describe('sandboxStepLine', () => {
 
   it('shows a done step with its closing note', () => {
     expect(sandboxStepLine(step({ status: 'done' }))).toBe('Fetching repositories')
-    expect(sandboxStepLine(step({ status: 'done', note: 'cached image (1s)' }))).toBe(
-      'Fetching repositories · cached image (1s)',
+    expect(sandboxStepLine(step({ status: 'done', note: 'cached image (1.2s)' }))).toBe(
+      'Fetching repositories · cached image (1.2s)',
     )
   })
 
@@ -601,6 +601,13 @@ describe('gutterFor', () => {
 })
 
 describe('humanDuration', () => {
+  it('scales precision down with size: ms under 1s, one decimal under 5s', () => {
+    expect(humanDuration(0.428)).toBe('428ms')
+    expect(humanDuration(1.2)).toBe('1.2s')
+    expect(humanDuration(4.7)).toBe('4.7s')
+    expect(humanDuration(3)).toBe('3s')
+  })
+
   it('reads as compact h/m/s components, dropping zero parts', () => {
     expect(humanDuration(0)).toBe('0s')
     expect(humanDuration(3)).toBe('3s')
@@ -612,7 +619,7 @@ describe('humanDuration', () => {
   })
 
   it('rounds fractional seconds and clamps negatives', () => {
-    expect(humanDuration(1.2)).toBe('1s')
+    expect(humanDuration(1.2)).toBe('1.2s')
     expect(humanDuration(59.7)).toBe('1m')
     expect(humanDuration(-5)).toBe('0s')
   })
