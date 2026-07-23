@@ -1095,13 +1095,22 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
               </Text>
             </Box>
           ))}
-        {/* The fallback live line: the session is working but nothing else
-            says so — no tokens streaming, no tool pending, no infra startup
-            block ticking. This is the harness-boot dead air (a fresh
-            execution takes ~15-20s to start Claude Code before its first
-            event) and the between-records lull; without it a send looks
-            like the app hung. */}
-        {atBottom && working && !generating && !runningTool && !infraActivity && (
+        {/* The fallback live line: a turn is actually in flight (or a send
+            is on its way to starting one) but nothing else says so — no
+            tokens streaming, no tool pending, no infra startup block
+            ticking. This is the harness-boot dead air (a fresh execution
+            takes ~15-20s to start Claude Code before its first event) and a
+            running turn's between-records lull; without it a send looks
+            like the app hung. Gated on the turn, not the session status: a
+            bare interactive session reads 'working' while it just sits
+            waiting for your first message, and narrating that would claim
+            work that isn't happening. */}
+        {atBottom &&
+          working &&
+          !generating &&
+          !runningTool &&
+          !infraActivity &&
+          (awaitingAgent !== null || sendPending) && (
           <Box marginTop={1}>
             <Text>
               <Text color="cyan">✻</Text>{' '}
@@ -1362,35 +1371,39 @@ type LifecycleRecordLike = {
   session_message_id?: string | null
 }
 
-// Whether a turn has started that the agent process hasn't spoken for yet (a
-// turn_started record with no claude_code record after it), and which silence
-// it is: 'boot' when the harness has emitted NOTHING this execution — Claude
-// Code is still starting up in the sandbox, the ~15-20s dead air after a send
-// lands a fresh execution's first turn — vs 'turn', the warm agent working
-// between records. null when no turn is awaiting the agent. Drives the
-// fallback live line so a send never looks like the app hung. Pure, for tests.
+// Whether a turn is IN FLIGHT (a turn_started record without its
+// turn_completed/turn_failed), and which silence it is: 'boot' when the
+// harness has emitted NOTHING this execution — Claude Code is still starting
+// up in the sandbox, the ~15-20s dead air after a send lands a fresh
+// execution's first turn — vs 'turn', a running turn's lull between records.
+// null when no turn is in flight, which INCLUDES the bare interactive
+// session sitting at 'working' status waiting for its first message (no
+// turn, no Claude Code process — nothing to narrate). Drives the fallback
+// live line so a send never looks like the app hung. Pure, for tests.
 export function awaitingAgentPhase(
   records: readonly LifecycleRecordLike[],
 ): 'boot' | 'turn' | null {
-  let pending = false
+  let inFlight = false
   let sawAgent = false
   for (const r of records) {
     if (r.source === 'claude_code') {
-      pending = false
       sawAgent = true
     } else if (r.source === 'lifecycle') {
-      if (r.record_type === 'turn_started') pending = true
-      else if (
+      if (r.record_type === 'turn_started') inFlight = true
+      else if (r.record_type === 'turn_completed' || r.record_type === 'turn_failed') {
+        inFlight = false
+      } else if (
         r.record_type === 'session_starting' ||
         r.record_type === 'session_retrying'
       ) {
-        // A fresh execution: the harness must boot again before it speaks.
-        pending = false
+        // A fresh execution: no turn is in flight and the harness must boot
+        // again before it speaks.
+        inFlight = false
         sawAgent = false
       }
     }
   }
-  if (!pending) return null
+  if (!inFlight) return null
   return sawAgent ? 'turn' : 'boot'
 }
 
