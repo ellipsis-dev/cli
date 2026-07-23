@@ -848,20 +848,19 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         lastVisible.kind === 'tool' ||
         lastVisible.kind === 'tool_result')
 
-  // The persistent footer status line: the current status, the running spend
-  // (cumulative total + the last turn's cost), and the session identity — the
-  // dashboard link rendered as the session id, the agent config (when the
-  // session has one), the model, and the CLI version. Command hints live in
+  // The persistent footer status line: status · running spend · model ·
+  // session id (the dashboard link) · agent config (when the session has
+  // one) · CLI version. Per-step costs live on the transcript's metadata
+  // column, so the footer carries the total alone. Command hints live in
   // --help. The total prefers the server's ledger figure (live via the
   // session frames' cost columns, climbing mid-turn); the CC-derived result
   // total is the fallback against older backends.
   const totalStr = `$${(serverCostUsd ?? cost.total ?? 0).toFixed(2)}`
-  const lastStepStr = cost.lastStep != null ? ` (Last step: $${cost.lastStep.toFixed(2)})` : ''
   const metaLine = [
-    `${statusWord} · ${totalStr} total${lastStepStr}`,
-    hyperlink(props.sessionUrl, sessionId),
-    ...(props.configName ? [`config: ${props.configName}`] : []),
+    `${statusWord} · ${totalStr} total`,
     ...(props.model ? [props.model] : []),
+    hyperlink(props.sessionUrl, sessionId),
+    ...(props.configName ? [props.configName] : []),
     `v${VERSION}`,
   ].join(' · ')
   // Three distinct, factual activity signals — never whimsy. All render IN the
