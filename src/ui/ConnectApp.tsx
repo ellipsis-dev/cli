@@ -167,10 +167,12 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // of frame snaps it so the highlighted entry comes back into view.
   const [scrollKey, setScrollKey] = useState<string | null>(null)
   // Whether the terminal's mouse reporting is armed (wheel/trackpad scrolls
-  // the transcript). Capturing the mouse steals native text selection, so
-  // ctrl+s releases it for copy/paste and re-arms it — the terminal's own
-  // bypass (shift-drag, or option-drag in iTerm2) works either way.
-  const [mouseCapture, setMouseCapture] = useState(true)
+  // the transcript). Capturing the mouse steals native text selection and
+  // clickable links, so it starts off — the terminal keeps the mouse for
+  // clicking links and copy/paste, and ctrl+s arms it for wheel scrolling
+  // (the terminal's own bypass, shift-drag or option-drag in iTerm2, works
+  // either way).
+  const [mouseCapture, setMouseCapture] = useState(false)
   // Messages you've sent that the server hasn't acknowledged yet — shown
   // IMMEDIATELY as dim rows at the bottom of the transcript, so a send always
   // appears in the chat the moment you hit enter. From the first
@@ -701,8 +703,8 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         setMouseCapture(next)
         setNotice(
           next
-            ? 'mouse scrolling restored'
-            : 'mouse released for select/copy · ctrl+s to restore scrolling',
+            ? 'wheel scrolling on · ctrl+s to release mouse for links/select'
+            : 'mouse released for links/select · ctrl+s for wheel scrolling',
         )
         return
       }
