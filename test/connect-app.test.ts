@@ -9,6 +9,7 @@ import {
   foldRun,
   gutterFor,
   hookPhrase,
+  humanDuration,
   reshapeTranscript,
   sandboxStepLine,
   viewportSlice,
@@ -115,7 +116,7 @@ describe('deriveSandboxState', () => {
       ['clone', 'running'],
     ])
     expect(state?.steps[0].label).toBe('Preparing image')
-    expect(state?.steps[0].note).toBe('cached image · 1.2s')
+    expect(state?.steps[0].note).toBe('cached image (1s)')
   })
 
   it('attaches output chunks to the transition-opened step', () => {
@@ -149,7 +150,7 @@ describe('deriveSandboxState', () => {
     expect(state?.steps.map((s) => s.key)).toEqual(['hooks:post_clone'])
     expect(state?.steps[0].label).toBe('Post-clone setup')
     expect(state?.steps[0].status).toBe('done')
-    expect(state?.steps[0].note).toBe('800ms')
+    expect(state?.steps[0].note).toBe('(800ms)')
     expect(state?.steps[0].lines).toEqual(['npm ci'])
     // No bare 'hooks' phase entry ever opens, so hook steps stay flat.
     expect(state?.steps[0].child).toBe(false)
@@ -211,10 +212,10 @@ describe('deriveSandboxState', () => {
     // The live builder log attaches to the build step, not the bare phase.
     expect(state?.steps[0].lines).toEqual([])
     expect(state?.steps[1].lines).toEqual(['#1 FROM base', '#2 RUN npm ci'])
-    expect(state?.steps[1].note).toBe('42.0s')
-    expect(state?.steps[2].note).toBe('829.0s')
-    expect(state?.steps[3].note).toBe('1.2s')
-    expect(state?.steps[0].note).toBe('full build · 873.0s')
+    expect(state?.steps[1].note).toBe('(42s)')
+    expect(state?.steps[2].note).toBe('(13m 49s)')
+    expect(state?.steps[3].note).toBe('(1s)')
+    expect(state?.steps[0].note).toBe('full build (14m 33s)')
   })
 
   it('keeps the sandbox_ready total on phase_timings, never the step durations', () => {
@@ -237,7 +238,7 @@ describe('deriveSandboxState', () => {
       ],
       0,
     )
-    expect(state?.sandboxLine).toBe('Sandbox ready · full build · 1m 0s')
+    expect(state?.sandboxLine).toBe('Sandbox ready · full build (1m)')
   })
 
   it('renders unknown image steps verbatim without nesting surprises (open vocabulary)', () => {
@@ -261,7 +262,7 @@ describe('deriveSandboxState', () => {
       0,
     )
     expect(state?.steps[0].status).toBe('failed')
-    expect(sandboxStepLine(state!.steps[0])).toBe('Running setup failed · 4.0s')
+    expect(sandboxStepLine(state!.steps[0])).toBe('Running setup failed (4s)')
   })
 
   it('renders unknown phases generically (open vocabulary)', () => {
@@ -308,7 +309,7 @@ describe('deriveSandboxState', () => {
     )
     expect(state?.headline).toBe('Session ready!')
     expect(state?.done).toBe(true)
-    expect(state?.sandboxLine).toBe('Sandbox ready · cached image · 29s')
+    expect(state?.sandboxLine).toBe('Sandbox ready · cached image (29s)')
     expect(state?.sandboxDone).toBe(true)
     // A phase still open at ready closes as done.
     expect(state?.steps[0].status).toBe('done')
@@ -406,14 +407,14 @@ describe('sandboxStepLine', () => {
 
   it('shows a done step with its closing note', () => {
     expect(sandboxStepLine(step({ status: 'done' }))).toBe('Fetching repositories')
-    expect(sandboxStepLine(step({ status: 'done', note: 'cached image · 1.2s' }))).toBe(
-      'Fetching repositories · cached image · 1.2s',
+    expect(sandboxStepLine(step({ status: 'done', note: 'cached image (1s)' }))).toBe(
+      'Fetching repositories · cached image (1s)',
     )
   })
 
   it('says failed', () => {
-    expect(sandboxStepLine(step({ status: 'failed', note: '4.0s' }))).toBe(
-      'Fetching repositories failed · 4.0s',
+    expect(sandboxStepLine(step({ status: 'failed', note: '(4s)' }))).toBe(
+      'Fetching repositories failed (4s)',
     )
   })
 })
@@ -520,7 +521,7 @@ describe('reshapeTranscript', () => {
   it('attaches the step meta to the closing assistant message and drops the summary row', () => {
     const { items, stepMeta } = reshapeTranscript([assistant('done!'), result()], 0)
     expect(items.map((i) => i.kind)).toEqual(['assistant'])
-    expect(stepMeta.get(items[0].key)).toBe('4s · $0.10')
+    expect(stepMeta.get(items[0].key)).toBe('(4s) · $0.10')
   })
 
   it('shows each step its own incremental cost, not the cumulative total', () => {
@@ -533,8 +534,8 @@ describe('reshapeTranscript', () => {
       ],
       0,
     )
-    expect(stepMeta.get(items[0].key)).toBe('4s · $0.10')
-    expect(stepMeta.get(items[1].key)).toBe('2s · $0.15')
+    expect(stepMeta.get(items[0].key)).toBe('(4s) · $0.10')
+    expect(stepMeta.get(items[1].key)).toBe('(2s) · $0.15')
   })
 
   it('treats a lower total as a fresh process (wake reset): the step cost is the new total', () => {
@@ -547,7 +548,7 @@ describe('reshapeTranscript', () => {
       ],
       0,
     )
-    expect(stepMeta.get(items[1].key)).toBe('4s · $0.05')
+    expect(stepMeta.get(items[1].key)).toBe('(4s) · $0.05')
   })
 
   it('subtracts history hidden below the render cursor (--no-records)', () => {
@@ -558,7 +559,7 @@ describe('reshapeTranscript', () => {
       cursor,
     )
     expect(items.map((i) => i.kind)).toEqual(['assistant'])
-    expect(stepMeta.get(items[0].key)).toBe('3s · $0.08')
+    expect(stepMeta.get(items[0].key)).toBe('(3s) · $0.08')
   })
 
   it('keeps an error summary as its own line, label intact', () => {
@@ -567,7 +568,7 @@ describe('reshapeTranscript', () => {
       0,
     )
     expect(items.map((i) => i.kind)).toEqual(['assistant', 'summary'])
-    expect(items[1].text).toBe('turn ended with an error · 4s · $0.10')
+    expect(items[1].text).toBe('turn ended with an error (4s) · $0.10')
     expect(items[1].isError).toBe(true)
     expect(stepMeta.size).toBe(0)
   })
@@ -575,7 +576,7 @@ describe('reshapeTranscript', () => {
   it('keeps the summary as its own line when no assistant message precedes it', () => {
     const { items, stepMeta } = reshapeTranscript([result()], 0)
     expect(items.map((i) => i.kind)).toEqual(['summary'])
-    expect(items[0].text).toBe('4s · $0.10')
+    expect(items[0].text).toBe('(4s) · $0.10')
     expect(stepMeta.size).toBe(0)
   })
 })
@@ -596,6 +597,24 @@ describe('gutterFor', () => {
     expect(gutterFor(item('tool_result', '⎿'))).toBe('⎿')
     expect(gutterFor(item('thinking', '✻'))).toBe('✻')
     expect(gutterFor(item('summary'))).toBe('')
+  })
+})
+
+describe('humanDuration', () => {
+  it('reads as compact h/m/s components, dropping zero parts', () => {
+    expect(humanDuration(0)).toBe('0s')
+    expect(humanDuration(3)).toBe('3s')
+    expect(humanDuration(62)).toBe('1m 2s')
+    expect(humanDuration(120)).toBe('2m')
+    expect(humanDuration(3600)).toBe('1h')
+    expect(humanDuration(3810)).toBe('1h 3m 30s')
+    expect(humanDuration(5400)).toBe('1h 30m')
+  })
+
+  it('rounds fractional seconds and clamps negatives', () => {
+    expect(humanDuration(1.2)).toBe('1s')
+    expect(humanDuration(59.7)).toBe('1m')
+    expect(humanDuration(-5)).toBe('0s')
   })
 })
 

@@ -18,7 +18,6 @@ import {
   clampLines,
   collapseToolRuns,
   foldCosts,
-  formatDuration,
   lifecycleText,
   pendingToolCalls,
   recordToItems,
@@ -879,7 +878,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const liveTokens = snapshot.liveOutputTokens
   const generating = statusWord === 'working' && (liveText !== '' || liveTokens != null)
   const generatingBits = [
-    formatDuration(elapsed),
+    humanDuration(elapsed),
     ...(liveTokens != null ? [`↓ ${formatTokens(liveTokens)} tokens`] : []),
     ...(inputActive ? ['esc to interrupt'] : []),
   ].join(' · ')
@@ -889,7 +888,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       ? `Running ${pendingTools[0].text}${pendingTools[0].detail ?? ''}`
       : `Running ${pendingTools.length} tool calls (${[...new Set(pendingTools.map((t) => t.text))].join(', ')})`
   const runningToolBits = [
-    formatDuration(toolElapsed),
+    humanDuration(toolElapsed),
     ...(inputActive ? ['esc to interrupt'] : []),
   ].join(' · ')
 
@@ -938,7 +937,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                   record lands, and "Session ready!" must not linger. */}
               {sandbox?.done && !infraActivity
                 ? sandbox.headline
-                : `${(!sandbox || sandbox.done ? (infraActivity ?? 'Session starting') : sandbox.headline).replace(/…$/, '')}… (${formatDuration(elapsed)})`}
+                : `${(!sandbox || sandbox.done ? (infraActivity ?? 'Session starting') : sandbox.headline).replace(/…$/, '')}… (${humanDuration(elapsed)})`}
               {inputActive && navKey === 'sandbox' && !sandboxOpen && sandbox?.sandboxLine
                 ? ' (→: details)'
                 : ''}
@@ -1065,6 +1064,25 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         {!atBottom && (
           <Text dimColor>… {entries.keys.length - slice.end} newer (scroll or ↓)</Text>
         )}
+        {/* Sends the agent has TAKEN (delivered, echo record still in
+            flight): full-colour ◆ rows rendered ABOVE the live activity
+            lines — the running turn is the response to THIS message, so its
+            stream belongs below it. Rendering them after the live lines
+            made the Generating line flash in above the message for the echo
+            gap. */}
+        {atBottom &&
+          inFlightSends
+            .filter((q) => q.state === 'accepted')
+            .map((q) => (
+              <Box key={q.key} marginTop={1}>
+                <Box width={2} flexShrink={0}>
+                  <Text color="cyan">◆</Text>
+                </Box>
+                <Box width="80%">
+                  <Text bold>{q.text}</Text>
+                </Box>
+              </Box>
+            ))}
         {/* The live tool-call status, attached to the burst it belongs to: hugs
             the collapsed "Ran N …" fold (or the expanded ● call) above it, and
             disappears into the fold's count once the result lands. Live lines
@@ -1101,26 +1119,33 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             </Text>
           </Box>
         )}
-        {/* Your in-flight sends, at the chat's bottom edge the moment you hit
-            enter: dim ◆ rows stamped (sending…) while the POST is in flight,
-            (queued) once the server accepts, then FULL COLOUR the moment the
-            agent takes the message — it holds that spot through the echo gap
-            (which spans a whole sandbox wake) until the agent's own user-echo
-            transcript item replaces it. */}
+        {/* Your not-yet-taken sends, at the chat's bottom edge the moment
+            you hit enter: dim ◆ rows with their pipeline state in the
+            right-hand metadata column — (sending…) while the POST is in
+            flight, (queued…) once the server accepts. The moment the agent
+            takes the message it turns full colour and moves ABOVE the live
+            lines (the accepted rows before the tool/generating status),
+            holding that spot through the echo gap (which spans a whole
+            sandbox wake) until the agent's own user-echo transcript item
+            replaces it. */}
         {atBottom &&
-          inFlightSends.map((q) => (
-            <Box key={q.key} marginTop={1}>
-              <Box width={2} flexShrink={0}>
-                <Text color="cyan" dimColor={q.state !== 'accepted'}>
-                  ◆
-                </Text>
+          inFlightSends
+            .filter((q) => q.state !== 'accepted')
+            .map((q) => (
+              <Box key={q.key} marginTop={1}>
+                <Box width={2} flexShrink={0}>
+                  <Text color="cyan" dimColor>
+                    ◆
+                  </Text>
+                </Box>
+                <Box width="80%">
+                  <Text dimColor>{q.text}</Text>
+                </Box>
+                <Box flexGrow={1} justifyContent="flex-end">
+                  <Text dimColor>{q.state === 'sending' ? '(sending…)' : '(queued…)'}</Text>
+                </Box>
               </Box>
-              <Text bold={q.state === 'accepted'} dimColor={q.state !== 'accepted'}>
-                {q.text}
-                {q.state === 'sending' ? ' (sending…)' : q.state === 'queued' ? ' (queued)' : ''}
-              </Text>
-            </Box>
-          ))}
+            ))}
         {/* The fallback live line: a turn is actually in flight (or a send
             is on its way to starting one) but nothing else says so — no
             tokens streaming, no tool pending, no infra startup block
@@ -1138,14 +1163,17 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           !infraActivity &&
           (awaitingAgent !== null || sendPending) && (
           <Box marginTop={1}>
-            <Text>
-              <Text color="cyan">✻</Text>{' '}
+            <Box width={2} flexShrink={0}>
+              <Text color="cyan">✻</Text>
+            </Box>
+            <Box width="80%">
               <Text dimColor>
-                {awaitingAgent === 'boot' ? 'Starting the agent' : 'Working'}… (
-                {formatDuration(elapsed)}
-                {inputActive ? ' · esc to interrupt' : ''})
+                {awaitingAgent === 'boot' ? 'Starting the agent' : 'Working'}…
               </Text>
-            </Text>
+            </Box>
+            <Box flexGrow={1} justifyContent="flex-end">
+              <Text dimColor>({humanDuration(elapsed)})</Text>
+            </Box>
           </Box>
         )}
       </Box>
@@ -1430,7 +1458,9 @@ export function reshapeTranscript(
     let stepBits: string[] | null = null
     if (isResult) {
       stepBits = []
-      if (typeof p.duration_ms === 'number') stepBits.push(formatDuration(p.duration_ms / 1000))
+      if (typeof p.duration_ms === 'number') {
+        stepBits.push(`(${humanDuration(p.duration_ms / 1000)})`)
+      }
       if (typeof p.total_cost_usd === 'number') {
         const step =
           p.total_cost_usd >= prevTotalUsd ? p.total_cost_usd - prevTotalUsd : p.total_cost_usd
@@ -1448,7 +1478,12 @@ export function reshapeTranscript(
     )) {
       if (item.kind === 'summary' && stepBits !== null) {
         if (item.isError) {
-          items.push({ ...item, text: ['turn ended with an error', ...stepBits].join(' · ') })
+          items.push({
+            ...item,
+            text: ['turn ended with an error', stepBits.join(' · ')]
+              .filter(Boolean)
+              .join(' '),
+          })
           continue
         }
         if (stepBits.length === 0) continue
@@ -1531,9 +1566,26 @@ export function deliveredUnechoedSends(
   return out
 }
 
+// A duration in seconds as compact human-readable components: "3s",
+// "1m 2s", "1h 3m 30s". Zero components drop ("2m", "1h 30s"); sub-minute
+// durations always read as seconds ("0s" when nothing has elapsed). The one
+// duration format everywhere in the app, always shown parenthesized:
+// "(10s)". Pure, for tests.
+export function humanDuration(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const bits: string[] = []
+  if (h > 0) bits.push(`${h}h`)
+  if (m > 0) bits.push(`${m}m`)
+  if (s > 0 || bits.length === 0) bits.push(`${s}s`)
+  return bits.join(' ')
+}
+
 function msLabel(ms: unknown): string | null {
   if (typeof ms !== 'number' || !isFinite(ms) || ms < 0) return null
-  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`
+  return ms >= 1000 ? humanDuration(ms / 1000) : `${Math.round(ms)}ms`
 }
 
 // The image phase's provisioning sub-steps as sentences: the Modal
@@ -1654,10 +1706,12 @@ export function deriveSandboxState(
           p.detail && typeof p.detail === 'object'
             ? (p.detail as Record<string, unknown>)
             : {}
-        const bits = [cacheTierLabel(detail.cache_tier), msLabel(p.duration_ms)].filter(
-          (b): b is string => b != null,
-        )
-        entry.note = bits.length ? bits.join(' · ') : null
+        // "full build (2s)", "(42s)", or a bare tier — the duration always
+        // parenthesized (the app-wide duration format).
+        const tier = cacheTierLabel(detail.cache_tier)
+        const dur = msLabel(p.duration_ms)
+        const bits = [...(tier ? [tier] : []), ...(dur ? [`(${dur})`] : [])]
+        entry.note = bits.length ? bits.join(' ') : null
       }
     } else if (record.record_type === 'sandbox_output') {
       seen = true
@@ -1695,11 +1749,10 @@ export function deriveSandboxState(
         (acc, v) => (typeof v === 'number' && isFinite(v) ? acc + v : acc),
         0,
       )
-      const bits = [
-        cacheTierLabel(p.cache_tier),
-        totalSeconds > 0 ? formatDuration(Math.round(totalSeconds)) : null,
-      ].filter((b): b is string => b != null)
-      sandboxLine = ['Sandbox ready', ...bits].join(' · ')
+      const tier = cacheTierLabel(p.cache_tier)
+      sandboxLine =
+        ['Sandbox ready', ...(tier ? [tier] : [])].join(' · ') +
+        (totalSeconds > 0 ? ` (${humanDuration(totalSeconds)})` : '')
       sandboxDone = true
       // The box coming up is the session-level outcome too: the headline
       // settles on ✓ over the all-done step trace.
@@ -1722,16 +1775,17 @@ export function deriveSandboxState(
 
 // One timeline step as its collapsed display line: a running step shows its
 // label (its live log tail renders as dim lines BENEATH it, not inline), a
-// finished one its closing note (cache tier, duration), a failed one says
-// so. Pure, for tests.
+// finished one its closing note (cache tier, parenthesized duration), a
+// failed one says so. A note that leads with its "(duration)" attaches with
+// a space ("Building image (42s)"); a tier-led note takes the dot separator
+// ("Preparing image · full build (2s)"). Pure, for tests.
 export function sandboxStepLine(step: SandboxStep): string {
   if (step.status === 'running') {
     return `${step.label}…`
   }
-  if (step.status === 'failed') {
-    return step.note ? `${step.label} failed · ${step.note}` : `${step.label} failed`
-  }
-  return step.note ? `${step.label} · ${step.note}` : step.label
+  const base = step.status === 'failed' ? `${step.label} failed` : step.label
+  if (!step.note) return base
+  return step.note.startsWith('(') ? `${base} ${step.note}` : `${base} · ${step.note}`
 }
 
 // Long bodies collapse to this many lines until ctrl+r expands them.
