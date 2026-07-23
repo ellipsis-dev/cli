@@ -985,7 +985,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                         rows; the selected phase reads cyan like the
                         transcript highlight. */}
                     <Text>
-                      {'    '}
+                      {step.child ? '      ' : '    '}
                       <Text color="cyan">{selected ? '›' : ' '}</Text> {mark}{' '}
                       <Text
                         color={selected ? 'cyan' : step.status === 'failed' ? 'red' : undefined}
@@ -1002,7 +1002,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                     </Text>
                     {(selected && stepLogsOpen ? logLines : []).map((l, j) => (
                       <Text key={`${step.key}:${j}`} dimColor>
-                        {'        '}
+                        {step.child ? '          ' : '        '}
                         {j === 0 && hidden > 0 ? `… +${hidden} earlier · ` : ''}
                         {oneLine(l, 100)}
                       </Text>
@@ -1334,6 +1334,11 @@ export type SandboxStep = {
   // transitions existed) — such steps close on the next step, not on a
   // transition.
   inferred: boolean
+  // Rendered one level under its bare-phase sibling: the key is phase:step
+  // AND an entry keyed exactly `phase` exists (the image phase's build/
+  // container/smoke children under "Preparing image"). Hook steps have no
+  // bare-phase sibling and stay flat.
+  child: boolean
 }
 // The startup story as a THREE-LEVEL hierarchy, session-first: the headline
 // is the SESSION's state ("Session scheduled…" → "Session starting…" →
@@ -1444,11 +1449,33 @@ function msLabel(ms: unknown): string | null {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`
 }
 
+// The image phase's provisioning sub-steps as sentences: the Modal
+// dockerfile build, the Sandbox.create container start (minutes for a
+// multi-GB image), and the post-create smoke test. The step vocabulary is
+// open by contract, so unknown steps pass through verbatim.
+function imageStepLabel(step: string): string {
+  switch (step) {
+    case 'build':
+      return 'Building image'
+    case 'container':
+      return 'Starting container'
+    case 'smoke':
+      return 'Smoke check'
+    default:
+      return step
+  }
+}
+
 // Human label for a timeline step: hooks sub-items keep their hook phrasing,
-// other sub-items (a clone's "owner/repo") read as themselves, whole phases
-// go through the SDK's open-vocabulary phase labels.
+// image sub-items read as sentences, other sub-items (a clone's
+// "owner/repo") read as themselves, whole phases go through the SDK's
+// open-vocabulary phase labels.
 function stepLabel(phase: string, step: string | null): string {
-  if (step) return phase === 'hooks' ? hookPhrase(step) : step
+  if (step) {
+    if (phase === 'hooks') return hookPhrase(step)
+    if (phase === 'image') return imageStepLabel(step)
+    return step
+  }
   return sandboxPhaseLabel(phase)
 }
 
@@ -1529,6 +1556,7 @@ export function deriveSandboxState(
           note: null,
           lines: [],
           inferred: false,
+          child: false,
         }
         steps.push(entry)
       }
@@ -1564,6 +1592,7 @@ export function deriveSandboxState(
           note: null,
           lines: [],
           inferred: true,
+          child: false,
         }
         steps.push(entry)
       }
@@ -1590,6 +1619,14 @@ export function deriveSandboxState(
       headline = 'Session ready!'
       done = true
     }
+  }
+  // Nest a phase:step entry one level under its bare-phase sibling, when
+  // one exists (the image phase opens "Preparing image" then its build/
+  // container/smoke steps). Keyed generically on the phase prefix, so any
+  // phase that gains steps nests the same way.
+  for (const s of steps) {
+    const colon = s.key.indexOf(':')
+    s.child = colon > 0 && steps.some((o) => o.key === s.key.slice(0, colon))
   }
   return seen
     ? { headline, done, configName, configCommitSha, sandboxLine, sandboxDone, steps }

@@ -150,6 +150,105 @@ describe('deriveSandboxState', () => {
     expect(state?.steps[0].status).toBe('done')
     expect(state?.steps[0].note).toBe('800ms')
     expect(state?.steps[0].lines).toEqual(['npm ci'])
+    // No bare 'hooks' phase entry ever opens, so hook steps stay flat.
+    expect(state?.steps[0].child).toBe(false)
+  })
+
+  it('nests the image build/container/smoke steps under Preparing image', () => {
+    const state = deriveSandboxState(
+      [
+        rec('sandbox_starting', { repositories: ['o/r'] }),
+        rec('sandbox_phase', { phase: 'image', status: 'started' }),
+        rec('sandbox_phase', { phase: 'image', step: 'build', status: 'started' }),
+        rec('sandbox_output', {
+          phase: 'image',
+          step: 'build',
+          chunk: 0,
+          lines: ['#1 FROM base'],
+        }),
+        rec('sandbox_output', {
+          phase: 'image',
+          step: 'build',
+          chunk: 1,
+          lines: ['#2 RUN npm ci'],
+        }),
+        rec('sandbox_phase', {
+          phase: 'image',
+          step: 'build',
+          status: 'completed',
+          duration_ms: 42000,
+        }),
+        rec('sandbox_phase', { phase: 'image', step: 'container', status: 'started' }),
+        rec('sandbox_phase', {
+          phase: 'image',
+          step: 'container',
+          status: 'completed',
+          duration_ms: 829000,
+        }),
+        rec('sandbox_phase', { phase: 'image', step: 'smoke', status: 'started' }),
+        rec('sandbox_phase', {
+          phase: 'image',
+          step: 'smoke',
+          status: 'completed',
+          duration_ms: 1200,
+        }),
+        rec('sandbox_phase', {
+          phase: 'image',
+          status: 'completed',
+          duration_ms: 873000,
+          detail: { cache_tier: 'full' },
+        }),
+      ],
+      0,
+    )
+    expect(state?.steps.map((s) => [s.key, s.label, s.status, s.child])).toEqual([
+      ['image', 'Preparing image', 'done', false],
+      ['image:build', 'Building image', 'done', true],
+      ['image:container', 'Starting container', 'done', true],
+      ['image:smoke', 'Smoke check', 'done', true],
+    ])
+    // The live builder log attaches to the build step, not the bare phase.
+    expect(state?.steps[0].lines).toEqual([])
+    expect(state?.steps[1].lines).toEqual(['#1 FROM base', '#2 RUN npm ci'])
+    expect(state?.steps[1].note).toBe('42.0s')
+    expect(state?.steps[2].note).toBe('829.0s')
+    expect(state?.steps[3].note).toBe('1.2s')
+    expect(state?.steps[0].note).toBe('full build · 873.0s')
+  })
+
+  it('keeps the sandbox_ready total on phase_timings, never the step durations', () => {
+    const state = deriveSandboxState(
+      [
+        rec('sandbox_starting', {}),
+        rec('sandbox_phase', { phase: 'image', status: 'started' }),
+        rec('sandbox_phase', { phase: 'image', step: 'build', status: 'started' }),
+        rec('sandbox_phase', {
+          phase: 'image',
+          step: 'build',
+          status: 'completed',
+          duration_ms: 42000,
+        }),
+        rec('sandbox_phase', { phase: 'image', status: 'completed', duration_ms: 43000 }),
+        rec('sandbox_ready', {
+          cache_tier: 'full',
+          phase_timings: { image: 43, clone: 17 },
+        }),
+      ],
+      0,
+    )
+    expect(state?.sandboxLine).toBe('Sandbox ready · full build · 1m 0s')
+  })
+
+  it('renders unknown image steps verbatim without nesting surprises (open vocabulary)', () => {
+    const state = deriveSandboxState(
+      [
+        rec('sandbox_phase', { phase: 'image', step: 'warm_cache', status: 'started' }),
+      ],
+      0,
+    )
+    expect(state?.steps[0].label).toBe('warm_cache')
+    // No bare image entry in this feed, so the step stays flat.
+    expect(state?.steps[0].child).toBe(false)
   })
 
   it('marks a failed transition and keeps its duration', () => {
@@ -293,6 +392,7 @@ describe('sandboxStepLine', () => {
     note: null,
     lines: [],
     inferred: false,
+    child: false,
     ...over,
   })
 
