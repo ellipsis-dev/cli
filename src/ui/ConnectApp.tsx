@@ -967,6 +967,8 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                   ? step.lines.slice(-RUNNING_TAIL_LINES)
                   : step.lines.slice(-FINISHED_LOG_LINES)
                 const hidden = step.lines.length - logLines.length
+                const showLogs = running || (selected && stepLogsOpen)
+                const logIndent = step.child ? '            ' : '          '
                 const mark =
                   step.status === 'failed' ? (
                     <Text color="red">✗</Text>
@@ -1001,11 +1003,16 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                         RUNNING_TAIL_LINES lines, ticking as chunks land);
                         a finished step's logs stay behind →. Indented two
                         columns past the step's label so the lines read as
-                        its children. */}
-                    {(running || (selected && stepLogsOpen) ? logLines : []).map((l, j) => (
+                        its children, headed by an elision line when more
+                        scrolled past. */}
+                    {showLogs && hidden > 0 && (
+                      <Text dimColor>
+                        {logIndent}… +{hidden} earlier line{hidden === 1 ? '' : 's'}
+                      </Text>
+                    )}
+                    {(showLogs ? logLines : []).map((l, j) => (
                       <Text key={`${step.key}:${j}`} dimColor>
-                        {step.child ? '            ' : '          '}
-                        {j === 0 && hidden > 0 ? `… +${hidden} earlier · ` : ''}
+                        {logIndent}
                         {oneLine(l, 100)}
                       </Text>
                     ))}
@@ -1274,8 +1281,10 @@ function sandboxBlockRows(
     const running = step.status === 'running' && !sandbox.sandboxDone
     // A running step always shows its live tail; a finished step's logs
     // show only while selected in the open panel with logs toggled on.
+    // Shown lines plus the "+N earlier lines" heading when some are elided.
     if (running || (open && logsOpen && i === cursor)) {
-      rows += Math.min(step.lines.length, running ? RUNNING_TAIL_LINES : FINISHED_LOG_LINES)
+      const shown = Math.min(step.lines.length, running ? RUNNING_TAIL_LINES : FINISHED_LOG_LINES)
+      rows += shown + (step.lines.length > shown ? 1 : 0)
     }
   }
   return rows
