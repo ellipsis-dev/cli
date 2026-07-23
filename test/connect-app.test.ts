@@ -584,9 +584,11 @@ describe('gutterFor', () => {
   const item = (kind: TranscriptItem['kind'], gutter?: string): TranscriptItem =>
     ({ key: 'k', kind, text: 'x', spaceBefore: false, gutter }) as TranscriptItem
 
-  it('marks user messages ◆ and assistant prose ⏺, overriding the SDK gutter', () => {
+  it('marks user messages ◆, assistant prose ●, and system lines ✦, overriding the SDK gutter', () => {
     expect(gutterFor(item('user', '›'))).toBe('◆')
-    expect(gutterFor(item('assistant'))).toBe('⏺')
+    expect(gutterFor(item('assistant'))).toBe('●')
+    expect(gutterFor(item('system'))).toBe('✦')
+    expect(gutterFor(item('notice'))).toBe('✦')
   })
 
   it('keeps the SDK glyph for tool activity and none for the rest', () => {
@@ -594,7 +596,6 @@ describe('gutterFor', () => {
     expect(gutterFor(item('tool_result', '⎿'))).toBe('⎿')
     expect(gutterFor(item('thinking', '✻'))).toBe('✻')
     expect(gutterFor(item('summary'))).toBe('')
-    expect(gutterFor(item('notice'))).toBe('')
   })
 })
 

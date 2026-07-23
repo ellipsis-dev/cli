@@ -1747,14 +1747,17 @@ function isCollapsible(item: TranscriptItem): boolean {
 }
 
 // The sender icon in the 2-column gutter: ◆ (cyan) marks a message you sent
-// (the --prompt initial message included — it's a user message), ⏺ marks the
-// assistant's prose. Everything else keeps the SDK's glyph (● tool calls,
-// ⎿ results, ✻ thinking) or none. The › selection highlight replaces the
-// icon in the same slot, so a selected line always reads differently from
-// its resting state. Pure, for tests.
+// (the --prompt initial message included — it's a user message), ● marks the
+// assistant's prose (default foreground; the tool-call ● is green + bold, so
+// the two never read the same), ✦ (dim) marks system/notice lines — the
+// infrastructure speaking. Everything else keeps the SDK's glyph (⎿ results,
+// ✻ thinking) or none. The › selection highlight replaces the icon in the
+// same slot, so a selected line always reads differently from its resting
+// state. Pure, for tests.
 export function gutterFor(item: TranscriptItem): string {
   if (item.kind === 'user') return '◆'
-  if (item.kind === 'assistant') return '⏺'
+  if (item.kind === 'assistant') return '●'
+  if (item.kind === 'system' || item.kind === 'notice') return '✦'
   return item.gutter ?? ''
 }
 
