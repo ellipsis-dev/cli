@@ -396,10 +396,10 @@ describe('sandboxStepLine', () => {
     ...over,
   })
 
-  it('shows a running step with its latest output line', () => {
+  it('shows a running step as its bare label (the log tail renders beneath, not inline)', () => {
     expect(sandboxStepLine(step({}))).toBe('Fetching repositories…')
     expect(sandboxStepLine(step({ lines: ['a', 'HEAD is now at x'] }))).toBe(
-      'Fetching repositories… · HEAD is now at x',
+      'Fetching repositories…',
     )
   })
 

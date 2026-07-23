@@ -239,7 +239,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // log lines of its sandbox_output chunks, plus the sandbox_ready summary.
   // Completed steps STACK as ✓ lines (the design-doc §3 timeline) instead of
   // rewriting one line in place; the live step ticks under them with its
-  // latest output line. Highlighting the block (↑ from the composer) and
+  // last RUNNING_TAIL_LINES log lines as a dim tail beneath it. Highlighting the block (↑ from the composer) and
   // pressing → opens the step list, and arrow keys drill into a step's logs.
   // The block persists after startup as the durable trace (the sandbox_ready
   // transcript notice is suppressed below in its favour).
@@ -1000,7 +1000,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                         </Text>
                       )}
                     </Text>
-                    {(selected && stepLogsOpen ? logLines : []).map((l, j) => (
+                    {/* A running step's live tail always shows (the last
+                        RUNNING_TAIL_LINES lines, ticking as chunks land);
+                        a finished step's logs stay behind →. */}
+                    {(running || (selected && stepLogsOpen) ? logLines : []).map((l, j) => (
                       <Text key={`${step.key}:${j}`} dimColor>
                         {step.child ? '          ' : '        '}
                         {j === 0 && hidden > 0 ? `… +${hidden} earlier · ` : ''}
@@ -1270,11 +1273,14 @@ function sandboxBlockRows(
   const steps = sandbox.steps
   if (sandbox.sandboxLine != null) rows += 1 + steps.length
   if (open) rows += 1 // the key hint
-  if (open && logsOpen && steps.length > 0) {
-    const i = Math.min(stepCursor, steps.length - 1)
-    const step = steps[i]
+  const cursor = Math.min(stepCursor, Math.max(0, steps.length - 1))
+  for (const [i, step] of steps.entries()) {
     const running = step.status === 'running' && !sandbox.sandboxDone
-    rows += Math.min(step.lines.length, running ? RUNNING_TAIL_LINES : FINISHED_LOG_LINES)
+    // A running step always shows its live tail; a finished step's logs
+    // show only while selected in the open panel with logs toggled on.
+    if (running || (open && logsOpen && i === cursor)) {
+      rows += Math.min(step.lines.length, running ? RUNNING_TAIL_LINES : FINISHED_LOG_LINES)
+    }
   }
   return rows
 }
@@ -1634,12 +1640,12 @@ export function deriveSandboxState(
 }
 
 // One timeline step as its collapsed display line: a running step shows its
-// label with the latest log line, a finished one its closing note (cache
-// tier, duration), a failed one says so. Pure, for tests.
+// label (its live log tail renders as dim lines BENEATH it, not inline), a
+// finished one its closing note (cache tier, duration), a failed one says
+// so. Pure, for tests.
 export function sandboxStepLine(step: SandboxStep): string {
   if (step.status === 'running') {
-    const last = step.lines[step.lines.length - 1]
-    return last ? `${step.label}… · ${last}` : `${step.label}…`
+    return `${step.label}…`
   }
   if (step.status === 'failed') {
     return step.note ? `${step.label} failed · ${step.note}` : `${step.label} failed`
