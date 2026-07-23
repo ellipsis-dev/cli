@@ -926,7 +926,14 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             ) : (
               <Text color="cyan">✻</Text>
             )}{' '}
-            <Text color={navKey === 'sandbox' ? 'cyan' : undefined} dimColor={navKey !== 'sandbox'}>
+            {/* The settled headline ("Session ready!") reads bold in the
+                default (white) foreground over the dim trace beneath it;
+                while starting it stays dim like the rest of the block. */}
+            <Text
+              color={navKey === 'sandbox' ? 'cyan' : undefined}
+              dimColor={navKey !== 'sandbox' && !(sandbox?.done && !infraActivity)}
+              bold={sandbox?.done && !infraActivity}
+            >
               {/* A live status word overrides a stale done-headline: on a
                   wake the status flips before the new session_starting
                   record lands, and "Session ready!" must not linger. */}
