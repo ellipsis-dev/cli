@@ -877,20 +877,17 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const liveText = snapshot.liveText
   const liveTokens = snapshot.liveOutputTokens
   const generating = statusWord === 'working' && (liveText !== '' || liveTokens != null)
+  // The live lines' ticking readouts render in the right-hand metadata
+  // column (like every other duration), so the left side is just the label.
   const generatingBits = [
     humanDuration(elapsed),
     ...(liveTokens != null ? [`↓ ${formatTokens(liveTokens)} tokens`] : []),
-    ...(inputActive ? ['esc to interrupt'] : []),
   ].join(' · ')
   const runningTool = statusWord === 'working' && !generating && pendingTools.length > 0
   const runningToolLabel =
     pendingTools.length === 1
       ? `Running ${pendingTools[0].text}${pendingTools[0].detail ?? ''}`
       : `Running ${pendingTools.length} tool calls (${[...new Set(pendingTools.map((t) => t.text))].join(', ')})`
-  const runningToolBits = [
-    humanDuration(toolElapsed),
-    ...(inputActive ? ['esc to interrupt'] : []),
-  ].join(' · ')
 
   return (
     <Box flexDirection="column" minHeight={Math.max(0, termRows - 1)}>
@@ -898,9 +895,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           accounting quirks and the post-exit sign-off so the first content
           line never scrolls out of the window. */}
       <Box height={TOP_PAD} flexShrink={0} />
-      {/* No banner: session identity (dashboard link, model, version) lives in
-          the footer meta line, so the transcript starts right under the top
-          padding and nothing is printed to scrollback before the app. */}
+      {/* The one-line opener is the whole banner — the rest of the session
+          identity (dashboard link, model, version) lives in the footer meta
+          line, so nothing is printed to scrollback before the app. */}
       {/* The startup story, session-first, at most three levels deep:
               ✻ Session starting…
                 ✻ Sandbox starting…
@@ -914,6 +911,11 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           first entry, so it scrolls out of frame like any line. */}
       {(infraActivity || sandbox) && entries.keys[0] === 'sandbox' && slice.start === 0 && (
         <Box flexDirection="column">
+          {/* The conversation's opening line: where it lives. The name links
+              to this session's dashboard page. */}
+          <Box marginBottom={1}>
+            <Text dimColor>✦ Connected to {hyperlink(props.sessionUrl, 'ellipsis.dev')}</Text>
+          </Box>
           {/* Level 1: the session headline. The › replaces the mark while
               highlighted (same 1-char slot), so the header never shifts. */}
           <Text>
@@ -1089,12 +1091,15 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             only render while the viewport follows the bottom. */}
         {atBottom && runningTool && (
           <Box marginTop={runningHug ? 0 : 1}>
-            <Text>
-              <Text color="cyan">✻</Text>{' '}
-              <Text dimColor>
-                {runningToolLabel}… ({runningToolBits})
-              </Text>
-            </Text>
+            <Box width={2} flexShrink={0}>
+              <Text color="cyan">✻</Text>
+            </Box>
+            <Box width="80%">
+              <Text dimColor>{runningToolLabel}…</Text>
+            </Box>
+            <Box flexGrow={1} justifyContent="flex-end">
+              <Text dimColor>({humanDuration(toolElapsed)})</Text>
+            </Box>
           </Box>
         )}
         {/* The in-progress assistant response, streamed token-by-token from delta
@@ -1113,10 +1118,15 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         )}
         {atBottom && generating && (
           <Box marginTop={liveText ? 0 : 1}>
-            <Text>
-              <Text color="cyan">✻</Text>{' '}
-              <Text dimColor>Generating… ({generatingBits})</Text>
-            </Text>
+            <Box width={2} flexShrink={0}>
+              <Text color="cyan">✻</Text>
+            </Box>
+            <Box width="80%">
+              <Text dimColor>Generating…</Text>
+            </Box>
+            <Box flexGrow={1} justifyContent="flex-end">
+              <Text dimColor>({generatingBits})</Text>
+            </Box>
           </Box>
         )}
         {/* Your not-yet-taken sends, at the chat's bottom edge the moment
@@ -1313,7 +1323,8 @@ function sandboxBlockRows(
   logsOpen: boolean,
   stepCursor: number,
 ): number {
-  let rows = 1 // the headline
+  // The "Connected to ellipsis.dev" opener + its blank row, then the headline.
+  let rows = 3
   const expanded =
     sandbox != null && (sandbox.configName != null || sandbox.sandboxLine != null)
   if (!expanded) return rows
