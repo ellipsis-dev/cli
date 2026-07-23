@@ -200,12 +200,11 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // re-derivations.
   // Lifecycle records are excluded entirely: the sandbox story renders as the
   // one-line progress block up top (sandboxProgress), not as transcript rows.
-  const items = useMemo(
-    () =>
-      snapshot.records
-        .filter((r) => r.feed_seq > props.minRenderFeedSeq)
-        .filter((r) => r.source !== 'lifecycle')
-        .flatMap((r) => recordToItems(r, `s${r.feed_seq}`)),
+  // Each turn's closing summary is reshaped into stepMeta — the right-hand
+  // metadata column on the turn's final assistant message (see
+  // reshapeTranscript).
+  const { items, stepMeta } = useMemo(
+    () => reshapeTranscript(snapshot.records, props.minRenderFeedSeq),
     [snapshot.records, props.minRenderFeedSeq],
   )
 
@@ -536,8 +535,14 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     for (const item of visible) {
       keys.push(item.key)
       byKey.set(item.key, item)
+      // Assistant messages wrap inside their 80% column (the right 20% is
+      // the metadata gutter), so their height estimate uses that width.
       heights.push(
-        estimateItemRows(item, width, !expanded && !openedKeys.has(item.key)),
+        estimateItemRows(
+          item,
+          item.kind === 'assistant' ? Math.max(20, Math.floor(width * 0.8)) : width,
+          !expanded && !openedKeys.has(item.key),
+        ),
       )
     }
     return { keys, heights, byKey }
@@ -571,8 +576,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const viewBudget = useMemo(() => {
     const width = Math.max(20, termCols - 3)
     const composerRows = inputActive ? 3 + composer.text.split('\n').length : 0
+    // Live prose wraps inside the same 80% column its committed form uses.
+    const liveWidth = Math.max(20, Math.floor(width * 0.8))
     const liveReserve = working
-      ? 2 + (snapshot.liveText ? Math.ceil(snapshot.liveText.length / width) + 1 : 0)
+      ? 2 + (snapshot.liveText ? Math.ceil(snapshot.liveText.length / liveWidth) + 1 : 0)
       : 0
     // The in-flight sends render inside the transcript area (below the
     // slice), so their rows come out of the viewport budget: spacer +
@@ -1042,6 +1049,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             <TranscriptLine
               key={k}
               item={item}
+              meta={stepMeta.get(k)}
               expanded={expanded}
               opened={openedKeys.has(k)}
               selected={navKey === k}
@@ -1068,12 +1076,15 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         {/* The in-progress assistant response, streamed token-by-token from delta
             frames, with its live status hugging beneath; replaced by the
             committed step when it lands. */}
-        {/* Indented to the same 2-column gutter as the committed assistant
-            item it becomes, so the text doesn't jump when it lands. */}
+        {/* Indented to the same 2-column gutter and wrapped in the same 80%
+            column as the committed assistant item it becomes, so the text
+            doesn't jump when it lands. */}
         {atBottom && liveText && (
           <Box marginTop={1}>
             <Box width={2} flexShrink={0} />
-            <Text>{liveText}</Text>
+            <Box width="80%">
+              <Text>{liveText}</Text>
+            </Box>
           </Box>
         )}
         {atBottom && generating && (
@@ -1386,6 +1397,64 @@ type LifecycleRecordLike = {
   payload: Record<string, unknown>
   // The inbox message a user-echo transcript record answers for (§3.3).
   session_message_id?: string | null
+}
+
+// The committed transcript items, with each turn's closing `result` summary
+// reshaped: the "turn complete" label drops, the cost becomes the STEP's own
+// (result events carry Claude Code's cumulative session total, tracked
+// across the WHOLE feed so a --no-records first turn still subtracts the
+// hidden history; a total below the previous one is a fresh process after a
+// wake, whose step cost is the new total itself), and a summary directly
+// following an assistant message moves into stepMeta — rendered as the
+// right-hand metadata column on that message instead of its own line. An
+// error summary keeps its label and its own (red) line: an error is content,
+// not metadata. A summary with no assistant line to hang on stays a line
+// too. Pure, for tests.
+export function reshapeTranscript(
+  records: readonly LifecycleRecordLike[],
+  minRenderFeedSeq: number,
+): { items: TranscriptItem[]; stepMeta: ReadonlyMap<string, string> } {
+  const items: TranscriptItem[] = []
+  const stepMeta = new Map<string, string>()
+  let prevTotalUsd = 0
+  for (const r of records) {
+    if (r.source === 'lifecycle') continue
+    const p = r.payload
+    const isResult = r.source === 'claude_code' && p.type === 'result'
+    let stepBits: string[] | null = null
+    if (isResult) {
+      stepBits = []
+      if (typeof p.duration_ms === 'number') stepBits.push(formatDuration(p.duration_ms / 1000))
+      if (typeof p.total_cost_usd === 'number') {
+        const step =
+          p.total_cost_usd >= prevTotalUsd ? p.total_cost_usd - prevTotalUsd : p.total_cost_usd
+        prevTotalUsd = p.total_cost_usd
+        stepBits.push(`$${step.toFixed(2)}`)
+      }
+    }
+    if (r.feed_seq <= minRenderFeedSeq) continue
+    // recordToItems reads only the structural slice (source, record_type,
+    // payload); its SessionRecordWire param type isn't exported from the
+    // SDK's store entry, hence the cast.
+    for (const item of recordToItems(
+      r as Parameters<typeof recordToItems>[0],
+      `s${r.feed_seq}`,
+    )) {
+      if (item.kind === 'summary' && stepBits !== null) {
+        if (item.isError) {
+          items.push({ ...item, text: ['turn ended with an error', ...stepBits].join(' · ') })
+          continue
+        }
+        if (stepBits.length === 0) continue
+        const prev = items[items.length - 1]
+        if (prev?.kind === 'assistant') stepMeta.set(prev.key, stepBits.join(' · '))
+        else items.push({ ...item, text: stepBits.join(' · ') })
+        continue
+      }
+      items.push(item)
+    }
+  }
+  return { items, stepMeta }
 }
 
 // Whether a turn is IN FLIGHT (a turn_started record without its
@@ -1724,11 +1793,15 @@ function styleFor(item: TranscriptItem): {
 
 const TranscriptLine = React.memo(function TranscriptLine({
   item,
+  meta,
   expanded,
   opened,
   selected,
 }: {
   item: TranscriptItem
+  // The step's metadata ("4s · $0.10"), attached to a turn's closing
+  // assistant message and rendered right-aligned in the right-hand column.
+  meta?: string
   expanded: boolean
   // This line was opened in place with → while highlighted (un-clamps it).
   opened: boolean
@@ -1750,6 +1823,10 @@ const TranscriptLine = React.memo(function TranscriptLine({
       ? clampLines(item.text, COLLAPSE_LINES)
       : { body: item.text, more: 0 }
 
+  // Assistant messages keep to the left 80% of the row, leaving the right
+  // 20% as the metadata column (the turn's duration + step cost when this
+  // message closed one). Other kinds span the full width as before.
+  const isAssistant = item.kind === 'assistant'
   return (
     <Box marginTop={mt}>
       <Box width={2}>
@@ -1760,7 +1837,11 @@ const TranscriptLine = React.memo(function TranscriptLine({
           {selected ? '›' : gutterFor(item)}
         </Text>
       </Box>
-      <Box flexDirection="column" flexGrow={1}>
+      <Box
+        flexDirection="column"
+        width={isAssistant ? '80%' : undefined}
+        flexGrow={isAssistant ? undefined : 1}
+      >
         <Text color={selected ? 'cyan' : textColor} dimColor={!selected && dim} bold={bold}>
           {clamped.body}
           {item.detail ? (
@@ -1775,6 +1856,11 @@ const TranscriptLine = React.memo(function TranscriptLine({
           </Text>
         )}
       </Box>
+      {meta != null && (
+        <Box flexGrow={1} justifyContent="flex-end">
+          <Text dimColor>{meta}</Text>
+        </Box>
+      )}
     </Box>
   )
 })

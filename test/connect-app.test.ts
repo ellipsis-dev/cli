@@ -9,6 +9,7 @@ import {
   foldRun,
   gutterFor,
   hookPhrase,
+  reshapeTranscript,
   sandboxStepLine,
   viewportSlice,
   type SandboxStep,
@@ -503,6 +504,79 @@ describe('deliveredUnechoedSends', () => {
       { id: 'm1', body: 'first' },
       { id: 'm2', body: 'second' },
     ])
+  })
+})
+
+describe('reshapeTranscript', () => {
+  const assistant = (text: string) =>
+    rec('cc', { type: 'assistant', message: { content: [{ type: 'text', text }] } }, 'claude_code')
+  const result = (over: Record<string, unknown> = {}) =>
+    rec(
+      'cc',
+      { type: 'result', duration_ms: 4000, total_cost_usd: 0.1, is_error: false, ...over },
+      'claude_code',
+    )
+
+  it('attaches the step meta to the closing assistant message and drops the summary row', () => {
+    const { items, stepMeta } = reshapeTranscript([assistant('done!'), result()], 0)
+    expect(items.map((i) => i.kind)).toEqual(['assistant'])
+    expect(stepMeta.get(items[0].key)).toBe('4s · $0.10')
+  })
+
+  it('shows each step its own incremental cost, not the cumulative total', () => {
+    const { items, stepMeta } = reshapeTranscript(
+      [
+        assistant('one'),
+        result({ total_cost_usd: 0.1 }),
+        assistant('two'),
+        result({ total_cost_usd: 0.25, duration_ms: 2000 }),
+      ],
+      0,
+    )
+    expect(stepMeta.get(items[0].key)).toBe('4s · $0.10')
+    expect(stepMeta.get(items[1].key)).toBe('2s · $0.15')
+  })
+
+  it('treats a lower total as a fresh process (wake reset): the step cost is the new total', () => {
+    const { items, stepMeta } = reshapeTranscript(
+      [
+        assistant('before the wake'),
+        result({ total_cost_usd: 0.25 }),
+        assistant('after the wake'),
+        result({ total_cost_usd: 0.05 }),
+      ],
+      0,
+    )
+    expect(stepMeta.get(items[1].key)).toBe('4s · $0.05')
+  })
+
+  it('subtracts history hidden below the render cursor (--no-records)', () => {
+    const hidden = [assistant('old'), result({ total_cost_usd: 0.1 })]
+    const cursor = hidden[hidden.length - 1].feed_seq
+    const { items, stepMeta } = reshapeTranscript(
+      [...hidden, assistant('new'), result({ total_cost_usd: 0.18, duration_ms: 3000 })],
+      cursor,
+    )
+    expect(items.map((i) => i.kind)).toEqual(['assistant'])
+    expect(stepMeta.get(items[0].key)).toBe('3s · $0.08')
+  })
+
+  it('keeps an error summary as its own line, label intact', () => {
+    const { items, stepMeta } = reshapeTranscript(
+      [assistant('oops'), result({ is_error: true })],
+      0,
+    )
+    expect(items.map((i) => i.kind)).toEqual(['assistant', 'summary'])
+    expect(items[1].text).toBe('turn ended with an error · 4s · $0.10')
+    expect(items[1].isError).toBe(true)
+    expect(stepMeta.size).toBe(0)
+  })
+
+  it('keeps the summary as its own line when no assistant message precedes it', () => {
+    const { items, stepMeta } = reshapeTranscript([result()], 0)
+    expect(items.map((i) => i.kind)).toEqual(['summary'])
+    expect(items[0].text).toBe('4s · $0.10')
+    expect(stepMeta.size).toBe(0)
   })
 })
 
