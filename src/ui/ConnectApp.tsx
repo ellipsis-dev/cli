@@ -999,10 +999,12 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                     </Text>
                     {/* A running step's live tail always shows (the last
                         RUNNING_TAIL_LINES lines, ticking as chunks land);
-                        a finished step's logs stay behind →. */}
+                        a finished step's logs stay behind →. Indented two
+                        columns past the step's label so the lines read as
+                        its children. */}
                     {(running || (selected && stepLogsOpen) ? logLines : []).map((l, j) => (
                       <Text key={`${step.key}:${j}`} dimColor>
-                        {step.child ? '          ' : '        '}
+                        {step.child ? '            ' : '          '}
                         {j === 0 && hidden > 0 ? `… +${hidden} earlier · ` : ''}
                         {oneLine(l, 100)}
                       </Text>
