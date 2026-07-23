@@ -911,10 +911,12 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           first entry, so it scrolls out of frame like any line. */}
       {(infraActivity || sandbox) && entries.keys[0] === 'sandbox' && slice.start === 0 && (
         <Box flexDirection="column">
-          {/* The conversation's opening line: where it lives. The name links
-              to this session's dashboard page. */}
+          {/* The conversation's opening line: where it lives. Plain text —
+              an OSC 8 hyperlink here gets broken by ink's wrapping and
+              swallows the label; the clickable dashboard link lives in the
+              footer meta line. */}
           <Box marginBottom={1}>
-            <Text dimColor>✦ Connected to {hyperlink(props.sessionUrl, 'ellipsis.dev')}</Text>
+            <Text bold>✦ Connected to ellipsis.dev</Text>
           </Box>
           {/* Level 1: the session headline. The › replaces the mark while
               highlighted (same 1-char slot), so the header never shifts. */}
