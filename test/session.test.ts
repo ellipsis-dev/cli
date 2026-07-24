@@ -103,8 +103,8 @@ describe('readConfigFile', () => {
   }
 
   it('parses a .yaml file', () => {
-    const path = write('cfg.yaml', 'name: demo\nlimits:\n  run: 5\n')
-    expect(readConfigFile(path)).toEqual({ name: 'demo', limits: { run: 5 } })
+    const path = write('cfg.yaml', 'name: demo\nbudget:\n  session: 5\n')
+    expect(readConfigFile(path)).toEqual({ name: 'demo', budget: { session: 5 } })
   })
 
   it('parses a .yml file', () => {
@@ -113,8 +113,8 @@ describe('readConfigFile', () => {
   })
 
   it('parses a .json file', () => {
-    const path = write('cfg.json', '{"name":"demo","limits":{"run":5}}')
-    expect(readConfigFile(path)).toEqual({ name: 'demo', limits: { run: 5 } })
+    const path = write('cfg.json', '{"name":"demo","budget":{"session":5}}')
+    expect(readConfigFile(path)).toEqual({ name: 'demo', budget: { session: 5 } })
   })
 
   it('falls back to YAML for unknown extensions (JSON is valid YAML)', () => {
@@ -152,10 +152,10 @@ describe('applyConfigOverride', () => {
   })
 
   it('reads and parses a file override into the structured mapping', () => {
-    const path = write('override.yaml', 'limits:\n  run: 5\n')
+    const path = write('override.yaml', 'budget:\n  session: 5\n')
     const req: { config_override?: Record<string, unknown>; config_override_yaml?: string } = {}
     applyConfigOverride(req, { configOverrideFile: path })
-    expect(req).toEqual({ config_override: { limits: { run: 5 } } })
+    expect(req).toEqual({ config_override: { budget: { session: 5 } } })
   })
 
   it('rejects passing both inline and file forms', () => {
@@ -214,7 +214,7 @@ describe('buildStartOverride', () => {
         compute: { cpu: 2, memory: '8GB', timeout: '30m' },
         repositories: [{ owner: 'ellipsis-dev', name: 'ellipsis' }, { name: 'solo' }],
       },
-      limits: { run: 0.5 },
+      budget: { session: 0.5 },
     })
   })
 
@@ -231,9 +231,9 @@ describe('buildStartOverride', () => {
   })
 
   it('uses a file override as the base', () => {
-    const path = write('base.yaml', 'limits:\n  run: 1\n')
+    const path = write('base.yaml', 'budget:\n  session: 1\n')
     expect(buildStartOverride({ configOverrideFile: path, budget: 5 })).toEqual({
-      limits: { run: 5 },
+      budget: { session: 5 },
     })
   })
 
