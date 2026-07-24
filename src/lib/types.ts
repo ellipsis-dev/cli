@@ -14,6 +14,7 @@ import type {
   AgentSessionSource,
   AgentSessionStatus,
   SessionMessageWire,
+  SessionPrompting,
   SessionRecordWire,
   SessionState,
   SessionSurface,
@@ -26,6 +27,7 @@ export type {
   ListSessionRecordsResponse,
   ListSessionTurnsResponse,
   SendSessionMessageRequest,
+  SessionPrompting,
   SessionState,
   SessionSurface,
 } from '@ellipsis-dev/sdk'
@@ -132,6 +134,13 @@ export interface AgentSession {
     run: string | null
     status: string | null
   } | null
+  // Whether a human may prompt this session, and the curated reason when they
+  // may not — the SAME projection POST /messages enforces, so `connectability`
+  // opens a composer only where a send would succeed. `detail` is server-authored
+  // copy: render it verbatim rather than switching on `blocked_reason`, so a new
+  // refusal reason reads correctly without a CLI release. Optional because
+  // servers predating the field omit it.
+  prompting?: SessionPrompting | null
   cost_tokens: number
   cost_sandbox_cpu: number
   cost_sandbox_memory: number

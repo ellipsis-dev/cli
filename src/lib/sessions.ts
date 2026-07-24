@@ -13,12 +13,32 @@ import type { AgentSession } from './types'
 export const SELECTION_GLYPH = '▶'
 
 // Whether the composer can send to this session, and — when it can't — why.
-// Only durable (keyed) sessions have an inbox loop to attend a message;
-// single-shot and closed sessions open watch-only.
+//
+// The server decides: `prompting` (protocol §4.1) is the same projection
+// POST /messages enforces, so the composer appears exactly where a send would
+// succeed and we never open an input whose first Enter 409s. Its `detail` is
+// the server's curated sentence, so a new refusal reason needs no CLI release
+// to read well. A session that came from a surface (a Slack/GitHub/Linear
+// mention) is steered THERE, not here, because that surface is where the
+// agent's answers post.
+//
+// Pre-`prompting` servers (older deployments) omit the field: fall back to the
+// local keyed/closed read those binaries already shipped with.
 export function connectability(session: AgentSession): {
   canSend: boolean
   reason?: string
 } {
+  const prompting = session.prompting
+  if (prompting) {
+    if (prompting.enabled) return { canSend: true }
+    const detail = prompting.detail?.trim()
+    return {
+      canSend: false,
+      reason: detail
+        ? `${detail} Opening watch-only.`
+        : 'this session does not accept messages — opening watch-only',
+    }
+  }
   if (!session.session_key) {
     return {
       canSend: false,
