@@ -34,6 +34,7 @@ import {
 import { ApiClient, ApiError } from '../lib/api'
 import { hyperlink } from '../lib/urls'
 import { usdNumberFromMillicents } from '../lib/output'
+import { applyEditShortcut } from '../lib/editing'
 import { SELECTION_GLYPH } from '../lib/sessions'
 import { VERSION } from '../lib/constants'
 
@@ -877,6 +878,13 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       }
       if (key.return) {
         submit(composer.text)
+        return
+      }
+      // Word/line jumps and kills (option+←/→, ctrl+a/e/w/u/k, …) before the
+      // plain arrow handling below, which moves by one character.
+      const edited = applyEditShortcut(composer, ch, key)
+      if (edited) {
+        setComposer(edited)
         return
       }
       if (key.upArrow) {

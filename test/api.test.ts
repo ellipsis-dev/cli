@@ -283,6 +283,29 @@ describe('agent templates', () => {
   })
 })
 
+describe('supported models', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('unwraps the models array from the list response', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            models: [
+              { id: 'claude-opus-5', display_name: 'Claude Opus 5', is_default_agent_model: true },
+            ],
+          }),
+          { status: 200 },
+        ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await new ApiClient('http://api.test', 't').listSupportedModels()
+    expect(out.map((m) => m.id)).toEqual(['claude-opus-5'])
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/models')
+  })
+})
+
 describe('createAgentConfig', () => {
   afterEach(() => vi.unstubAllGlobals())
 
