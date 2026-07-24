@@ -9,7 +9,7 @@ import { runAction } from '../lib/output'
 import { sessionUrl } from '../lib/urls'
 import { makeOpenSocket, resolveWsBase } from '../lib/stream'
 import { ConnectApp } from '../ui/ConnectApp'
-import type { AgentSession } from '../lib/types'
+import { canHostSessionsUi, defaultStartRequest, runSessionsUi } from '../ui/launch'
 
 // `agent session connect [sessionId]` — the terminal window into a cloud
 // session (documents/eng/SESSION_IDE.md §2.6, in the ellipsis monorepo).
@@ -39,28 +39,10 @@ export function resolveConnectSessionId(
   return id
 }
 
-// Whether the composer can send to this session, and — when it can't — why.
-// Only durable (keyed) sessions have an inbox loop to attend a message;
-// single-shot and closed sessions open watch-only. Pure, for tests.
-export function connectability(session: AgentSession): {
-  canSend: boolean
-  reason?: string
-} {
-  if (!session.session_key) {
-    return {
-      canSend: false,
-      reason: 'this session is single-shot (no durable conversation) — opening watch-only',
-    }
-  }
-  if (session.session_state === 'closed') {
-    return {
-      canSend: false,
-      reason:
-        'this conversation is closed (a new event on its surface starts a successor) — opening watch-only',
-    }
-  }
-  return { canSend: true }
-}
+// Whether the composer can send to this session (and why not) — shared with
+// the multi-session UI; re-exported so existing imports keep working.
+import { connectability } from '../lib/sessions'
+export { connectability }
 
 export function registerConnect(session: Command): void {
   session
@@ -82,6 +64,17 @@ Pass --no-input to follow read-only from a script or agent (no TTY needed).`,
     .action(async (sessionId: string | undefined, opts: { records: boolean; input: boolean }) => {
       await runAction(async () => {
         const id = resolveConnectSessionId(sessionId)
+        // Interactive TTY connects open the multi-session UI (sidebar +
+        // chat, this session focused). Headless callers, --no-input, and
+        // --no-records keep the solo single-session renderer (the sidebar is
+        // useless without a keyboard, and the UI always renders history).
+        if (opts.records && opts.input && canHostSessionsUi()) {
+          await runSessionsUi({
+            initialSessionId: id,
+            buildStartRequest: defaultStartRequest,
+          })
+          return
+        }
         await runConnect(id, opts.records, !opts.input)
       })
     })

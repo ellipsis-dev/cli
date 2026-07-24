@@ -62,6 +62,7 @@ import {
 } from '../lib/laptop'
 import { openBrowser } from '../lib/auth'
 import { registerConnect, runConnect } from './connect'
+import { canHostSessionsUi, defaultStartRequest, runSessionsUi } from '../ui/launch'
 import { formatStepLine, oneLine, recordText } from '../lib/steps'
 import { ApiError } from '../lib/api'
 import { resolveToken } from '../lib/config'
@@ -784,22 +785,26 @@ export function registerSession(program: Command): void {
     )
 }
 
-// `start --connect`: drop straight into the semantic connect (render the
-// conversation, follow it live, send messages through the inbox — the same as
-// `session connect`). The connect UI itself renders the sandbox lifecycle
-// (creating sandbox → spawning agent process) as it happens and reports a
-// terminal status reached before the sandbox ever ran (a preflight/budget gate),
-// so there is nothing to wait for out here.
+// `start --connect`: drop straight into the multi-session UI focused on the
+// fresh session (or the solo connect when no TTY hosts the sidebar). The
+// chat renders the sandbox lifecycle (creating sandbox → spawning agent
+// process) as it happens and reports a terminal status reached before the
+// sandbox ever ran (a preflight/budget gate), so there is nothing to wait
+// for out here.
 export async function startConnect(session: AgentSession, notice?: string): Promise<void> {
   // The start response carries the resolved config identity; hand it to the
-  // connect UI for the footer meta line (a later GET may not resolve the name).
-  await runConnect(
-    session.id,
-    true,
-    false,
-    notice,
-    session.resolved_config_name ?? session.agent_config_id ?? undefined,
-  )
+  // chat for the footer meta line (a later GET may not resolve the name).
+  const configName = session.resolved_config_name ?? session.agent_config_id ?? undefined
+  if (canHostSessionsUi()) {
+    await runSessionsUi({
+      initialSessionId: session.id,
+      initialConfigName: configName,
+      initialNotice: notice,
+      buildStartRequest: defaultStartRequest,
+    })
+    return
+  }
+  await runConnect(session.id, true, false, notice, configName)
 }
 
 // `--watch` entry point: stream the session's output live over WebSocket, and
