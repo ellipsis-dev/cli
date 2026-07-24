@@ -51,6 +51,65 @@ describe('connectability', () => {
     expect(c.canSend).toBe(false)
     expect(c.reason).toMatch(/closed/)
   })
+
+  it('honors the server prompting projection over the local keyed read', () => {
+    // A Slack mention session is keyed and live — the old local rule called it
+    // sendable — but its answers post back to the Slack thread, so the server
+    // refuses direct messages and we open watch-only instead of offering a
+    // composer whose first Enter would 409.
+    const c = connectability(
+      session({
+        session_key: 'slack:D1:1.1',
+        session_state: 'idle',
+        prompting: {
+          enabled: false,
+          blocked_reason: 'mention_surface',
+          detail: 'This conversation lives on Slack. Reply there to steer the agent.',
+          surface_name: 'Slack',
+        },
+      }),
+    )
+    expect(c.canSend).toBe(false)
+    // The server's own sentence is shown verbatim, so the reason names Slack.
+    expect(c.reason).toContain('This conversation lives on Slack.')
+    expect(c.reason).toMatch(/watch-only/)
+  })
+
+  it('sends when the server says prompting is enabled', () => {
+    const c = connectability(
+      session({
+        session_key: 'api:x',
+        session_state: 'idle',
+        prompting: {
+          enabled: true,
+          blocked_reason: null,
+          detail: null,
+          surface_name: null,
+        },
+      }),
+    )
+    expect(c).toEqual({ canSend: true })
+  })
+
+  it('falls back to the local read against servers with no prompting field', () => {
+    // Older deployments omit `prompting`; a keyed live session must still open
+    // with a composer rather than silently going watch-only.
+    expect(connectability(session({ session_key: 'api:x', session_state: 'idle' }))).toEqual({
+      canSend: true,
+    })
+  })
+
+  it('is watch-only with generic copy when the server sends no detail', () => {
+    const c = connectability(
+      session({
+        session_key: 'api:x',
+        session_state: 'idle',
+        prompting: { enabled: false, blocked_reason: 'non_interactive', detail: null },
+      }),
+    )
+    expect(c.canSend).toBe(false)
+    expect(c.reason).toMatch(/does not accept messages/)
+  })
 })
 
 describe('rowStatusWord / rowGlyph', () => {
