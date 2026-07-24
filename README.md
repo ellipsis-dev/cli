@@ -54,7 +54,7 @@ agent host delete beta            # remove a host and its stored token
 agent session start --config <id>     # start a session from a saved config
 agent session start --config-file f.json   # ...or from an inline config
 agent session start --template welcome-to-ellipsis   # ...or from a maintained template
-agent session start --config <id> --config-override "limits:\n  run: 5"  # override config fields for this session
+agent session start --config <id> --config-override "budget:\n  session: 5"  # override config fields for this session
 agent session start --config <id> --watch  # start and immediately stream it
 agent session list --limit 20         # list recent sessions (filter by --source, --author, --days, …)
 agent session search "webhook retries"   # search session history: transcripts, recaps, created PRs, similarity

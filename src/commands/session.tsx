@@ -106,7 +106,7 @@ export function registerSession(program: Command): void {
     )
     .option(
       '-o, --config-override <yaml>',
-      'partial agent config (YAML/JSON) merged onto the chosen config for this session, e.g. "limits:\\n  run: 5"',
+      'partial agent config (YAML/JSON) merged onto the chosen config for this session, e.g. "budget:\\n  session: 5"',
     )
     .option(
       '--config-override-file <path>',
@@ -127,7 +127,7 @@ export function registerSession(program: Command): void {
       '--rebuild',
       'skip the sandbox image cache: fresh full build (image layers, clones, image.setup), whose snapshot refreshes the cache',
     )
-    .option('--budget <usd>', 'per-run spend limit in USD for this session (limits.run)', toNumber)
+    .option('--budget <usd>', 'spend limit in USD for this session (budget.session)', toNumber)
     .option(
       '-p, --prompt <text>',
       "the session prompt, appended to the agent's initial user query (or pass it positionally)",
@@ -1029,7 +1029,7 @@ export function buildStartOverride(opts: {
   if (opts.repo && opts.repo.length) sandbox.repositories = opts.repo.map(parseRepo)
   if (Object.keys(sandbox).length) sugar.sandbox = sandbox
 
-  if (opts.budget !== undefined) sugar.limits = { run: opts.budget }
+  if (opts.budget !== undefined) sugar.budget = { session: opts.budget }
 
   const merged = deepMerge(base, sugar)
   return Object.keys(merged).length ? merged : undefined

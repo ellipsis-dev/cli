@@ -241,8 +241,8 @@ sandbox:
   repositories:
     - name: api
 
-limits:
-  run: 5.00
+budget:
+  session: 5.00
 ```
 
 ## Inside an Ellipsis sandbox
