@@ -34,6 +34,7 @@ import {
 import { ApiClient, ApiError } from '../lib/api'
 import { hyperlink } from '../lib/urls'
 import { usdNumberFromMillicents } from '../lib/output'
+import { SELECTION_GLYPH } from '../lib/sessions'
 import { VERSION } from '../lib/constants'
 
 // The interactive `agent session connect` UI, modelled on Claude Code: a
@@ -82,6 +83,31 @@ export interface ConnectAppProps {
   // conversation closed, so the caller skips the "detached — still running"
   // sign-off (the session is not still running).
   exitState?: { closed: boolean }
+  // ---- pane hosting (the multi-session UI) ----
+  // When set, the app renders inside a fixed-size pane instead of sizing to
+  // the terminal: wrap math and the viewport budget use these instead of
+  // stdout's rows/columns.
+  paneWidth?: number
+  paneHeight?: number
+  // Blank rows above the first line. The solo app keeps TOP_PAD's slack
+  // against terminal row-accounting quirks; a pane host owns its own edges.
+  topPad?: number
+  // Whether this pane owns the keyboard. The host keeps exactly one input
+  // handler active (sidebar or chat); default true for the solo app.
+  focused?: boolean
+  // Leave the pane and hand focus to the host's session nav (the bar below
+  // the composer). Fired by esc with nothing open (no panel, no transcript
+  // nav) and by ↓ at the bottom edge (the composer's last line, or a
+  // watch-only follow). Absent in the solo app, where neither leaves.
+  onFocusNav?: () => void
+  // Drop the bottom meta line (status · cost · model · id · version): the
+  // host renders it in its own header instead.
+  hideMetaLine?: boolean
+  // Terminal outcomes, reported to the host INSTEAD of exiting the app:
+  // 'closed' = the conversation closed; 'preflight' = the session died
+  // before it became connectable; 'ended' = a watch-only stream finished.
+  // Absent in the solo app, which exits the Ink render instead.
+  onDone?: (reason: 'closed' | 'preflight' | 'ended') => void
 }
 
 // Surface statuses in which something is actively happening — drives the
@@ -132,6 +158,32 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     }
   }, [stdout])
 
+  // Hosted-in-a-pane vs owning the terminal (the solo `connect`). A pane host
+  // fixes the size and owns the window edges (no shell-row or sign-off slack),
+  // so hosted mode drops the solo app's -1 bottom row and defaults topPad to 1.
+  const hosted = props.paneWidth != null || props.paneHeight != null
+  const rows = props.paneHeight ?? termRows
+  const cols = props.paneWidth ?? termCols
+  const topPad = props.topPad ?? (hosted ? 1 : TOP_PAD)
+  const focused = props.focused ?? true
+  const bottomSlack = hosted ? 0 : 1
+
+  // Terminal outcomes: reported to the host when there is one (the app stays
+  // mounted; the host decides what to show), otherwise exit the Ink render.
+  // The callback rides a ref so `finish` (and everything memoized on it, the
+  // stream pump above all) stays stable even when the host passes a fresh
+  // closure every render — a changing pump identity would abort the socket.
+  const onDoneRef = useRef(props.onDone)
+  onDoneRef.current = props.onDone
+  const hasHost = props.onDone != null
+  const finish = useCallback(
+    (reason: 'closed' | 'preflight' | 'ended'): void => {
+      if (onDoneRef.current) onDoneRef.current(reason)
+      else exit()
+    },
+    [exit],
+  )
+
   // The store snapshot is the single source of truth for everything streamed.
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
   const statusWord = snapshot.session ? sessionStatusWord(snapshot.session) : 'starting'
@@ -156,7 +208,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // startup block, else a TranscriptItem key), or null while the composer has
   // focus. Up from the composer's first line enters at the newest line; down
   // past the newest line (or esc) returns to the composer. The highlighted
-  // line renders a › gutter in cyan.
+  // line renders the cyan selection glyph in its gutter.
   const [navKey, setNavKey] = useState<string | null>(null)
   // Lines opened in place with → while highlighted: a grp:* fold expands into
   // its tool calls, a clamped long body un-clamps. ← closes them again.
@@ -278,8 +330,8 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     closingDown.current = true
     if (props.exitState) props.exitState.closed = true
     setNotice('conversation closed')
-    exit()
-  }, [exit, props.exitState])
+    finish('closed')
+  }, [finish, props.exitState])
   useEffect(() => {
     if (statusWord === 'closed') finishClosed()
   }, [statusWord, finishClosed])
@@ -339,8 +391,8 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           ['failed', 'cancelled', 'stopped'].includes(outcome.status)
         ) {
           setNotice(`session ${outcome.status} before it became connectable`)
-          process.exitCode = 1
-          exit()
+          if (!hasHost) process.exitCode = 1
+          finish('preflight')
           return
         }
         // The warm loop can end by closing the conversation (a closing event's
@@ -353,7 +405,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         if (canSend) {
           if (outcome.type === 'done') setNotice('agent idle — send a message to wake it')
         } else {
-          exit()
+          finish('ended')
         }
       })
       .catch((err: unknown) => {
@@ -365,12 +417,12 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           return
         }
         setNotice(`stream error: ${(err as Error).message}`)
-        if (!canSend) exit()
+        if (!canSend) finish('ended')
       })
       .finally(() => {
         streaming.current = false
       })
-  }, [canSend, exit, finishClosed, openSocket, sessionId, startPollFallback, store])
+  }, [canSend, finish, finishClosed, hasHost, openSocket, sessionId, startPollFallback, store])
 
   useEffect(() => {
     pump()
@@ -482,7 +534,14 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     [api, exit, pump, sessionId],
   )
 
-  const inputActive = canSend && isRawModeSupported
+  // The composer renders whenever sending is possible. The keyboard handler
+  // is gated on pane focus (the host keeps exactly one handler active) but
+  // NOT on sendability: a hosted watch-only chat (closed conversation,
+  // single-shot session) still navigates, scrolls, and hands focus back with
+  // esc — its composer-editing keys are ignored below. The solo watch-only
+  // follow keeps today's no-input behavior.
+  const composerVisible = canSend && isRawModeSupported
+  const inputActive = (composerVisible || (hosted && isRawModeSupported)) && focused
 
   // Mouse reporting (SGR), so wheel/trackpad scroll reaches the app as input
   // instead of scrolling the terminal's (empty) scrollback. Capturing the
@@ -500,21 +559,27 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // The rendered transcript lines, in order: collapsed (the default) folds
   // consecutive tool activity into "Ran N …" notices, except folds opened in
   // place with → (openedKeys), which render their tool calls right below the
-  // fold line so ← can close them again. Expanded (ctrl+r) shows everything.
-  const visible = useMemo(() => {
+  // fold line — indented one level (2 columns), so the expansion reads as
+  // the fold's children — and ← closes them again. Expanded (ctrl+r) shows
+  // everything, flat. `indented` carries the keys of fold-child lines.
+  const { visible, indented } = useMemo(() => {
     const pendingKeys = new Set(pendingTools.map((t) => t.key))
     const base = pendingKeys.size ? items.filter((i) => !pendingKeys.has(i.key)) : items
-    if (expanded) return items
+    if (expanded) return { visible: items, indented: new Set<string>() }
     const folded = collapseToolRuns(base)
-    if (openedKeys.size === 0) return folded
+    if (openedKeys.size === 0) return { visible: folded, indented: new Set<string>() }
     const out: TranscriptItem[] = []
+    const indentedKeys = new Set<string>()
     for (const item of folded) {
       out.push(item)
       if (item.key.startsWith('grp:') && openedKeys.has(item.key)) {
-        out.push(...foldRun(item.key, base))
+        for (const child of foldRun(item.key, base)) {
+          out.push(child)
+          indentedKeys.add(child.key)
+        }
       }
     }
-    return out
+    return { visible: out, indented: indentedKeys }
   }, [items, expanded, pendingTools, openedKeys])
 
   // Everything ↑/↓ can highlight, top to bottom: the sandbox startup block
@@ -525,7 +590,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // and snapped to the highlight.
   const infraActivity = statusActivityText(statusWord)
   const entries = useMemo(() => {
-    const width = Math.max(20, termCols - 3)
+    const width = Math.max(20, cols - 3)
     const keys: string[] = []
     const heights: number[] = []
     const byKey = new Map<string, TranscriptItem>()
@@ -537,13 +602,15 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       keys.push(item.key)
       byKey.set(item.key, item)
       // Assistant messages wrap inside their 80% column (the right 20% is
-      // the metadata gutter), so their height estimate uses that width.
+      // the metadata gutter), so their height estimate uses that width; an
+      // opened fold's indented children lose 2 columns to the indent.
+      const itemWidth = item.kind === 'assistant'
+        ? Math.max(20, Math.floor(width * 0.8))
+        : indented.has(item.key)
+          ? Math.max(20, width - 2)
+          : width
       heights.push(
-        estimateItemRows(
-          item,
-          item.kind === 'assistant' ? Math.max(20, Math.floor(width * 0.8)) : width,
-          !expanded && !openedKeys.has(item.key),
-        ),
+        estimateItemRows(item, itemWidth, !expanded && !openedKeys.has(item.key)),
       )
     }
     return { keys, heights, byKey }
@@ -551,12 +618,13 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     infraActivity,
     sandbox,
     visible,
+    indented,
     sandboxOpen,
     stepLogsOpen,
     stepCursor,
     expanded,
     openedKeys,
-    termCols,
+    cols,
   ])
   // Everything ↑/↓ can actually land on: the entry list minus turn summaries
   // ("turn complete · 3s · $0.03"), which are informational trailers, not
@@ -575,8 +643,13 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // "… N above/below" indicator rows. Heights are estimates, so this leans
   // conservative rather than overflow the window into scrollback.
   const viewBudget = useMemo(() => {
-    const width = Math.max(20, termCols - 3)
-    const composerRows = inputActive ? 3 + composer.text.split('\n').length : 0
+    const width = Math.max(20, cols - 3)
+    // The composer box: its rules (2, or 1 when the host's nav rule serves
+    // as the bottom) plus a 3-row minimum interior (grows with a taller
+    // multi-line input).
+    const composerRows = composerVisible
+      ? (props.hideMetaLine ? 1 : 2) + Math.max(3, composer.text.split('\n').length)
+      : 0
     // Live prose wraps inside the same 80% column its committed form uses.
     const liveWidth = Math.max(20, Math.floor(width * 0.8))
     const liveReserve = working
@@ -592,17 +665,21 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         q.text.split('\n').reduce((a, l) => a + Math.max(1, Math.ceil(l.length / width)), 0),
       0,
     )
-    const footerRows = 1 + (notice ? 1 : 0) + composerRows + 1 /* footer margin */
-    return Math.max(3, termRows - 1 - TOP_PAD - footerRows - liveReserve - queuedReserve - 2)
+    const footerRows =
+      (props.hideMetaLine ? 0 : 1) + (notice ? 1 : 0) + composerRows + 1 /* footer margin */
+    return Math.max(3, rows - bottomSlack - topPad - footerRows - liveReserve - queuedReserve - 2)
   }, [
-    termRows,
-    termCols,
-    inputActive,
+    rows,
+    cols,
+    bottomSlack,
+    topPad,
+    composerVisible,
     composer.text,
     working,
     snapshot.liveText,
     notice,
     inFlightSends,
+    props.hideMetaLine,
   ])
 
   // The viewport slice for a given scroll anchor (pure math in viewportSlice;
@@ -676,7 +753,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       }
       if (key.escape) {
         // Modal-first: an open sandbox panel closes, then transcript
-        // navigation drops back to the composer, before esc means "stop".
+        // navigation drops back to the composer, then esc leaves the pane.
         if (sandboxOpen) {
           setSandboxOpen(false)
           setStepLogsOpen(false)
@@ -687,7 +764,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           setScrollKey(null)
           return
         }
-        if (working) submit('/stop')
+        // Hosted: hand focus to the session nav (stopping is the composer's
+        // /stop command). Solo: esc-while-working keeps meaning stop.
+        if (props.onFocusNav) props.onFocusNav()
+        else if (working) submit('/stop')
         return
       }
       if (key.ctrl && ch === 'r') {
@@ -765,6 +845,8 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           return
         }
         if (key.leftArrow) {
+          // ← closes the thing opened in place; with nothing open it's inert
+          // (the session nav lives BELOW the composer — ↓ walks to it).
           if (openedKeys.has(navKey)) {
             setOpenedKeys((prev) => {
               const next = new Set(prev)
@@ -774,10 +856,22 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           }
           return
         }
-        if (ch && !key.ctrl && !key.meta) {
+        if (ch && !key.ctrl && !key.meta && composerVisible) {
           setNavKey(null)
           setScrollKey(null)
           insertAtCursor(ch)
+        }
+        return
+      }
+      // Below here are the composer's own keys. Watch-only (no composer):
+      // ↑ still enters transcript navigation, ↓ leaves for the session nav;
+      // everything else is inert.
+      if (!composerVisible) {
+        if (key.upArrow && navKeys.length > 0) {
+          setNavKey(navKeys[navKeys.length - 1])
+          setScrollKey(null)
+        } else if (key.downArrow && props.onFocusNav) {
+          props.onFocusNav()
         }
         return
       }
@@ -797,8 +891,11 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         return
       }
       if (key.downArrow) {
+        // Down inside a multi-line input walks a line; down on the last
+        // line moves focus to the host's session nav (the bar below).
         const down = cursorLineDown(composer.text, composer.cursor)
         if (down !== null) setComposer((c) => ({ ...c, cursor: down }))
+        else if (props.onFocusNav) props.onFocusNav()
         return
       }
       if (key.leftArrow) {
@@ -857,13 +954,26 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // session frames' cost columns, climbing mid-turn); the CC-derived result
   // total is the fallback against older backends.
   const totalStr = `$${(serverCostUsd ?? cost.total ?? 0).toFixed(2)}`
-  const metaLine = [
+  // Sized to fit by construction: Ink measures the OSC-8 hyperlink's
+  // invisible URL bytes as width, so a linked id only ships when the whole
+  // line — escape bytes included — fits the pane; otherwise the id renders
+  // as plain text, shortened if even that overflows. Never rely on Ink
+  // wrapping/truncating this line: it's budgeted at exactly one row.
+  const metaParts = (id: string): string[] => [
     `${statusWord} · ${totalStr} total`,
     ...(props.model ? [props.model] : []),
-    hyperlink(props.sessionUrl, sessionId),
+    id,
     ...(props.configName ? [props.configName] : []),
     `v${VERSION}`,
-  ].join(' · ')
+  ]
+  const linked = metaParts(hyperlink(props.sessionUrl, sessionId)).join(' · ')
+  const plain = metaParts(sessionId).join(' · ')
+  const metaLine =
+    linked.length < cols
+      ? linked
+      : plain.length < cols
+        ? plain
+        : metaParts(`${sessionId.slice(0, 20)}…`).join(' · ')
   // Three distinct, factual activity signals — never whimsy. All render IN the
   // transcript, on the block they describe, not above the composer:
   // - `infraActivity`: the sandbox is spawning/waking (scheduled/starting/
@@ -892,11 +1002,21 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       : `Running ${pendingTools.length} tool calls (${[...new Set(pendingTools.map((t) => t.text))].join(', ')})`
 
   return (
-    <Box flexDirection="column" minHeight={Math.max(0, termRows - 1)}>
+    // Hosted panes pin BOTH dimensions: without the width the root sizes to
+    // its widest child (the unwrapped meta line) and smears rows across the
+    // terminal; without the fixed height an over-estimated transcript slice
+    // grows the root past the pane and the host clips the footer off. Fixed,
+    // the squeeze resolves inside (the overflow-hidden viewport absorbs it).
+    <Box
+      flexDirection="column"
+      width={hosted ? cols : undefined}
+      height={hosted ? rows : undefined}
+      minHeight={hosted ? undefined : Math.max(0, rows - bottomSlack)}
+    >
       {/* Top padding — see the termRows comment: absorbs terminal row-
           accounting quirks and the post-exit sign-off so the first content
           line never scrolls out of the window. */}
-      <Box height={TOP_PAD} flexShrink={0} />
+      {topPad > 0 && <Box height={topPad} flexShrink={0} />}
       {/* The one-line opener is the whole banner — the rest of the session
           identity (dashboard link, model, version) lives in the footer meta
           line, so nothing is printed to scrollback before the app. */}
@@ -920,11 +1040,12 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           <Box marginBottom={1}>
             <Text bold>✦ Connected to ellipsis.dev</Text>
           </Box>
-          {/* Level 1: the session headline. The › replaces the mark while
-              highlighted (same 1-char slot), so the header never shifts. */}
+          {/* Level 1: the session headline. The selection glyph replaces the
+              mark while highlighted (same 1-char slot), so the header never
+              shifts. */}
           <Text>
             {navKey === 'sandbox' ? (
-              <Text color="cyan">›</Text>
+              <Text color="cyan">{SELECTION_GLYPH}</Text>
             ) : sandbox?.done && !infraActivity ? (
               <Text color="green">✓</Text>
             ) : (
@@ -935,6 +1056,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                 while starting it stays dim like the rest of the block. */}
             <Text
               color={navKey === 'sandbox' ? 'cyan' : undefined}
+              inverse={navKey === 'sandbox'}
               dimColor={navKey !== 'sandbox' && !(sandbox?.done && !infraActivity)}
               bold={sandbox?.done && !infraActivity}
             >
@@ -997,18 +1119,21 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                   )
                 return (
                   <Box key={step.key} flexDirection="column">
-                    {/* The › cursor column is always reserved (a space when
+                    {/* The cursor column is always reserved (a space when
                         unselected), so opening the panel never shifts the
                         rows; the selected phase reads cyan like the
                         transcript highlight. */}
                     <Text>
                       {step.child ? '      ' : '    '}
-                      <Text color="cyan">{selected ? '›' : ' '}</Text> {mark}{' '}
+                      <Text color="cyan">{selected ? SELECTION_GLYPH : ' '}</Text> {mark}{' '}
                       <Text
                         color={selected ? 'cyan' : step.status === 'failed' ? 'red' : undefined}
+                        inverse={selected}
                         dimColor={!selected && step.status !== 'failed'}
                       >
-                        {oneLine(sandboxStepLine(step), 108)}
+                        {selected
+                          ? ` ${oneLine(sandboxStepLine(step), 106)} `
+                          : oneLine(sandboxStepLine(step), 108)}
                       </Text>
                       {sandboxOpen && step.lines.length > 0 && (
                         <Text color={selected ? 'cyan' : undefined} dimColor={!selected}>
@@ -1047,8 +1172,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       {/* The transcript viewport grows through the middle of the terminal,
           pinning the composer + meta to the bottom edge (flexGrow fills the
           slack). Only the slice that fits the window renders; dim markers
-          show what's out of frame above/below. */}
-      <Box flexDirection="column" flexGrow={1}>
+          show what's out of frame above/below. Row heights are estimates, so
+          an overshooting slice clips here (overflow) instead of squashing
+          the footer (the composer's borders collapse onto its prompt row). */}
+      <Box flexDirection="column" flexGrow={1} overflow="hidden">
         {slice.start > 0 && (
           <Text dimColor>… {slice.start} earlier (scroll or ↑)</Text>
         )}
@@ -1064,6 +1191,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
               expanded={expanded}
               opened={openedKeys.has(k)}
               selected={navKey === k}
+              indent={indented.has(k)}
             />
           )
         })}
@@ -1191,26 +1319,49 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           </Box>
         )}
       </Box>
-      <Box flexDirection="column" marginTop={1}>
+      {/* flexShrink=0: when a mis-estimated transcript slice overflows the
+          fixed pane, the squeeze lands on the (overflow-hidden) viewport
+          above, never on the composer/meta rows. */}
+      <Box flexDirection="column" marginTop={1} flexShrink={0}>
         {notice && <Text dimColor>· {notice}</Text>}
         {/* The composer, framed by a full-width rule above and below (Claude
             Code-style): the › prompt sits between the two lines. Only the top and
             bottom borders are drawn, so the rules span the terminal width. */}
-        {inputActive && (
-          <Box borderStyle="single" borderLeft={false} borderRight={false} borderDimColor>
+        {/* The composer: a 3-row input area framed by full-width top and
+            bottom rules only (no side borders). With hideMetaLine the host
+            draws its own full-width rule directly beneath (the nav band),
+            which serves as the bottom bounding line — skip ours so the two
+            don't stack. */}
+        {composerVisible && (
+          <Box
+            borderStyle="single"
+            borderLeft={false}
+            borderRight={false}
+            borderBottom={!props.hideMetaLine}
+            borderDimColor
+            minHeight={props.hideMetaLine ? 4 : 5}
+            alignItems="flex-start"
+            paddingLeft={1}
+          >
             {/* One parent Text so a multi-line input flows as a single block
                 (sibling Texts in a row Box would render as columns). The
                 caret is the inverse cell at the cursor, hidden while the
-                transcript has focus (navKey). A caret sitting on a newline
-                renders as an inverse space at that line's end. The key
-                remounts the node on every content change: ink reuses the
+                transcript has focus (navKey) and while the pane itself is
+                unfocused (the sidebar has the keyboard). A caret sitting on
+                a newline renders as an inverse space at that line's end. The
+                key remounts the node on every content change: ink reuses the
                 previous measurement when nested text mutates in place, and
                 the stale (narrower) width wraps the caret onto the border
                 row below. */}
-            <Text key={`${composer.text}:${composer.cursor}:${navKey === null}`}>
-              <Text color="cyan">› </Text>
+            {/* The prompt is the selection glyph while the composer is where
+                you are (focused, no transcript highlight) — the same cyan
+                marker as everywhere else — and dim when it isn't. */}
+            <Text key={`${composer.text}:${composer.cursor}:${focused && navKey === null}`}>
+              <Text color="cyan" dimColor={!(focused && navKey === null)}>
+                {SELECTION_GLYPH}{' '}
+              </Text>
               {composer.text.slice(0, composer.cursor)}
-              {navKey === null && (
+              {focused && navKey === null && (
                 <Text inverse>
                   {composer.cursor < composer.text.length &&
                   composer.text[composer.cursor] !== '\n'
@@ -1219,14 +1370,14 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                 </Text>
               )}
               {composer.cursor < composer.text.length
-                ? navKey === null && composer.text[composer.cursor] !== '\n'
+                ? focused && navKey === null && composer.text[composer.cursor] !== '\n'
                   ? composer.text.slice(composer.cursor + 1)
                   : composer.text.slice(composer.cursor)
                 : ''}
             </Text>
           </Box>
         )}
-        <Text dimColor>{metaLine}</Text>
+        {!props.hideMetaLine && <Text dimColor>{metaLine}</Text>}
       </Box>
     </Box>
   )
@@ -1883,6 +2034,7 @@ const TranscriptLine = React.memo(function TranscriptLine({
   expanded,
   opened,
   selected,
+  indent = false,
 }: {
   item: TranscriptItem
   // The step's metadata ("4s · $0.10"), attached to a turn's closing
@@ -1891,8 +2043,13 @@ const TranscriptLine = React.memo(function TranscriptLine({
   expanded: boolean
   // This line was opened in place with → while highlighted (un-clamps it).
   opened: boolean
-  // This line is the transcript-navigation highlight: › gutter, cyan text.
+  // This line is the transcript-navigation highlight: cyan selection glyph
+  // in the gutter, cyan text.
   selected: boolean
+  // This line is an opened fold's child ("Ran 2 …" → its tool calls): the
+  // whole row shifts one level (2 columns) right, so the expansion reads as
+  // the fold's children in the chat hierarchy.
+  indent?: boolean
 }): React.ReactElement {
   const mt = item.spaceBefore ? 1 : 0
   const { gutterColor, textColor, dim, bold } = styleFor(item)
@@ -1914,13 +2071,13 @@ const TranscriptLine = React.memo(function TranscriptLine({
   // message closed one). Other kinds span the full width as before.
   const isAssistant = item.kind === 'assistant'
   return (
-    <Box marginTop={mt}>
+    <Box marginTop={mt} paddingLeft={indent ? 2 : 0}>
       <Box width={2}>
         <Text
           color={selected ? 'cyan' : gutterColor}
           dimColor={!selected && dim && !item.isError}
         >
-          {selected ? '›' : gutterFor(item)}
+          {selected ? SELECTION_GLYPH : gutterFor(item)}
         </Text>
       </Box>
       <Box
@@ -1928,10 +2085,18 @@ const TranscriptLine = React.memo(function TranscriptLine({
         width={isAssistant ? '80%' : undefined}
         flexGrow={isAssistant ? undefined : 1}
       >
-        <Text color={selected ? 'cyan' : textColor} dimColor={!selected && dim} bold={bold}>
+        {/* The selected line renders as an inverse cyan bar — the app-wide
+            "you are here" treatment (sidebar rows, buttons, dropdown
+            options all match). */}
+        <Text
+          color={selected ? 'cyan' : textColor}
+          inverse={selected}
+          dimColor={!selected && dim}
+          bold={bold}
+        >
           {clamped.body}
           {item.detail ? (
-            <Text color={selected ? 'cyan' : undefined} dimColor={!selected}>
+            <Text color={selected ? 'cyan' : undefined} inverse={selected} dimColor={!selected}>
               {item.detail}
             </Text>
           ) : null}

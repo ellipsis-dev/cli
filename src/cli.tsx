@@ -17,6 +17,7 @@ import { registerUsage } from './commands/usage'
 import { registerAnalytics } from './commands/analytics'
 import { registerPing } from './commands/ping'
 import { VERSION } from './lib/constants'
+import { canHostSessionsUi, defaultStartRequest, runSessionsUi } from './ui/launch'
 
 const program = new Command()
 
@@ -46,14 +47,17 @@ registerUsage(program)
 registerAnalytics(program)
 registerPing(program)
 
-// Any invocation that isn't a known subcommand or a top-level help/version
-// request is shorthand for `agent session start --connect ...`. So a bare
-// `agent`, and `agent "fix the tests" --model ...`, both forward the prompt
-// and every trailing flag through to a fresh connected session. A bare
-// `agent` starts the session idle (idle_start): the sandbox spins up and
-// Claude Code waits for the first thing typed into the composer, like a
-// local `claude`. `agent --help`, `agent --version`, `agent help`, and every
-// subcommand dispatch unchanged.
+// A bare `agent` opens the multi-session UI: the sidebar of your running
+// sessions beside a new-session composer — nothing starts until you type a
+// task and hit enter. (Headless callers with no TTY get the old behavior of
+// an idle connected start via the shorthand below.)
+//
+// Any other invocation that isn't a known subcommand or a top-level
+// help/version request is shorthand for `agent session start --connect ...`:
+// `agent "fix the tests" --model ...` forwards the prompt and every trailing
+// flag through to a fresh connected session, which opens in the same UI.
+// `agent --help`, `agent --version`, `agent help`, and every subcommand
+// dispatch unchanged.
 const topLevelCommands = new Set([
   'help',
   ...program.commands.flatMap((c) => [c.name(), ...c.aliases()]),
@@ -65,8 +69,14 @@ const isTopLevel =
   first === '-V' ||
   first === '--version' ||
   (first !== undefined && topLevelCommands.has(first))
-if (!isTopLevel) {
-  process.argv.splice(2, 0, 'session', 'start', '--connect')
+if (first === undefined && canHostSessionsUi()) {
+  const { runAction } = await import('./lib/output')
+  await runAction(() =>
+    runSessionsUi({ buildStartRequest: defaultStartRequest }),
+  )
+} else {
+  if (!isTopLevel) {
+    process.argv.splice(2, 0, 'session', 'start', '--connect')
+  }
+  await program.parseAsync(process.argv)
 }
-
-await program.parseAsync(process.argv)
