@@ -208,6 +208,7 @@ agent config init                            # scaffold agents/my_agent.yaml
 agent config create --template code-reviewer --repo api   # deploy via PR
 agent config default set <configId>          # the agent a bare start runs (--repo for one repo)
 agent template list                          # browse maintained templates
+agent model list                             # the model ids valid under `claude:`
 agent integrations                           # connected GitHub/Slack/Linear/Sentry
 agent sandbox variable set LINEAR_API_KEY=...
 agent sandbox build start --config-file agents/my_agent.yaml --watch
