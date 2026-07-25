@@ -14,6 +14,7 @@ import type {
   CreateAgentConfigRequest,
   CreateAssetRequest,
   CreateAssetResponse,
+  CreateReviewRequest,
   CreatedAgentConfig,
   GetAssetResponse,
   GetAnalyticsMetricsResponse,
@@ -34,6 +35,8 @@ import type {
   ListGithubMembersResponse,
   ListGithubRepositoriesResponse,
   ListLinearTeamsResponse,
+  ListReviewsQuery,
+  ListReviewsResponse,
   ListSentryOrganizationsResponse,
   ListSessionRecordsResponse,
   ListSessionTurnsResponse,
@@ -41,6 +44,7 @@ import type {
   ListSlackMembersResponse,
   PutAgentDefaultRequest,
   ReplayAgentSessionRequest,
+  Review,
   SendSessionMessageRequest,
   SandboxVariableInput,
   SandboxVariableSummary,
@@ -327,6 +331,35 @@ export class ApiClient {
   // delete (e.g. a sandbox token).
   deleteAsset(assetId: string): Promise<void> {
     return this.request('DELETE', `/v1/assets/${encodeURIComponent(assetId)}`)
+  }
+
+  // -------------------------------- reviews --------------------------------
+  // A review IS a code_review agent session over one commit range, and its id
+  // IS the session id — so the session methods above (get, records, stream,
+  // stop) all work on a review id unchanged, and only the review-shaped parts
+  // (scope, findings, posting outcome) need endpoints of their own.
+
+  createReview(request: CreateReviewRequest): Promise<Review> {
+    return this.request('POST', '/v1/reviews', request)
+  }
+
+  // The findings only exist once the review finalizes (they're collected from
+  // the sandbox at teardown), so a running review returns findings: [] — hence
+  // the stream-then-re-GET two-step the command uses.
+  getReview(reviewId: string): Promise<Review> {
+    return this.request('GET', `/v1/reviews/${encodeURIComponent(reviewId)}`)
+  }
+
+  // Newest first, findings omitted (counters only). Includes webhook-triggered
+  // reviews, so this is a PR's whole review history.
+  async listReviews(query: ListReviewsQuery = {}): Promise<Review[]> {
+    const res = await this.request<ListReviewsResponse>(
+      'GET',
+      '/v1/reviews',
+      undefined,
+      query,
+    )
+    return res.reviews
   }
 
   // ----------------------------- agent configs ----------------------------

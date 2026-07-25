@@ -3,6 +3,7 @@ import { registerLogin } from './commands/login'
 import { registerHost } from './commands/host'
 import { registerMe } from './commands/me'
 import { registerSession } from './commands/session'
+import { registerReview } from './commands/review'
 import { registerConfig } from './commands/config'
 import { registerSandbox } from './commands/sandbox'
 import { registerAsset } from './commands/asset'
@@ -36,6 +37,7 @@ registerLogin(program)
 registerHost(program)
 registerMe(program)
 registerSession(program)
+registerReview(program)
 registerConfig(program)
 registerSandbox(program)
 registerAsset(program)
