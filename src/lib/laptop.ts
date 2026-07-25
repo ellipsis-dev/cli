@@ -1,4 +1,4 @@
-// Laptop transcript sync plumbing (`agent hooks …` + `agent session sync`) —
+// Laptop transcript sync plumbing (`agent hook …` + `agent session sync`) —
 // the client half of documents/eng/LOCAL_CLAUDE_CODE.md §7.1 in the monorepo.
 //
 // Claude Code fires `Stop` (once per turn) and `SessionEnd` hooks whose
@@ -272,9 +272,9 @@ export function spooledPendingCount(): number {
 // every failure path by design (async hooks' output is discarded and a broken
 // sync must never disturb a Claude Code session), so nothing is visible in the
 // session itself. Instead, every sync attempt appends one JSONL line to
-// hooks/sync.log.jsonl (read by `agent hooks logs`) and atomically rewrites
+// hooks/sync.log.jsonl (read by `agent hook log`) and atomically rewrites
 // hooks/stats.json — a plain JSON object anything can read without invoking
-// the CLI (read by `agent hooks stats`). All of it is best-effort: a logging
+// the CLI (read by `agent hook stats`). All of it is best-effort: a logging
 // failure stays silent so hook mode keeps its exit-0 guarantee.
 // ---------------------------------------------------------------------------
 

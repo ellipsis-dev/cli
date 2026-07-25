@@ -2,6 +2,7 @@ import { type Command } from 'commander'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import { ApiClient, ApiError } from '../lib/api'
+import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { formatTs, printJson, printTable, runAction } from '../lib/output'
 import type { AssetView, CreateAssetRequest, GetAssetResponse } from '../lib/types'
 
@@ -75,15 +76,19 @@ export function formatSize(bytes: number): string {
 }
 
 export function registerAsset(program: Command): void {
-  const asset = program
-    .command('asset')
-    .description('Store files on the Ellipsis platform and share them as org-gated links')
+  const asset = alsoKnownAs(
+    program
+      .command('asset')
+      .description('Store files on the platform and share them as org-gated links'),
+    'assets',
+  )
 
-  asset
-    .command('upload <path>')
-    .description(
-      'Upload a PNG and print its org-gated URL — paste it into a PR comment (POST /v1/assets)',
-    )
+  apiRoutes(
+    asset
+      .command('upload <path>')
+      .description('Upload a PNG and print its org-gated URL, ready to paste into a PR comment'),
+    'POST /v1/assets',
+  )
     .option('--json', 'output raw JSON')
     .action(async (path: string, opts: { json?: boolean }) => {
       await runAction(async () => {
@@ -96,12 +101,15 @@ export function registerAsset(program: Command): void {
       })
     })
 
-  asset
-    .command('list')
-    .alias('ls')
-    .description("List the customer's stored assets, newest first (GET /v1/assets)")
+  apiRoutes(
+    alsoKnownAs(
+      asset.command('list').description('List your stored assets, newest first'),
+      'ls',
+    ),
+    'GET /v1/assets',
+  )
     .option('--session <id>', 'only assets uploaded by this agent session')
-    .option('--limit <n>', 'max results (server cap: 250)', parsePositiveInt)
+    .option('-l, --limit <n>', 'max results (server cap: 250)', parsePositiveInt)
     .option('--json', 'output raw JSON')
     .action(async (opts: { session?: string; limit?: number; json?: boolean }) => {
       await runAction(async () => {
@@ -130,11 +138,13 @@ export function registerAsset(program: Command): void {
       })
     })
 
-  asset
-    .command('get <asset-id>')
-    .description(
-      'Show one asset; -o downloads the bytes to a file (GET /v1/assets/{id} + presigned S3 GET)',
-    )
+  apiRoutes(
+    asset
+      .command('get <asset-id>')
+      .description("Print one asset's metadata, or download its bytes with -o"),
+    'GET /v1/assets/{id}',
+    'presigned S3 GET',
+  )
     .option('-o, --output <path>', 'write the file contents to this path')
     .option('--json', 'output raw JSON (includes the short-lived download_url)')
     .action(async (assetId: string, opts: { output?: string; json?: boolean }) => {
@@ -153,10 +163,15 @@ export function registerAsset(program: Command): void {
       })
     })
 
-  asset
-    .command('delete <asset-id>')
-    .alias('rm')
-    .description('Delete an asset — it disappears from list/get and its link stops resolving (DELETE /v1/assets/{id})')
+  apiRoutes(
+    alsoKnownAs(
+      asset
+        .command('delete <asset-id>')
+        .description('Delete an asset, so its link stops resolving'),
+      'rm',
+    ),
+    'DELETE /v1/assets/{id}',
+  )
     .option('--json', 'output raw JSON')
     .action(async (assetId: string, opts: { json?: boolean }) => {
       await runAction(async () => {

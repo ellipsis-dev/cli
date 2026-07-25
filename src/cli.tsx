@@ -6,10 +6,10 @@ import { registerSession } from './commands/session'
 import { registerConfig } from './commands/config'
 import { registerSandbox } from './commands/sandbox'
 import { registerAsset } from './commands/asset'
-import { registerHooks } from './commands/hooks'
+import { registerHook } from './commands/hooks'
 import { registerTemplate } from './commands/template'
 import { registerModel } from './commands/model'
-import { registerIntegrations } from './commands/integrations'
+import { registerIntegration } from './commands/integrations'
 import { registerGithub } from './commands/github'
 import { registerSlack } from './commands/slack'
 import { registerLinear } from './commands/linear'
@@ -18,6 +18,7 @@ import { registerUsage } from './commands/usage'
 import { registerAnalytics } from './commands/analytics'
 import { registerPing } from './commands/ping'
 import { VERSION } from './lib/constants'
+import { configureCliHelp } from './lib/help'
 import { canHostSessionsUi, defaultStartRequest, runSessionsUi } from './ui/launch'
 
 const program = new Command()
@@ -26,9 +27,10 @@ program
   .name('agent')
   .description('Ellipsis agent CLI: drive the Ellipsis cloud from your terminal')
   .version(VERSION)
-  // Set before the register* calls so every subcommand inherits it and lists
-  // its own subcommands alphabetically too.
-  .configureHelp({ sortSubcommands: true })
+
+// Set before the register* calls so every subcommand inherits the same help
+// rendering (sorted, alias-free, grouped at the top level).
+configureCliHelp(program)
 
 registerLogin(program)
 registerHost(program)
@@ -37,10 +39,10 @@ registerSession(program)
 registerConfig(program)
 registerSandbox(program)
 registerAsset(program)
-registerHooks(program)
+registerHook(program)
 registerTemplate(program)
 registerModel(program)
-registerIntegrations(program)
+registerIntegration(program)
 registerGithub(program)
 registerSlack(program)
 registerLinear(program)

@@ -1,15 +1,25 @@
 import { type Command } from 'commander'
 import { ApiClient } from '../lib/api'
+import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { printJson, printTable, runAction } from '../lib/output'
 
+// Read-only browsers of a connected integration, so each resource is one bare
+// plural command (`github repos`) rather than a `<noun> list` pair: there is no
+// get/create/delete to disambiguate it from.
 export function registerGithub(program: Command): void {
   const github = program
     .command('github')
     .description('Browse the connected GitHub installation')
 
-  github
-    .command('repos')
-    .description('List repositories connected to the installation (GET /v1/github/repos)')
+  apiRoutes(
+    alsoKnownAs(
+      github
+        .command('repos')
+        .description('List the repositories the GitHub installation can reach'),
+      'repo',
+    ),
+    'GET /v1/github/repos',
+  )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
@@ -34,9 +44,17 @@ export function registerGithub(program: Command): void {
       })
     })
 
-  github
-    .command('members')
-    .description('List the GitHub org roster with linked Slack identities (GET /v1/github/members)')
+  apiRoutes(
+    alsoKnownAs(
+      github
+        .command('members')
+        .description(
+          'List the org roster: the logins --author accepts, plus linked Slack identities',
+        ),
+      'member',
+    ),
+    'GET /v1/github/members',
+  )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {

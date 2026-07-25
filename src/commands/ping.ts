@@ -1,10 +1,14 @@
 import type { Command } from 'commander'
 import { ApiClient, ApiError } from '../lib/api'
+import { apiRoutes } from '../lib/help'
 
 export function registerPing(program: Command): void {
-  program
-    .command('ping')
-    .description('Check authenticated connectivity to the Ellipsis /v1 API')
+  apiRoutes(
+    program
+      .command('ping')
+      .description('Check that the API is reachable and the credential is valid'),
+    'GET /v1/me',
+  )
     .action(async () => {
       // There's no unauthenticated health route on the public API, so we probe
       // the lightest authenticated endpoint (/v1/me): a 200 proves the API is
@@ -12,7 +16,7 @@ export function registerPing(program: Command): void {
       const api = new ApiClient()
       try {
         const me = await api.whoami()
-        console.log(`ok — ${me.customer_login} (${me.customer_id})`)
+        console.log(`ok: ${me.customer_login} (${me.customer_id})`)
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
           // Reachable, just not authenticated — point the user at login.

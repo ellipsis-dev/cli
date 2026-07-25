@@ -1,6 +1,7 @@
 import type { Command } from 'commander'
 import { ApiClient } from '../lib/api'
 import { requireToken } from '../lib/config'
+import { apiRoutes } from '../lib/help'
 import { printJson, runAction } from '../lib/output'
 import type { WhoAmI } from '../lib/types'
 
@@ -15,9 +16,10 @@ export function renderMe(me: WhoAmI): void {
 }
 
 export function registerMe(program: Command): void {
-  program
-    .command('me')
-    .description('Show the identity behind the current credential (GET /v1/me)')
+  apiRoutes(
+    program.command('me').description('Show the identity behind the current credential'),
+    'GET /v1/me',
+  )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {

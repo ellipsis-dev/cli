@@ -82,24 +82,22 @@ sandbox image actually builds, then deploy. The steps below are that flow.
    agent sandbox variable set --from-file .env
    ```
 
-5. Draft a config and prove its environment before anything deploys.
-   `agent sandbox build` runs the config's environment definition (base image
-   plus your Dockerfile layers, repository checkout, dependency setup, and
-   with `--hooks` the lifecycle hooks) with no agent and no token spend,
-   streaming the build output. A broken toolchain install fails here in
-   minutes with its full log, not inside your first real session, and a green
-   build is cached so that first session starts warm.
+5. Draft a config and run it from the local file before anything deploys.
+   Starting from `--config-file` provisions the sandbox from that config's
+   environment definition (base image plus your Dockerfile layers, repository
+   checkout, dependency setup, lifecycle hooks) and streams the startup output,
+   so a broken toolchain install surfaces with its full log on this run rather
+   than after the config is merged. A successful build is cached, so the next
+   session starts warm.
 
    ```sh
    agent config init agents/my_agent.yaml
-   agent sandbox build start --config-file agents/my_agent.yaml --watch
-   agent sandbox build start --config-file agents/my_agent.yaml --hooks --watch
+   agent session start --config-file agents/my_agent.yaml --watch
    ```
 
-6. Test a session from the local file, then deploy it as a pull request:
+6. Deploy it as a pull request:
 
    ```sh
-   agent session start --config-file agents/my_agent.yaml --watch
    agent config create --repo api --file agents/my_agent.yaml
    ```
 
@@ -121,8 +119,8 @@ The same flow with transcripts: https://www.ellipsis.dev/docs/guides/cli-setup
 - **Sandbox**: each session gets an isolated cloud sandbox with Python, Node,
   git, the `gh` CLI, and the repositories pre-cloned. Dependency installs are
   cached into the image, so repeat sessions start in seconds. Compute,
-  lifecycle hooks, and extra image layers are per-agent YAML, and
-  `agent sandbox build` tests the image on its own, before any agent runs.
+  lifecycle hooks, and extra image layers are per-agent YAML, and a
+  `--config-file` start exercises them before the config is merged.
 - **Secrets and permissions**: credentials are stored once in a write-only
   variable store and injected by name; nothing in a sandbox can read values
   back. Each agent's GitHub token narrows to the permissions and repositories
@@ -173,7 +171,7 @@ agent login                       # device-code auth tied to GitHub identity
 Start and follow work:
 
 ```sh
-agent session start --config <id> --watch    # start a session and stream it
+agent session start --config <config-id> --watch   # start a session and stream it
 agent session start --template welcome-to-ellipsis
 agent session list --limit 20
 agent session get <session-id> --watch       # follow until it finishes
@@ -188,16 +186,16 @@ Search and audit what agents have done:
 
 ```sh
 agent session search "webhook retries"       # transcripts, recaps, PRs, similarity
-agent session records <session-id>           # stored feed, one line per record
+agent session record <session-id>            # stored feed, one line per record
 agent session log <session-id>               # download the complete session log
-agent analytics reviewers --account-type bot # human vs bot PR analytics
+agent analytics reviewer --account-type bot  # human vs bot PR analytics
 ```
 
 Hand local work to the cloud, and sync local Claude Code sessions into the
 same searchable history:
 
 ```sh
-agent hooks install                          # transcript sync via CC hooks
+agent hook install                           # transcript sync via CC hooks
 agent session handoff "finish the validator; tests fail on shift boundaries"
 ```
 
@@ -206,13 +204,13 @@ Author and inspect agents:
 ```sh
 agent config init                            # scaffold agents/my_agent.yaml
 agent config create --template code-reviewer --repo api   # deploy via PR
-agent config default set <configId>          # the agent a bare start runs (--repo for one repo)
+agent config default set <config-id>         # the config a bare start runs (--repo for one repo)
 agent template list                          # browse maintained templates
 agent model list                             # the model ids valid under `claude:`
-agent integrations                           # connected GitHub/Slack/Linear/Sentry
+agent integration                            # connected GitHub/Slack/Linear/Sentry
 agent sandbox variable set LINEAR_API_KEY=...
-agent sandbox build start --config-file agents/my_agent.yaml --watch
-                                             # prove the image before deploying
+agent session start --config-file agents/my_agent.yaml --watch
+                                             # prove a config before deploying
 ```
 
 ## Defining an agent

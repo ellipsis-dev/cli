@@ -1,5 +1,6 @@
 import { type Command } from 'commander'
 import { ApiClient, requireConnected } from '../lib/api'
+import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { printJson, printTable, runAction } from '../lib/output'
 
 export function registerLinear(program: Command): void {
@@ -7,9 +8,15 @@ export function registerLinear(program: Command): void {
     .command('linear')
     .description('Browse the connected Linear organization')
 
-  linear
-    .command('teams')
-    .description('List teams in the connected Linear organization (GET /v1/linear/teams)')
+  apiRoutes(
+    alsoKnownAs(
+      linear
+        .command('teams')
+        .description('List the Linear teams, marking which have Ellipsis enabled'),
+      'team',
+    ),
+    'GET /v1/linear/teams',
+  )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {

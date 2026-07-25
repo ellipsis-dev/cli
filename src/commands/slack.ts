@@ -1,5 +1,6 @@
 import { type Command } from 'commander'
 import { ApiClient, requireConnected } from '../lib/api'
+import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { printJson, printTable, runAction } from '../lib/output'
 
 export function registerSlack(program: Command): void {
@@ -7,9 +8,13 @@ export function registerSlack(program: Command): void {
     .command('slack')
     .description('Browse the connected Slack workspace')
 
-  slack
-    .command('channels')
-    .description('List channels in the connected Slack workspace (GET /v1/slack/channels)')
+  apiRoutes(
+    alsoKnownAs(
+      slack.command('channels').description('List the channels in the Slack workspace'),
+      'channel',
+    ),
+    'GET /v1/slack/channels',
+  )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
@@ -34,11 +39,15 @@ export function registerSlack(program: Command): void {
       })
     })
 
-  slack
-    .command('members')
-    .description(
-      'List members of the Slack workspace with linked GitHub identities (GET /v1/slack/members)',
-    )
+  apiRoutes(
+    alsoKnownAs(
+      slack
+        .command('members')
+        .description('List the workspace members, with linked GitHub identities'),
+      'member',
+    ),
+    'GET /v1/slack/members',
+  )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {

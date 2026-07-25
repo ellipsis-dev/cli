@@ -104,7 +104,7 @@ run me
 run budget
 run usage
 run config list
-run run list --limit 5
+run session list --limit 5
 
 echo "== Logout should clear the token (next call 401s) =="
 run logout
