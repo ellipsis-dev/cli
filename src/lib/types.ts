@@ -24,8 +24,18 @@ export type {
   AgentSessionSource,
   AgentSessionStatus,
   AgentSessionWire,
+  // The reviews surface. A review's `id` IS a session id, so everything above
+  // applies to it unchanged — which is why there is no review-specific
+  // status, stream, or cost type.
+  CreateReviewRequest,
+  Finding,
+  ListReviewsResponse,
   ListSessionRecordsResponse,
   ListSessionTurnsResponse,
+  ResolvedReviewScope,
+  Review,
+  ReviewCounters,
+  ReviewScope,
   SendSessionMessageRequest,
   SessionPrompting,
   SessionState,
@@ -850,6 +860,21 @@ export interface GetAssetResponse {
   // Short-lived (60s) presigned S3 GET for the actual bytes — fetch it
   // immediately; the JSON API never carries the file itself.
   download_url: string
+}
+
+// ------------------------------- reviews --------------------------------
+// The Review/CreateReviewRequest shapes come from the SDK (re-exported at the
+// top of this file); only the list query is hand-rolled, since query params
+// aren't part of the generated response types.
+
+export interface ListReviewsQuery {
+  owner?: string
+  repo?: string
+  pull_request_number?: number
+  status?: string
+  limit?: number
+  // The client's query builder takes a plain record.
+  [key: string]: unknown
 }
 
 // ------------------------------ cli auth --------------------------------
