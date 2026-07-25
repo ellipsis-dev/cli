@@ -56,18 +56,18 @@ agent session start --config-file f.json   # ...or from an inline config
 agent session start --template welcome-to-ellipsis   # ...or from a maintained template
 agent session start --config <id> --config-override "budget:\n  session: 5"  # override config fields for this session
 agent session start --config <id> --watch  # start and immediately stream it
-agent session list --limit 20         # list recent sessions (filter by --source, --author, --days, …)
+agent session list --limit 20         # list recent sessions (filter by --source, --author, --since, …)
 agent session search "webhook retries"   # search session history: transcripts, recaps, created PRs, similarity
 agent session search "acme/api#512" --author tony --since "3 days ago"   # PR-shaped queries and facets
 agent session get <session-id>        # inspect one session (prints a dashboard link)
 agent session get <session-id> --watch  # follow a session until it finishes
-agent session records <session-id>    # read a session's stored transcript, one line per record
+agent session record <session-id>     # read a session's stored transcript, one line per record
 agent session connect <session-id>    # connect to a session: transcript + live output + send messages
 agent session connect                 # inside an Ellipsis sandbox: connects to the running session
 agent session stop <session-id>       # stop an in-flight session
 
 agent config list                 # list saved agent configs
-agent config get <config-id>      # show one config as YAML (-o json for JSON)
+agent config get <config-id>      # show one config as YAML (--json for JSON)
 agent config init [path]          # scaffold a starter config (default: agents/my_agent.yaml)
 agent config create --repo api --file agents/foo.yaml   # create an agent via a pull request (or --template <slug>)
 agent config default              # the effective default agent for the repo you are standing in
@@ -76,7 +76,7 @@ agent config default clear        # clear the account default (--repo [owner/nam
 
 agent model list                  # list selectable agent models (the account default is marked)
 
-agent integrations                # every connected integration in one table
+agent integration                 # every connected integration in one table
 agent github repos                # repositories connected to the GitHub installation
 agent github members              # org roster (the logins/ids --author accepts), with linked Slack identities
 agent slack channels              # channels in the connected Slack workspace
@@ -91,16 +91,22 @@ agent asset delete <asset-id>     # delete an asset (it disappears from list/get
 
 agent sandbox variable list       # list sandbox env variable names (values are write-only)
 agent sandbox variable set A=1 B=2     # create/update variables (or --from-file .env/.json)
-agent sandbox variable rm K       # delete a variable
+agent sandbox variable delete K   # delete a variable
 
 agent budget                      # current budget summary
 agent usage                       # usage dashboard for the period
 
-agent analytics reviewers --account-type bot   # which apps review the most PRs
-agent analytics prs --days 30     # PR volume/trend with human vs bot splits
-agent analytics reviews --repo my-service      # review totals + top reviewers
+agent analytics reviewer --account-type bot   # which apps review the most PRs
+agent analytics pr --days 30      # PR volume/trend with human vs bot splits
+agent analytics review --repo my-service      # review totals + top reviewers
 agent ping                        # check authenticated /v1 connectivity
 ```
+
+Every command shown is singular. The plural spelling of each (`agent assets`,
+`agent sessions`, `agent analytics prs`) is a hidden alias that works but is
+left out of `--help`. See
+[`skills/cli-conventions`](skills/cli-conventions/SKILL.md) for the full
+argument, flag, and help-text conventions.
 
 Most commands accept `--json` to print the raw API response. The CLI talks to
 the public `/v1` REST API. Point it at a different instance durably with

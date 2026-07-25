@@ -1,19 +1,25 @@
 import { type Command } from 'commander'
 import { ApiClient } from '../lib/api'
+import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { printJson, printTable, runAction } from '../lib/output'
 
 export function registerModel(program: Command): void {
-  const model = program
-    .command('model')
-    // Resource sub-groups register their plural as an alias so the two
-    // spellings can never diverge into different surfaces.
-    .alias('models')
-    .description('Browse the models your agent can run on')
+  const model = alsoKnownAs(
+    program.command('model').description('Browse the models an agent can run on'),
+    'models',
+  )
 
-  model
-    .command('list')
-    .alias('ls')
-    .description('List selectable agent models (GET /v1/models)')
+  apiRoutes(
+    alsoKnownAs(
+      model
+        .command('list')
+        .description(
+          'List the models an agent config can select (the account default is marked)',
+        ),
+      'ls',
+    ),
+    'GET /v1/models',
+  )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {

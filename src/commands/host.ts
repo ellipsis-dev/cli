@@ -10,6 +10,7 @@ import {
   updateHost,
   useHost,
 } from '../lib/config'
+import { alsoKnownAs } from '../lib/help'
 import { printTable } from '../lib/output'
 
 // `agent host …` manages the Ellipsis instances the CLI can target — prod,
@@ -19,14 +20,17 @@ import { printTable } from '../lib/output'
 // resolves against the active host (unless ELLIPSIS_API_BASE_URL /
 // ELLIPSIS_API_TOKEN override it, e.g. inside a sandbox).
 export function registerHost(program: Command): void {
-  const host = program
-    .command('host')
-    .description('Manage the Ellipsis instances the CLI targets (prod / beta / self-hosted)')
+  const host = alsoKnownAs(
+    program
+      .command('host')
+      .description('Manage which Ellipsis instance the CLI targets (prod, beta, self-hosted)'),
+    'hosts',
+  )
 
-  host
-    .command('list', { isDefault: false })
-    .alias('ls')
-    .description('List configured hosts (the active one is marked *)')
+  alsoKnownAs(
+    host.command('list').description('List the configured hosts (the active one is marked *)'),
+    'ls',
+  )
     .action(() => {
       const hosts = listHosts()
       if (hosts.length === 0) {
@@ -47,7 +51,7 @@ export function registerHost(program: Command): void {
 
   host
     .command('add <name> <api-url>')
-    .description('Add a host and switch to it (then `agent login` to authenticate)')
+    .description('Add a host and switch to it, then run `agent login` to authenticate')
     .option(
       '--app-base <url>',
       'dashboard URL for building links / login (default: derived from the API URL)',
@@ -86,23 +90,23 @@ export function registerHost(program: Command): void {
       },
     )
 
-  host
-    .command('delete <name>')
-    .alias('rm')
-    .description('Remove a host and its stored token')
+  alsoKnownAs(
+    host.command('delete <name>').description('Remove a host and its stored token'),
+    'rm',
+  )
     .action((name: string) => {
       const wasActive = activeHostName() === name
       deleteHost(name)
       console.log(`✓ removed host "${name}"`)
       if (wasActive) {
-        console.log('That was the active host — set a new one with `agent host use <name>`.')
+        console.log('That was the active host. Set a new one with `agent host use <name>`.')
       }
     })
 
-  host
-    .command('current')
-    .alias('show')
-    .description('Show the active host and how it resolves')
+  alsoKnownAs(
+    host.command('current').description('Show the active host and how it resolves'),
+    'show',
+  )
     .action(() => {
       const name = activeHostName()
       const envApi = process.env.ELLIPSIS_API_BASE_URL || process.env.ELLIPSIS_API_BASE

@@ -1,11 +1,13 @@
 import type { Command } from 'commander'
 import { ApiClient } from '../lib/api'
+import { apiRoutes } from '../lib/help'
 import { printJson, runAction, usd, usdFromMillicents } from '../lib/output'
 
 export function registerUsage(program: Command): void {
-  program
-    .command('budget')
-    .description('Show the current budget summary (GET /v1/budget)')
+  apiRoutes(
+    program.command('budget').description("Show this period's spend against the account budget"),
+    'GET /v1/budget',
+  )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
@@ -22,9 +24,12 @@ export function registerUsage(program: Command): void {
       })
     })
 
-  program
-    .command('usage')
-    .description('Show the usage dashboard for the current period (GET /v1/usage)')
+  apiRoutes(
+    program
+      .command('usage')
+      .description("Show this period's tokens and cost, broken down by model"),
+    'GET /v1/usage',
+  )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {

@@ -23,6 +23,7 @@ import {
   toInt,
   toNumber,
 } from '../lib/args'
+import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { sessionUrl } from '../lib/urls'
 import {
   sessionStatusWord,
@@ -80,22 +81,27 @@ const TERMINAL_STATUSES: ReadonlySet<AgentSessionStatus> = new Set<AgentSessionS
 ])
 
 export function registerSession(program: Command): void {
-  const session = program.command('session').description('Start and inspect agent sessions')
+  const session = alsoKnownAs(
+    program.command('session').description('Start, inspect, and connect to agent sessions'),
+    'sessions',
+  )
 
   // `session connect` lives in connect.ts (the interactive terminal window
   // into a cloud session); registered here so it sits with its siblings.
   registerConnect(session)
 
-  session
-    .command('start')
-    .description('Start a new agent session (POST /v1/sessions)')
+  apiRoutes(
+    session.command('start').description('Start a new agent session in the cloud'),
+    'POST /v1/sessions',
+    'WS /v1/sessions/{id}/stream with --watch or --connect',
+  )
     .argument(
       '[prompt]',
       'what the agent should do this session (positional shorthand for --prompt)',
     )
     .option(
-      '-c, --config <id>',
-      'start from a saved agent config id (default: the platform default config)',
+      '-c, --config <config-id>',
+      'start from a saved agent config (default: the resolved default config)',
     )
     .option(
       '-f, --config-file <path>',
@@ -106,18 +112,21 @@ export function registerSession(program: Command): void {
       'start from a maintained session template (e.g. welcome-to-ellipsis)',
     )
     .option(
-      '-o, --config-override <yaml>',
+      '--config-override <yaml>',
       'partial agent config (YAML/JSON) merged onto the chosen config for this session, e.g. "budget:\\n  session: 5"',
     )
     .option(
       '--config-override-file <path>',
       'read the partial config override from a file (.yaml/.yml or .json) instead of inline',
     )
-    .option('--model <id>', 'set claude.model for this session (e.g. claude-opus-4-8)')
-    .option('--system <text>', 'set claude.system (the agent system prompt) for this session')
     .option(
-      '--repo <owner/name>',
-      'check out a repository in the sandbox (repeatable; "name" defaults owner to your account)',
+      '--model <model-id>',
+      'override claude.model for this session (see `agent model list`)',
+    )
+    .option('--system <text>', 'override claude.system, the agent system prompt')
+    .option(
+      '-r, --repo <owner/name>',
+      'check out a repository in the sandbox (repeatable; a bare name means your account)',
       collect,
       [] as string[],
     )
@@ -128,7 +137,7 @@ export function registerSession(program: Command): void {
       '--rebuild',
       'skip the sandbox image cache: fresh full build (image layers, clones, image.setup), whose snapshot refreshes the cache',
     )
-    .option('--budget <usd>', 'spend limit in USD for this session (budget.session)', toNumber)
+    .option('--budget <usd>', 'spend limit in USD for this session', toNumber)
     .option(
       '-p, --prompt <text>',
       "the session prompt, appended to the agent's initial user query (or pass it positionally)",
@@ -139,18 +148,18 @@ export function registerSession(program: Command): void {
       collectKeyValue,
       {} as Record<string, string>,
     )
-    .option('-d, --detach', 'start and return immediately (fire-and-forget; the default)')
+    .option('-d, --detach', 'start and return immediately, the default')
     .option(
       '-w, --watch',
       'block until the session reaches a terminal status, streaming live output',
     )
     .option(
       '--quiet',
-      'with --watch, wait without streaming — print only the final result and exit with a matching code',
+      'with --watch, wait without streaming: print only the final result and exit with a matching code',
     )
     .option(
       '--connect',
-      'after starting, wait for the sandbox and connect: view the conversation, follow it live, and send messages',
+      'after starting, open the conversation: follow it live and send messages',
     )
     .option('--json', 'output raw JSON')
     .action(
@@ -304,18 +313,32 @@ export function registerSession(program: Command): void {
       },
     )
 
-  session
-    .command('list')
-    .description('List recent agent sessions (GET /v1/sessions)')
-    .option('-c, --config <id>', 'filter by config id')
-    .option('-s, --source <source>', 'filter by source (repeatable)', collect, [] as string[])
+  apiRoutes(
+    alsoKnownAs(
+      session.command('list').description('List recent sessions, newest first'),
+      'ls',
+    ).addHelpText(
+      'after',
+      '\nSources: laptop, react, manual, api, cli, mention, cron. ' +
+        '--since/--until accept ISO 8601 or "today", "yesterday", "N days ago".',
+    ),
+    'GET /v1/sessions',
+    'GET /v1/github/members to resolve --author',
+  )
+    .option('-c, --config <config-id>', 'only sessions run by this saved agent config')
+    .option(
+      '-s, --source <source>',
+      'only sessions from this source (repeatable)',
+      collectSource,
+      [] as string[],
+    )
     .option(
       '-a, --author <login>',
-      'only sessions attributed to this developer (a GitHub login, see `agent github members`)',
+      'only sessions attributed to this GitHub login (see `agent github members`)',
     )
-    .option('-d, --days <n>', 'look back N days', toInt)
-    .option('--start <iso>', 'start of the time window (ISO 8601)')
-    .option('--end <iso>', 'end of the time window (ISO 8601)')
+    .option('--days <n>', 'look back N days', toInt)
+    .option('--since <when>', 'only sessions at or after this time', (v: string) => parseWhen(v))
+    .option('--until <when>', 'only sessions at or before this time', (v: string) => parseWhen(v))
     .option('-l, --limit <n>', 'max sessions to return', toInt, 50)
     .option('--json', 'output raw JSON')
     .action(
@@ -324,8 +347,8 @@ export function registerSession(program: Command): void {
         source: string[]
         author?: string
         days?: number
-        start?: string
-        end?: string
+        since?: string
+        until?: string
         limit: number
         json?: boolean
       }) => {
@@ -336,8 +359,8 @@ export function registerSession(program: Command): void {
             source: opts.source.length ? (opts.source as AgentSessionSource[]) : undefined,
             author_id: opts.author ? await resolveAuthorId(api, opts.author) : undefined,
             days: opts.days,
-            start: opts.start,
-            end: opts.end,
+            start: opts.since,
+            end: opts.until,
             limit: opts.limit,
           })
           if (opts.json) {
@@ -353,7 +376,7 @@ export function registerSession(program: Command): void {
             sessions.map((s) => [
               s.id,
               s.status,
-              s.source ?? '—',
+              s.source ?? '-',
               formatTs(s.created_at),
               usdFromMillicents(
                 s.cost_tokens + s.cost_sandbox_cpu + s.cost_sandbox_memory + s.cost_fee,
@@ -364,28 +387,50 @@ export function registerSession(program: Command): void {
       },
     )
 
-  session
-    .command('search <query>')
-    .description(
-      'Search sessions by step text, recap text, created PR, or similarity (GET /v1/sessions/search)',
-    )
-    .addHelpText(
-      'after',
-      '\nA PR-shaped query ("#512", "acme/api#512", or a pull request URL) also finds the ' +
-        'session that created that exact pull request.\n' +
-        'Sources: laptop, react, manual, api, cli, mention, cron. ' +
-        '--since/--until accept ISO 8601 or "today", "yesterday", "N days ago".',
-    )
+  apiRoutes(
+    session
+      .command('search <query>')
+      .description('Search session history by transcript text, recap, created PR, or similarity')
+      .addHelpText(
+        'after',
+        '\nA PR-shaped query ("#512", "acme/api#512", or a pull request URL) also finds the ' +
+          'session that created that exact pull request.\n' +
+          'Sources: laptop, react, manual, api, cli, mention, cron. ' +
+          '--since/--until accept ISO 8601 or "today", "yesterday", "N days ago".',
+      ),
+    'GET /v1/sessions/search',
+    'GET /v1/github/members to resolve --author',
+  )
     .option(
       '-a, --author <login>',
-      'only sessions attributed to this developer (a GitHub login, see `agent github members`)',
+      'only sessions attributed to this GitHub login (see `agent github members`)',
     )
-    .option('-c, --config <id>', 'only sessions run by this saved config (repeatable)', collect, [] as string[])
-    .option('-s, --source <source>', 'filter by source (repeatable)', collectSource, [] as string[])
-    .option('-r, --repo <name>', 'only sessions on this repository ("owner/name" or a bare name)')
-    .option('--status <status>', 'filter by session status (repeatable)', collectStatus, [] as string[])
+    .option(
+      '-c, --config <config-id>',
+      'only sessions run by this saved agent config (repeatable)',
+      collect,
+      [] as string[],
+    )
+    .option(
+      '-s, --source <source>',
+      'only sessions from this source (repeatable)',
+      collectSource,
+      [] as string[],
+    )
+    .option('-r, --repo <owner/name>', 'only sessions on this repository (a bare name works too)')
+    .option(
+      '--status <status>',
+      'only sessions in this status (repeatable)',
+      collectStatus,
+      [] as string[],
+    )
     .option('--scope <scope>', 'what to search: records, recaps, or both', parseScope, 'both')
-    .option('--session <id>', 'restrict the search to this session (repeatable)', collect, [] as string[])
+    .option(
+      '--session <session-id>',
+      'restrict the search to this session (repeatable)',
+      collect,
+      [] as string[],
+    )
     .option('--since <when>', 'only sessions at or after this time', (v: string) => parseWhen(v))
     .option('--until <when>', 'only sessions at or before this time', (v: string) => parseWhen(v))
     .option('-l, --limit <n>', 'max result sessions (up to 100)', toInt, 20)
@@ -437,15 +482,21 @@ export function registerSession(program: Command): void {
             }
           }
           console.log(
-            '\nInspect one: agent session get <id>; full log: agent session log <id>',
+            '\nInspect one: agent session get <session-id>. Full log: agent session log <session-id>',
           )
         })
       },
     )
 
-  session
-    .command('records <sessionId>')
-    .description("Read a session's records (GET /v1/sessions/{id}/records)")
+  apiRoutes(
+    alsoKnownAs(
+      session
+        .command('record <session-id>')
+        .description("Print a session's stored transcript, one line per record"),
+      'records',
+    ),
+    'GET /v1/sessions/{id}/records',
+  )
     .option('--json', 'output raw JSON (full record payloads)')
     .action(async (sessionId: string, opts: { json?: boolean }) => {
       await runAction(async () => {
@@ -465,12 +516,18 @@ export function registerSession(program: Command): void {
       })
     })
 
-  session
-    .command('log <sessionId>')
-    .description("Download a session's complete log (GET /v1/sessions/{id}/log)")
+  apiRoutes(
+    alsoKnownAs(
+      session
+        .command('log <session-id>')
+        .description("Download a session's complete archived log to stdout or a file"),
+      'logs',
+    ),
+    'GET /v1/sessions/{id}/log',
+  )
     .option('-o, --output <path>', 'write to a file instead of stdout')
     .option('--gzip', 'keep the concatenated .jsonl.gz bytes as-is (skip gunzip)')
-    .option('--json', 'print the log manifest (incl. segment download URLs), download nothing')
+    .option('--json', 'output raw JSON (the manifest with segment URLs); downloads nothing')
     .action(
       async (
         sessionId: string,
@@ -508,22 +565,26 @@ export function registerSession(program: Command): void {
           if (!manifest.caught_up) {
             console.error(
               `note: the archive trails the live feed (archived through ` +
-                `${manifest.archived_through_feed_seq} of ${manifest.latest_feed_seq}); ` +
-                're-run shortly for the complete log',
+                `${manifest.archived_through_feed_seq} of ${manifest.latest_feed_seq}). ` +
+                'Re-run shortly for the complete log.',
             )
           }
         })
       },
     )
 
-  session
-    .command('get <sessionId>')
-    .description('Get a single agent session (GET /v1/sessions/{id})')
+  apiRoutes(
+    session
+      .command('get <session-id>')
+      .description("Show one session's status, cost, and dashboard link"),
+    'GET /v1/sessions/{id}',
+    'WS /v1/sessions/{id}/stream with --watch',
+  )
     .option(
       '-w, --watch',
       'block until the session reaches a terminal status, streaming live output',
     )
-    .option('--quiet', 'with --watch, wait without streaming — print only the final result')
+    .option('--quiet', 'with --watch, wait without streaming: print only the final result')
     .option('--json', 'output raw JSON')
     .action(
       async (sessionId: string, opts: { watch?: boolean; quiet?: boolean; json?: boolean }) => {
@@ -552,15 +613,19 @@ export function registerSession(program: Command): void {
       })
     })
 
-  session
-    .command('replay <sessionId>')
-    .description("Re-run an existing session's trigger input (POST /v1/sessions/{id}/replay)")
+  apiRoutes(
+    session
+      .command('replay <session-id>')
+      .description("Re-run an existing session's trigger input as a fresh session"),
+    'POST /v1/sessions/{id}/replay',
+    'WS /v1/sessions/{id}/stream with --watch',
+  )
     .option(
-      '-c, --config <id>',
-      "run against a different saved config instead of the original session's snapshot",
+      '-c, --config <config-id>',
+      "run against a different saved agent config instead of the original session's snapshot",
     )
     .option(
-      '-o, --config-override <yaml>',
+      '--config-override <yaml>',
       'partial agent config (YAML/JSON) merged onto the config for this replay, e.g. "claude:\\n  model: claude-opus-4-8"',
     )
     .option(
@@ -575,7 +640,7 @@ export function registerSession(program: Command): void {
       '-w, --watch',
       'block until the session reaches a terminal status, streaming live output',
     )
-    .option('--quiet', 'with --watch, wait without streaming — print only the final result')
+    .option('--quiet', 'with --watch, wait without streaming: print only the final result')
     .option('--json', 'output raw JSON')
     .action(
       async (
@@ -632,11 +697,14 @@ export function registerSession(program: Command): void {
   // refs/ellipsis/handoff/<short>, and start a fresh cloud session on the
   // built-in handoff config with that prompt as its query — never a
   // literal `claude --resume` of the local session.
-  session
-    .command('handoff <prompt>')
-    .description('Hand the current repo + a synced session off to a cloud agent')
+  apiRoutes(
+    session
+      .command('handoff <prompt>')
+      .description('Hand this repo and a synced local session off to a cloud agent'),
+    'POST /v1/sessions',
+  )
     .requiredOption(
-      '-p, --parent <sessionId>',
+      '-p, --parent <session-id>',
       'the synced laptop session to chain from (see `agent session list --source laptop`)',
     )
     .option('--cwd <path>', 'repository to hand off (default: current directory)')
@@ -658,7 +726,7 @@ export function registerSession(program: Command): void {
             console.log(
               dirty
                 ? `✓ pushed working-tree snapshot ${sha.slice(0, 12)} to ${ref}`
-                : `✓ working tree clean — handing off HEAD ${sha.slice(0, 12)} via ${ref}`,
+                : `✓ working tree clean, handing off HEAD ${sha.slice(0, 12)} via ${ref}`,
             )
           }
           const api = new ApiClient()
@@ -678,18 +746,21 @@ export function registerSession(program: Command): void {
     )
 
   // The laptop-transcript sync (design: LOCAL_CLAUDE_CODE.md §7.1). Normally
-  // invoked by the Claude Code Stop/SessionEnd hooks `agent hooks install`
+  // invoked by the Claude Code Stop/SessionEnd hooks `agent hook install`
   // writes, with the hook's JSON context on stdin; the flags exist for manual
   // runs and testing. In hook mode every failure path is a QUIET no-op (exit
   // 0): consent gaps (unenrolled repo), a logged-out CLI, and network errors
   // must never surface into someone's Claude Code session. Network failures
   // spool to disk and flush on the next successful sync.
-  session
-    .command('sync')
-    .description('Sync a Claude Code transcript to Ellipsis (invoked by CC hooks)')
+  apiRoutes(
+    session
+      .command('sync')
+      .description('Sync a local Claude Code transcript up, as the installed hooks do'),
+    'POST /v1/sessions/sync',
+  )
     .option('--transcript <path>', 'transcript JSONL path (default: from hook stdin)')
     .option('--session-id <id>', 'Claude Code session id (default: from hook stdin)')
-    .option('--reason <reason>', 'stop | session_end (default: from hook stdin)')
+    .option('--reason <reason>', 'stop or session_end (default: from hook stdin)')
     .option('--cwd <path>', 'session working directory (default: from hook stdin)')
     .option('--json', 'output raw JSON')
     .action(
@@ -706,9 +777,10 @@ export function registerSession(program: Command): void {
       },
     )
 
-  session
-    .command('stop <sessionId>')
-    .description('Stop an in-flight session (POST /v1/sessions/{id}/stop)')
+  apiRoutes(
+    session.command('stop <session-id>').description('Stop an in-flight session'),
+    'POST /v1/sessions/{id}/stop',
+  )
     .option('--json', 'output raw JSON')
     .action(async (sessionId: string, opts: { json?: boolean }) => {
       await runAction(async () => {
@@ -727,16 +799,19 @@ export function registerSession(program: Command): void {
   // credential in it, so it is durable and safe to share with any org member.
   // 409s (sandbox idle/torn down) carry curated server messages; runAction
   // surfaces them as-is.
-  session
-    .command('ide <sessionId>')
-    .description("Open the session's browser IDE (GET /v1/sessions/{id}/ide)")
-    .addHelpText(
-      'after',
-      "\nThe IDE shares the live sandbox's working tree with the agent. The URL is the " +
-        'membership-gated dashboard page for the sandbox, so it is safe to share with ' +
-        'org members; if the session is idle, send it a message to wake it first ' +
-        '(agent session connect).',
-    )
+  apiRoutes(
+    session
+      .command('ide <session-id>')
+      .description("Open the browser IDE into the session's live sandbox")
+      .addHelpText(
+        'after',
+        "\nThe IDE shares the live sandbox's working tree with the agent. The URL is the " +
+          'membership-gated dashboard page for the sandbox, so it is safe to share with ' +
+          'org members. If the session is idle, send it a message to wake it first ' +
+          '(agent session connect).',
+      ),
+    'GET /v1/sessions/{id}/ide',
+  )
     .option('--no-open', 'print the URL without opening a browser')
     .option('--json', 'output raw JSON')
     .action(async (sessionId: string, opts: { open: boolean; json?: boolean }) => {
@@ -754,16 +829,19 @@ export function registerSession(program: Command): void {
   // A preview port's link (GET /v1/sessions/{id}/ports/{port}) — a dev
   // server the agent or the IDE user started in the sandbox, opened through
   // the same membership-gated dashboard page as the IDE.
-  session
-    .command('port <sessionId> <port>')
-    .description("Open a preview port on the session's sandbox (GET /v1/sessions/{id}/ports/{port})")
-    .addHelpText(
-      'after',
-      '\nAny TCP port serves (3000, 5173, 8000, 8080 are just the usual dev-server ' +
-        'picks). The URL is the membership-gated dashboard page deep-linked to the ' +
-        'port — safe to share with org members; the preview renders while something ' +
-        'in the sandbox listens on that port.',
-    )
+  apiRoutes(
+    session
+      .command('port <session-id> <port>')
+      .description('Open a preview of a port the sandbox is listening on')
+      .addHelpText(
+        'after',
+        '\nAny TCP port serves (3000, 5173, 8000, 8080 are just the usual dev-server ' +
+          'picks). The URL is the membership-gated dashboard page deep-linked to the ' +
+          'port, so it is safe to share with org members. The preview renders while ' +
+          'something in the sandbox listens on that port.',
+      ),
+    'GET /v1/sessions/{id}/ports/{port}',
+  )
     .option('--no-open', 'print the URL without opening a browser')
     .option('--json', 'output raw JSON')
     .action(
@@ -924,7 +1002,7 @@ export async function watchSession(
     const s = await api.getAgentSession(sessionId)
     if (s.status !== last) {
       if (!json) {
-        const reason = s.status_reason ? ` — ${s.status_reason}` : ''
+        const reason = s.status_reason ? `: ${s.status_reason}` : ''
         console.log(`${nowClock()}  ${s.status}${reason}`)
       }
       last = s.status
@@ -1150,13 +1228,13 @@ export async function fetchLogSegment(segment: SessionLogSegment): Promise<Buffe
     if (res.status === 404) {
       throw new Error(
         `a log segment (feed_seq ${segment.start_feed_seq}–${segment.end_feed_seq}) is ` +
-          'gone from storage — it was likely deleted by your log retention setting',
+          'gone from storage. Your log retention setting likely deleted it.',
       )
     }
     throw new Error(
       `download failed: ${res.status} ${res.statusText}` +
         (res.status === 403
-          ? ' (the presigned URL likely expired — re-run the command for a fresh one)'
+          ? ' (the presigned URL likely expired; re-run the command for a fresh one)'
           : ''),
     )
   }
@@ -1231,7 +1309,7 @@ async function syncTranscript(opts: {
   const repo = repoFromCwd(cwd)
 
   // Hook mode is quiet on every failure path, so the local activity log
-  // (hooks/sync.log.jsonl + stats.json, surfaced by `agent hooks logs/stats`)
+  // (hooks/sync.log.jsonl + stats.json, surfaced by `agent hook log/stats`)
   // is the only place a failed background sync is observable. Recording is
   // best-effort and never throws, preserving the exit-0 guarantee.
   const quit = (outcome: SyncOutcome, message: string): void => {
@@ -1247,7 +1325,7 @@ async function syncTranscript(opts: {
   if (!repo || !enrolledRepos().includes(repo.toLowerCase())) {
     return quit(
       'skipped_unenrolled',
-      `repository ${repo ?? `at ${cwd}`} is not enrolled (agent hooks enroll)`,
+      `repository ${repo ?? `at ${cwd}`} is not enrolled (agent hook enroll)`,
     )
   }
   if (!resolveToken()) {

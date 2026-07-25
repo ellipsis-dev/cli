@@ -1,7 +1,8 @@
 import type { Command } from 'commander'
 import { InvalidArgumentError } from 'commander'
 import { ApiClient } from '../lib/api'
-import { collect, toInt } from '../lib/args'
+import { collect, parseWhen, toInt } from '../lib/args'
+import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { printJson, printTable, runAction } from '../lib/output'
 import type {
   AnalyticsAccountType,
@@ -9,29 +10,37 @@ import type {
   ReviewerUsage,
 } from '../lib/types'
 
-// `agent analytics` — GitHub PR + review analytics over GET /v1/analytics/*:
-// the same aggregation behind the app's /analytics dashboard, so questions
-// like "which apps review the most PRs?" are answerable from the terminal
-// (`agent analytics reviewers --account-type bot`). Human-readable tables by
-// default; --json prints the raw API response for agents/scripts.
+// `agent analytics` is the same aggregation behind the dashboard's analytics
+// page, so questions like "which apps review the most PRs?" are answerable
+// from the terminal (`agent analytics reviewer --account-type bot`).
+// Human-readable tables by default; --json prints the raw API response.
 
 // Window flags shared by every subcommand. The server defaults to the last
-// 30 days; `--days` is mutually exclusive with `--start`.
+// 30 days; `--days` is mutually exclusive with `--since`.
 interface WindowOpts {
   days?: number
-  start?: string
-  end?: string
+  since?: string
+  until?: string
 }
 
 function windowQuery(opts: WindowOpts): AnalyticsWindowQuery {
-  return { days: opts.days, start: opts.start, end: opts.end }
+  return { days: opts.days, start: opts.since, end: opts.until }
 }
 
-function addWindowOptions(cmd: Command): Command {
-  return cmd
-    .option('-d, --days <n>', 'look back N days (default: 30)', toInt)
-    .option('--start <iso>', 'window start (ISO timestamp; excludes --days)')
-    .option('--end <iso>', 'window end (ISO timestamp; default: now)')
+// The window flags plus the route line, in that order, so `--help` ends with
+// the API detail rather than burying the usage note under it.
+function addWindow(cmd: Command, route: string): Command {
+  return apiRoutes(
+    cmd
+      .option('--days <n>', 'look back N days (default: 30)', toInt)
+      .option('--since <when>', 'window start, which excludes --days', (v: string) => parseWhen(v))
+      .option('--until <when>', 'window end (default: now)', (v: string) => parseWhen(v))
+      .addHelpText(
+        'after',
+        '\n--since/--until accept ISO 8601 or "today", "yesterday", "N days ago".',
+      ),
+    route,
+  )
 }
 
 function toAccountType(value: string): AnalyticsAccountType {
@@ -57,18 +66,19 @@ function toReviewerSort(value: string): ReviewerSort {
 }
 
 export function registerAnalytics(program: Command): void {
+  // "analytics" is a mass noun, so it has no singular form to alias.
   const analytics = program
     .command('analytics')
-    .description(
-      'GitHub PR + review analytics for your org (GET /v1/analytics/*)',
-    )
+    .description('Aggregate pull request and review activity across the org')
 
-  addWindowOptions(
-    analytics
-      .command('reviewers')
-      .description(
-        'Who reviewed the most PRs — people and apps (e.g. --account-type bot for apps only)',
-      ),
+  addWindow(
+    alsoKnownAs(
+      analytics
+        .command('reviewer')
+        .description('Rank who reviews the most PRs, people and apps alike'),
+      'reviewers',
+    ),
+    'GET /v1/analytics/metrics',
   )
     .option(
       '-r, --repo <owner/name>',
@@ -131,10 +141,14 @@ export function registerAnalytics(program: Command): void {
       },
     )
 
-  addWindowOptions(
-    analytics
-      .command('prs')
-      .description('Pull-request volume and trend, with human vs bot splits'),
+  addWindow(
+    alsoKnownAs(
+      analytics
+        .command('pr')
+        .description('Show pull request volume and trend, split human vs bot'),
+      'prs',
+    ),
+    'GET /v1/analytics/pull-requests',
   )
     .option(
       '--account-type <type>',
@@ -190,10 +204,14 @@ export function registerAnalytics(program: Command): void {
       },
     )
 
-  addWindowOptions(
-    analytics
-      .command('reviews')
-      .description('Review activity: totals, verdicts, and the top reviewers'),
+  addWindow(
+    alsoKnownAs(
+      analytics
+        .command('review')
+        .description('Show review totals, verdicts, and the top reviewers'),
+      'reviews',
+    ),
+    'GET /v1/analytics/reviews',
   )
     .option(
       '-r, --repo <name>',

@@ -1,24 +1,31 @@
 import { type Command } from 'commander'
 import { readFileSync } from 'node:fs'
 import { ApiClient } from '../lib/api'
+import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { formatTs, printJson, printTable, runAction } from '../lib/output'
 import type { SandboxVariableInput, SandboxVariableSummary } from '../lib/types'
 
 export function registerSandbox(program: Command): void {
-  const sandbox = program.command('sandbox').description('Manage sandbox resources')
+  const sandbox = program
+    .command('sandbox')
+    .description('Manage what every sandbox this account runs gets')
 
-  const variable = sandbox
-    .command('variable')
-    // Resource sub-groups register their plural as an alias so the two
-    // spellings can never diverge into different surfaces.
-    .alias('variables')
-    .alias('var')
-    .description('Manage sandbox environment variables (values are write-only)')
+  const variable = alsoKnownAs(
+    sandbox
+      .command('variable')
+      .description('Manage the env variables injected into every sandbox (values are write-only)'),
+    'variables',
+    'var',
+    'env',
+  )
 
-  variable
-    .command('list')
-    .alias('ls')
-    .description('List sandbox environment variables (GET /v1/sandboxes/variables)')
+  apiRoutes(
+    alsoKnownAs(
+      variable.command('list').description('List the variable names (never their values)'),
+      'ls',
+    ),
+    'GET /v1/sandboxes/variables',
+  )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
@@ -27,9 +34,12 @@ export function registerSandbox(program: Command): void {
       })
     })
 
-  variable
-    .command('set [assignments...]')
-    .description('Create or update variables, e.g. `set A=1 B=2` (PUT /v1/sandboxes/variables)')
+  apiRoutes(
+    variable
+      .command('set [assignments...]')
+      .description('Create or update variables, e.g. `set A=1 B=2`'),
+    'PUT /v1/sandboxes/variables',
+  )
     .option('-f, --from-file <path>', 'load variables from a .env or .json file')
     .option('--json', 'output raw JSON')
     .action(async (assignments: string[], opts: { fromFile?: string; json?: boolean }) => {
@@ -44,10 +54,10 @@ export function registerSandbox(program: Command): void {
       })
     })
 
-  variable
-    .command('rm <name>')
-    .alias('delete')
-    .description('Delete a variable (DELETE /v1/sandboxes/variables/{name})')
+  apiRoutes(
+    alsoKnownAs(variable.command('delete <name>').description('Delete a variable'), 'rm'),
+    'DELETE /v1/sandboxes/variables/{name}',
+  )
     .option('--json', 'output raw JSON')
     .action(async (name: string, opts: { json?: boolean }) => {
       await runAction(async () => {

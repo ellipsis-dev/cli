@@ -1,4 +1,5 @@
 import type { Command } from 'commander'
+import { alsoKnownAs } from '../lib/help'
 import { formatTs, printJson, printTable, runAction } from '../lib/output'
 import { toInt } from '../lib/args'
 import {
@@ -18,10 +19,10 @@ import {
   type HookSyncStats,
 } from '../lib/laptop'
 
-// `agent hooks …` — manage the Claude Code hooks + per-repo enrollment that
+// `agent hook …` manages the Claude Code hooks and per-repo enrollment that
 // drive laptop transcript sync (`agent session sync`). Installing the hooks
 // alone syncs nothing: consent is per-repo opt-in, so a repo must also be
-// enrolled (`agent hooks enroll`, run inside the repo) before its sessions
+// enrolled (`agent hook enroll`, run inside the repo) before its sessions
 // are captured.
 
 // Resolve the repo to enroll/unenroll: an explicit "owner/name" arg wins,
@@ -42,14 +43,17 @@ function resolveRepo(explicit: string | undefined): string {
   return repo
 }
 
-export function registerHooks(program: Command): void {
-  const hooks = program
-    .command('hooks')
-    .description('Manage Claude Code hooks + repo enrollment for transcript sync')
+export function registerHook(program: Command): void {
+  const hooks = alsoKnownAs(
+    program
+      .command('hook')
+      .description('Sync local Claude Code transcripts to Ellipsis, per enrolled repo'),
+    'hooks',
+  )
 
   hooks
     .command('install')
-    .description('Install the Stop + SessionEnd hooks that run `agent session sync`')
+    .description('Install the Stop and SessionEnd hooks that run `agent session sync`')
     .action(async () =>
       runAction(async () => {
         const { path } = installHooks()
@@ -57,7 +61,7 @@ export function registerHooks(program: Command): void {
         const enrolled = enrolledRepos()
         if (enrolled.length === 0) {
           console.log(
-            'No repositories enrolled yet — nothing will sync. Run `agent hooks enroll` inside a repo to opt it in.',
+            'No repositories enrolled yet, so nothing will sync. Run `agent hook enroll` inside a repo to opt it in.',
           )
         }
       }),
@@ -65,7 +69,7 @@ export function registerHooks(program: Command): void {
 
   hooks
     .command('uninstall')
-    .description('Remove the `agent session sync` hooks (enrollment is kept)')
+    .description('Remove the sync hooks, keeping every repo enrollment')
     .action(async () =>
       runAction(async () => {
         const { path, changed } = uninstallHooks()
@@ -77,8 +81,8 @@ export function registerHooks(program: Command): void {
 
   hooks
     .command('status')
-    .description('Show hook installation + enrolled repositories')
-    .option('--json', 'print JSON instead of text')
+    .description('Show which hooks are installed and which repos are enrolled')
+    .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) =>
       runAction(async () => {
         const installed = hooksInstalled()
@@ -103,20 +107,23 @@ export function registerHooks(program: Command): void {
         if (stats?.last_sync_at) {
           console.log('')
           console.log(
-            `Last sync ${ago(stats.last_sync_at)} (${stats.last_outcome}) · ` +
-              `${stats.synced_24h} synced / ${stats.failed_24h} failed in 24h · ` +
+            `Last sync ${ago(stats.last_sync_at)} (${stats.last_outcome}), ` +
+              `${stats.synced_24h} synced / ${stats.failed_24h} failed in 24h, ` +
               `${spooledPendingCount()} spooled pending`,
           )
         }
       }),
     )
 
-  hooks
-    .command('logs')
-    .description('Show the activity log the background `agent session sync` hooks write')
+  alsoKnownAs(
+    hooks
+      .command('log')
+      .description('Show what the background syncs did, newest last (they are otherwise silent)'),
+    'logs',
+  )
     .option('-n, --tail <n>', 'show the last N entries', toInt, 20)
     .option('--failures', 'only show entries whose outcome is not "synced"')
-    .option('--json', 'print NDJSON (one log entry per line)')
+    .option('--json', 'output raw JSON (NDJSON, one entry per line)')
     .action(async (opts: { tail: number; failures?: boolean; json?: boolean }) =>
       runAction(async () => {
         let entries = readSyncLog()
@@ -151,8 +158,8 @@ export function registerHooks(program: Command): void {
 
   hooks
     .command('stats')
-    .description('Show sync stats from the plain-JSON stats object the hooks maintain')
-    .option('--json', 'print the raw stats object')
+    .description('Show sync counts: last outcome, 24h synced/failed, spooled pending')
+    .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) =>
       runAction(async () => {
         const stats = readHookStats()
@@ -190,7 +197,7 @@ export function registerHooks(program: Command): void {
 
   hooks
     .command('enroll [repo]')
-    .description('Opt a repository (default: the cwd\'s origin) into transcript sync')
+    .description("Opt a repository into transcript sync (default: the cwd's origin)")
     .action(async (repo: string | undefined) =>
       runAction(async () => {
         const resolved = resolveRepo(repo)
@@ -198,7 +205,7 @@ export function registerHooks(program: Command): void {
         console.log(`Enrolled ${resolved}. Claude Code sessions in this repo will sync.`)
         const installed = hooksInstalled()
         if (!installed.Stop || !installed.SessionEnd) {
-          console.log('Hooks are not installed — run `agent hooks install` to start syncing.')
+          console.log('Hooks are not installed. Run `agent hook install` to start syncing.')
         }
       }),
     )

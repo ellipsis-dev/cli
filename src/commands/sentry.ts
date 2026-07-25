@@ -1,5 +1,6 @@
 import { type Command } from 'commander'
 import { ApiClient } from '../lib/api'
+import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { printJson, printTable, runAction } from '../lib/output'
 
 export function registerSentry(program: Command): void {
@@ -7,9 +8,14 @@ export function registerSentry(program: Command): void {
     .command('sentry')
     .description('Browse the connected Sentry organizations')
 
-  sentry
-    .command('orgs')
-    .description('List connected Sentry organizations (GET /v1/sentry/organizations)')
+  apiRoutes(
+    alsoKnownAs(
+      sentry.command('orgs').description('List the connected Sentry organizations'),
+      'org',
+      'organizations',
+    ),
+    'GET /v1/sentry/organizations',
+  )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {

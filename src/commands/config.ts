@@ -1,8 +1,9 @@
-import { InvalidArgumentError, type Command } from 'commander'
+import { type Command } from 'commander'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname } from 'node:path'
 import { ApiClient } from '../lib/api'
 import { resolveAppBase } from '../lib/config'
+import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { repoFromCwd } from '../lib/laptop'
 import { formatTs, printJson, printTable, printYaml, runAction } from '../lib/output'
 import { configUrl } from '../lib/urls'
@@ -16,13 +17,20 @@ import type {
 const DEFAULT_CONFIG_PATH = 'agents/my_agent.yaml'
 
 export function registerConfig(program: Command): void {
-  const config = program
-    .command('config')
-    .description('Inspect saved agent configurations and manage defaults')
+  const config = alsoKnownAs(
+    program
+      .command('config')
+      .description('Inspect your agent configs and set which one runs by default'),
+    'configs',
+  )
 
-  config
-    .command('list')
-    .description('List saved agent configurations (GET /v1/configs)')
+  apiRoutes(
+    alsoKnownAs(
+      config.command('list').description('List your saved agent configs'),
+      'ls',
+    ),
+    'GET /v1/configs',
+  )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
@@ -47,15 +55,18 @@ export function registerConfig(program: Command): void {
       })
     })
 
-  config
-    .command('get <configId>')
-    .description('Get a single agent configuration (GET /v1/configs/{id})')
-    .option('-o, --output <format>', 'output format: yaml (default) or json', parseFormat, 'yaml')
-    .action(async (configId: string, opts: { output: 'yaml' | 'json' }) => {
+  apiRoutes(
+    config
+      .command('get <config-id>')
+      .description('Print one agent config as YAML, or as JSON with --json'),
+    'GET /v1/configs/{id}',
+  )
+    .option('--json', 'output raw JSON')
+    .action(async (configId: string, opts: { json?: boolean }) => {
       await runAction(async () => {
         const api = new ApiClient()
-        // -o json is the machine-readable mode: emit only the raw config.
-        if (opts.output === 'json') {
+        // --json is the machine-readable mode: emit only the raw config.
+        if (opts.json) {
           printJson(await api.getAgentConfig(configId))
           return
         }
@@ -67,15 +78,18 @@ export function registerConfig(program: Command): void {
       })
     })
 
-  // Create an agent the same way the dashboard does: Ellipsis opens a pull
-  // request adding the config YAML to the repo, and the agent goes live when
-  // it merges. Distinct from `config init`, which scaffolds a local file.
-  config
-    .command('create')
-    .description('Create an agent by opening a pull request with its config (POST /v1/configs)')
+  // Create an agent config the same way the dashboard does: Ellipsis opens a
+  // pull request adding the YAML to the repo, and the agent goes live when it
+  // merges. Distinct from `config init`, which scaffolds a local file.
+  apiRoutes(
+    config
+      .command('create')
+      .description('Create an agent config by opening a pull request that adds it to a repo'),
+    'POST /v1/configs',
+  )
     .requiredOption(
-      '--repo <name>',
-      'repository name in your account to open the pull request against',
+      '-r, --repo <name>',
+      'repository in your account to open the pull request against',
     )
     .option('-f, --file <path>', 'agent config file (.yaml/.yml or .json) to add')
     .option(
@@ -112,7 +126,7 @@ export function registerConfig(program: Command): void {
             printJson(created)
             return
           }
-          console.log(`✓ opened a pull request adding the agent (${created.path})`)
+          console.log(`✓ opened a pull request adding the agent config (${created.path})`)
           console.log(created.pull_request_url)
           console.log('Merge it to deploy the agent.')
         })
@@ -127,10 +141,15 @@ export function registerConfig(program: Command): void {
   // the effective default where you stand); writes never are — a mutation
   // whose target depends on your cwd would be a footgun, so --repo is always
   // explicit.
-  const defaults = config
-    .command('default')
-    .alias('defaults')
-    .description('Show and manage default agent configs (account and per-repo)')
+  const defaults = apiRoutes(
+    alsoKnownAs(
+      config
+        .command('default')
+        .description('Show or set which agent config runs when a session names none'),
+      'defaults',
+    ),
+    'GET /v1/defaults',
+  )
     .option('--json', 'output raw JSON')
     // Bare `agent config default`: the effective default for the repo you're
     // standing in, computed locally from GET /v1/defaults + the origin remote
@@ -163,10 +182,15 @@ export function registerConfig(program: Command): void {
       })
     })
 
-  defaults
-    .command('list')
-    .alias('ls')
-    .description('List all default-config rungs (GET /v1/defaults)')
+  apiRoutes(
+    alsoKnownAs(
+      defaults
+        .command('list')
+        .description('List every default that is set, account rung and per-repo rungs'),
+      'ls',
+    ),
+    'GET /v1/defaults',
+  )
     .option('--json', 'output raw JSON')
     // The group also defines --json (for the bare view), and commander parses
     // parent options even when they follow the subcommand name — so read the
@@ -195,13 +219,14 @@ export function registerConfig(program: Command): void {
       })
     })
 
-  defaults
-    .command('set <configId>')
-    .description(
-      'Set the account default agent config, or a repo default with --repo (PUT /v1/defaults)',
-    )
+  apiRoutes(
+    defaults
+      .command('set <config-id>')
+      .description('Set the account default agent config, or a repo default with --repo'),
+    'PUT /v1/defaults',
+  )
     .option(
-      '--repo [repository]',
+      '-r, --repo [repository]',
       'target a repo rung: "owner/name", or no value for the repo you are standing in',
     )
     .option('--json', 'output raw JSON')
@@ -223,14 +248,18 @@ export function registerConfig(program: Command): void {
       },
     )
 
-  defaults
-    .command('clear')
-    .alias('rm')
-    .description(
-      'Clear the account default agent config, or a repo default with --repo (DELETE /v1/defaults)',
-    )
+  apiRoutes(
+    alsoKnownAs(
+      defaults
+        .command('clear')
+        .description('Clear the account default agent config, or a repo default with --repo'),
+      'rm',
+      'delete',
+    ),
+    'DELETE /v1/defaults',
+  )
     .option(
-      '--repo [repository]',
+      '-r, --repo [repository]',
       'target a repo rung: "owner/name", or no value for the repo you are standing in',
     )
     .action(async (opts: { repo?: string | boolean }) => {
@@ -243,20 +272,23 @@ export function registerConfig(program: Command): void {
       })
     })
 
-  config
-    .command('init [path]')
-    .description(
-      `Scaffold a starter agent config YAML locally (default: ${DEFAULT_CONFIG_PATH}), ` +
-        'or with --template create the agent in a repo by opening a pull request',
-    )
-    .option('-f, --force', 'overwrite the file if it already exists')
+  apiRoutes(
+    config
+      .command('init [path]')
+      .description(
+        `Scaffold a starter agent config YAML locally (default: ${DEFAULT_CONFIG_PATH})`,
+      ),
+    'POST /v1/configs with --template',
+  )
+    // No `-f` short: CLI-wide, `-f` means an input file (see `config create`).
+    .option('--force', 'overwrite the file if it already exists')
     .option(
-      '--template <slug>',
-      'create the agent from an Ellipsis template by opening a pull request (see `agent template list`)',
+      '-t, --template <slug>',
+      'instead scaffold from a template, in a repo, by pull request (see `agent template list`)',
     )
     .option(
-      '--repo <name>',
-      'repository name to open the pull request against (required with --template)',
+      '-r, --repo <name>',
+      'repository to open the pull request against (required with --template)',
     )
     .option(
       '--path <path>',
@@ -282,7 +314,7 @@ export function registerConfig(program: Command): void {
               repository: opts.repo!,
               path: opts.path,
             })
-            console.log(`✓ opened a pull request adding the agent (${created.path})`)
+            console.log(`✓ opened a pull request adding the agent config (${created.path})`)
             console.log(created.pull_request_url)
             console.log('Merge it to deploy the agent.')
           })
@@ -337,7 +369,7 @@ function brokenSuffix(d: AgentDefaultView): string {
 // everything else has a server-side default. Roots Ellipsis syncs from:
 // agents/, .agents/, ellipsis/, .ellipsis/ (any depth), as .yaml/.yml.
 function starterConfig(name: string): string {
-  return `# Ellipsis agent config — commit this to your default branch; Ellipsis syncs it
+  return `# Ellipsis agent config. Commit this to your default branch; Ellipsis syncs it
 # from GitHub. Valid locations: agents/, .agents/, ellipsis/, .ellipsis/ (any depth).
 ellipsis:
   version: v1
@@ -350,7 +382,7 @@ claude:
     You are an Ellipsis agent. Describe the task you want it to perform here.
   # model: claude-opus-4-8   # optional; defaults to the account default
 
-# Optional — uncomment and fill in as needed:
+# Optional, uncomment and fill in as needed:
 # triggers:
 #   - type: cron
 #     schedule: "0 9 * * 1-5"   # weekdays at 09:00
@@ -375,9 +407,3 @@ function editedBy(c: SavedAgentConfig): string {
   return by?.login ?? '—'
 }
 
-function parseFormat(value: string): 'yaml' | 'json' {
-  if (value !== 'yaml' && value !== 'json') {
-    throw new InvalidArgumentError("output format must be 'yaml' or 'json'")
-  }
-  return value
-}

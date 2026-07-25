@@ -1,15 +1,23 @@
 import { type Command } from 'commander'
 import { ApiClient } from '../lib/api'
+import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { printJson, printTable, runAction } from '../lib/output'
 
 export function registerTemplate(program: Command): void {
-  const template = program
-    .command('template')
-    .description('Browse the built-in Ellipsis agent templates')
+  const template = alsoKnownAs(
+    program.command('template').description('Browse the built-in agent templates'),
+    'templates',
+  )
 
-  template
-    .command('list')
-    .description('List built-in agent templates (GET /v1/templates)')
+  apiRoutes(
+    alsoKnownAs(
+      template
+        .command('list')
+        .description('List the built-in agent templates and the slugs --template takes'),
+      'ls',
+    ),
+    'GET /v1/templates',
+  )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {

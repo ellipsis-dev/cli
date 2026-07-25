@@ -46,20 +46,20 @@ export { connectability }
 
 export function registerConnect(session: Command): void {
   session
-    .command('connect [sessionId]')
-    .description(
-      'Connect to a cloud session: view the conversation, follow it live, and send messages',
-    )
+    .command('connect [session-id]')
+    .description('Open a session: read the conversation, follow it live, send messages')
     .option('--no-records', 'skip replaying prior records on open')
     .option(
       '--no-input',
-      'follow read-only: never open the composer, even on a keyed session (for non-interactive callers)',
+      'follow read-only, never opening the composer (for non-interactive callers)',
     )
     .addHelpText(
       'after',
-      `\nMessage mode: render the conversation, follow it live, and send lines through
-the session inbox — single-writer-safe and usable headless / inside a sandbox.
-Pass --no-input to follow read-only from a script or agent (no TTY needed).`,
+      `\nMessages go through the session inbox, so this is single-writer-safe and works
+headless or from inside the session's own sandbox, where the id is optional.
+Pass --no-input to follow read-only from a script or agent (no TTY needed).
+
+API: GET /v1/sessions/{id}, GET /v1/sessions/{id}/records, POST /v1/sessions/{id}/messages, WS /v1/sessions/{id}/stream`,
     )
     .action(async (sessionId: string | undefined, opts: { records: boolean; input: boolean }) => {
       await runAction(async () => {
@@ -101,7 +101,7 @@ export async function runConnect(
   // --no-input forces watch-only even when the session would accept messages.
   const canSend = readOnly ? false : c.canSend
   const reason =
-    readOnly && c.canSend ? 'read-only (--no-input) — following without the composer' : c.reason
+    readOnly && c.canSend ? 'read-only (--no-input): following without the composer' : c.reason
   const notice = [startupNotice, reason].filter(Boolean).join(' · ') || null
   const url = sessionUrl(resolveAppBase(), me.customer_login, sessionId)
   // The config identity for the footer meta line: the caller's resolved name

@@ -12,8 +12,8 @@ import { cliAuthUrl } from '../lib/urls'
 export function registerLogin(program: Command): void {
   program
     .command('login')
-    .description('Authenticate with Ellipsis via the device-code flow (against the active host)')
-    .option('--no-browser', 'do not auto-open the verification URL (for headless / SSH)')
+    .description('Authenticate against the active host via the device-code flow')
+    .option('--no-browser', 'do not auto-open the verification URL (for headless or SSH)')
     .action(async (opts: { browser?: boolean }) => {
       const api = new ApiClient()
       try {
@@ -44,7 +44,7 @@ export function registerLogin(program: Command): void {
 
   program
     .command('logout')
-    .description('Remove stored credentials (the active host, or --all hosts)')
+    .description("Remove the active host's stored token, or every host's with --all")
     .option('--all', 'clear the stored token for every host, not just the active one')
     .action((opts: { all?: boolean }) => {
       // Clear only the on-disk token(s); the host entries (api/app base) stay so

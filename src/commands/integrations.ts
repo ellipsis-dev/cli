@@ -1,12 +1,19 @@
 import { type Command } from 'commander'
 import { ApiClient } from '../lib/api'
+import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { printJson, printTable, runAction } from '../lib/output'
 import type { GetIntegrationsResponse } from '../lib/types'
 
-export function registerIntegrations(program: Command): void {
-  program
-    .command('integrations')
-    .description('Show every connected integration (GET /v1/integrations)')
+export function registerIntegration(program: Command): void {
+  apiRoutes(
+    alsoKnownAs(
+      program
+        .command('integration')
+        .description('Show which integrations are connected, in one table'),
+      'integrations',
+    ),
+    'GET /v1/integrations',
+  )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
@@ -17,7 +24,7 @@ export function registerIntegrations(program: Command): void {
         }
         printTable(['INTEGRATION', 'STATUS', 'DETAILS'], integrationRows(integrations))
         console.log(
-          '\nList resources: agent github repos | agent slack channels | agent linear teams | agent sentry orgs',
+          '\nList resources: agent github repos, agent slack channels, agent linear teams, agent sentry orgs',
         )
       })
     })
