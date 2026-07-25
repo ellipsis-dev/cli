@@ -74,6 +74,8 @@ agent config default              # the effective default agent for the repo you
 agent config default set <config-id>   # set the account default agent (--repo [owner/name] for one repo)
 agent config default clear        # clear the account default (--repo [owner/name] for one repo)
 
+agent model list                  # list selectable agent models (the account default is marked)
+
 agent integrations                # every connected integration in one table
 agent github repos                # repositories connected to the GitHub installation
 agent github members              # org roster (the logins/ids --author accepts), with linked Slack identities

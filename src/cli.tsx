@@ -8,6 +8,7 @@ import { registerSandbox } from './commands/sandbox'
 import { registerAsset } from './commands/asset'
 import { registerHooks } from './commands/hooks'
 import { registerTemplate } from './commands/template'
+import { registerModel } from './commands/model'
 import { registerIntegrations } from './commands/integrations'
 import { registerGithub } from './commands/github'
 import { registerSlack } from './commands/slack'
@@ -38,6 +39,7 @@ registerSandbox(program)
 registerAsset(program)
 registerHooks(program)
 registerTemplate(program)
+registerModel(program)
 registerIntegrations(program)
 registerGithub(program)
 registerSlack(program)
