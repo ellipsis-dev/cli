@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   attentionFlip,
+  COMPOSER_MODELS,
+  composerModelOptions,
   connectability,
   isActiveStatusWord,
   isOpenConversation,
@@ -236,5 +238,27 @@ describe('sidebarSlice', () => {
     expect(sidebarSlice(20, 6, 0)).toEqual({ start: 0, end: 6 })
     expect(sidebarSlice(20, 6, 10)).toEqual({ start: 7, end: 13 })
     expect(sidebarSlice(20, 6, 19)).toEqual({ start: 14, end: 20 })
+  })
+})
+
+describe('composerModelOptions', () => {
+  it('keeps the server order and names the default model', () => {
+    const options = composerModelOptions([
+      { id: 'claude-fable-5', display_name: 'Claude Fable 5', is_default_agent_model: false },
+      { id: 'claude-opus-5', display_name: 'Claude Opus 5', is_default_agent_model: true },
+    ])
+    expect(options.map((o) => o.id)).toEqual([null, 'claude-fable-5', 'claude-opus-5'])
+    expect(options[0].label).toBe('Default (Claude Opus 5)')
+  })
+
+  it('falls back to the built-in list when the server returns none', () => {
+    expect(composerModelOptions([])).toEqual([...COMPOSER_MODELS])
+  })
+
+  it('leaves Default unnamed when no model claims the flag', () => {
+    const options = composerModelOptions([
+      { id: 'claude-opus-5', display_name: 'Claude Opus 5', is_default_agent_model: false },
+    ])
+    expect(options[0].label).toBe('Default')
   })
 })

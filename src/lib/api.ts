@@ -23,6 +23,7 @@ import type {
   GetSandboxVariablesResponse,
   GetSessionIdeResponse,
   GetSessionPortResponse,
+  GetSupportedModelsResponse,
   ListAgentConfigsResponse,
   ListAgentDefaultsResponse,
   ListAgentSessionsQuery,
@@ -51,6 +52,7 @@ import type {
   SyncAgentSessionResponse,
   SavedAgentConfig,
   StartAgentSessionRequest,
+  SupportedModel,
   UsageDashboard,
   WhoAmI,
   GetSessionLogResponse,
@@ -394,6 +396,15 @@ export class ApiClient {
       `/v1/sandboxes/variables/${encodeURIComponent(name)}`,
     )
     return res.variables
+  }
+
+  // ------------------------------- models ---------------------------------
+
+  // The models a customer may select for their agent (GET /v1/models) — the
+  // registry behind the dashboard's rate table, most expensive first.
+  async listSupportedModels(): Promise<SupportedModel[]> {
+    const res = await this.request<GetSupportedModelsResponse>('GET', '/v1/models')
+    return res.models
   }
 
   // ---------------------------- agent templates ---------------------------

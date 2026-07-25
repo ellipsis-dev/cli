@@ -17,13 +17,15 @@ import type {
   AgentSession,
   SavedAgentConfig,
   StartAgentSessionRequest,
+  SupportedModel,
 } from '../lib/types'
+import { applyEditShortcut } from '../lib/editing'
 import { hyperlink, sessionUrl } from '../lib/urls'
 import { usdNumberFromMillicents } from '../lib/output'
 import { VERSION } from '../lib/constants'
 import {
   attentionFlip,
-  COMPOSER_MODELS,
+  composerModelOptions,
   configDisplayName,
   connectability,
   lastEventAt,
@@ -64,6 +66,10 @@ const AGE_TICK_MS = 5_000
 // One nav cell: dot + truncated description + age, fixed width so the bar
 // windows predictably.
 const NAV_ITEM_W = 30
+// The pinned new-session cell, wide enough for its whole label plus the
+// selected state's padding — it never truncates to "+ Ne…".
+const NAV_NEW_LABEL = '+ New session'
+const NAV_NEW_W = NAV_NEW_LABEL.length + 3
 
 export interface SessionsAppProps {
   api: ApiClient
@@ -252,10 +258,13 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   const [startError, setStartError] = useState<string | null>(null)
 
   // The composer's picker options, fetched once when the new-session pane
-  // first opens: saved agent configs and the account's repositories (the
-  // dashboard composer's choices; models are the static selectable set).
+  // first opens: the dashboard composer's three choices — saved agent
+  // configs, the account's repositories, and the selectable models. A models
+  // failure (an older server without GET /v1/models) leaves the list empty
+  // and the composer falls back to its built-in set.
   const [configs, setConfigs] = useState<SavedAgentConfig[] | null>(null)
   const [repos, setRepos] = useState<string[] | null>(null)
+  const [models, setModels] = useState<SupportedModel[] | null>(null)
   const pickersLoading = useRef(false)
   useEffect(() => {
     if (mainPane.type !== 'new' || pickersLoading.current) return
@@ -268,6 +277,10 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       .listGithubRepositories()
       .then((r) => setRepos(r.repositories.map((repo) => repo.full_name)))
       .catch(() => setRepos([]))
+    void api
+      .listSupportedModels()
+      .then(setModels)
+      .catch(() => setModels([]))
   }, [mainPane.type, api])
 
   const startSession = useCallback(
@@ -400,22 +413,18 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   let main: React.ReactElement
   if (mainPane.type === 'new') {
     main = (
-      <Box
-        width={termCols}
-        height={chatRows}
-        flexDirection="column"
-        overflow="hidden"
-        paddingLeft={1}
-        paddingRight={1}
-      >
+      // Full width, no side padding: the prompt input's rules span the
+      // terminal exactly like the header's and the nav's do.
+      <Box width={termCols} height={chatRows} flexDirection="column" overflow="hidden">
         <NewSessionPane
-          width={termCols - 2}
+          width={termCols}
           height={chatRows}
           focused={focus === 'chat'}
           starting={starting}
           error={startError}
           configs={configs}
           repos={repos}
+          models={models}
           onSubmit={(text, choices) => void startSession(text, choices)}
           onLeave={focusNav}
           rawMode={isRawModeSupported}
@@ -483,27 +492,40 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
 
   // ---- band 4: the session nav ----
   // A horizontal bar of fixed-width cells (status dot + description over a
-  // dim age line), windowed around the highlight. The pinned "+ New" cell
-  // leads.
-  const cellCapacity = Math.max(1, Math.floor((termCols - 10) / NAV_ITEM_W))
+  // dim age line) separated by vertical rules, windowed around the
+  // highlight. The pinned new-session cell leads, at its full label width —
+  // so a terminal too narrow for even one session cell shows zero of them
+  // (the "› N more" tail still says what's there) rather than wrapping the
+  // bar onto an extra row and pushing the layout past the frame.
+  const cellCapacity = Math.max(
+    0,
+    Math.floor((termCols - NAV_NEW_W - 10) / (NAV_ITEM_W + 1)),
+  )
   const selectedRowIdx = Math.max(0, rows.findIndex((s) => s.id === selected))
-  const win = sidebarSlice(rows.length, cellCapacity, selectedRowIdx)
+  // sidebarSlice always keeps one entry in frame, so the no-room case is
+  // handled here rather than by widening its contract.
+  const win =
+    cellCapacity === 0
+      ? { start: 0, end: 0 }
+      : sidebarSlice(rows.length, cellCapacity, selectedRowIdx)
   const navFocused = focus === 'nav'
   const nav = (
     <Box flexDirection="column" height={navRows} flexShrink={0}>
       <Text dimColor>{'─'.repeat(Math.max(0, termCols))}</Text>
       <Box>
-        {/* The pinned new-session cell. */}
-        <Box width={8} flexShrink={0} flexDirection="column">
-          <Text wrap="truncate">
+        {/* The pinned new-session cell, always at its full label width
+            (flexShrink=0 + an explicit width, so a crowded bar drops
+            session cells instead of clipping this one). */}
+        <Box width={NAV_NEW_W} flexShrink={0} flexDirection="column">
+          <Text>
             {' '}
             {selected === 'new' && navFocused ? (
               <Text bold color="cyan" inverse>
-                {` ${SELECTION_GLYPH} New `}
+                {` ${SELECTION_GLYPH} ${NAV_NEW_LABEL.slice(2)} `}
               </Text>
             ) : (
               <Text bold color="cyan">
-                + New
+                {NAV_NEW_LABEL}
               </Text>
             )}
           </Text>
@@ -522,31 +544,39 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
           const desc = rowDescription(s)
           const descW = NAV_ITEM_W - 4
           return (
-            <Box key={s.id} width={NAV_ITEM_W} flexShrink={0} flexDirection="column">
-              <Text wrap="truncate">
-                {' '}
-                <Text color={cursorHere ? 'cyan' : g.color} dimColor={!cursorHere && g.dim}>
-                  {cursorHere ? SELECTION_GLYPH : g.glyph}
-                </Text>{' '}
-                <Text
-                  color={cursorHere ? 'cyan' : attention.has(s.id) ? 'cyan' : undefined}
-                  inverse={cursorHere}
-                  bold={isOpen}
-                  dimColor={!cursorHere && !attention.has(s.id) && g.dim}
-                >
-                  {cursorHere
-                    ? ` ${desc.slice(0, Math.max(4, descW - 2))} `
-                    : desc.slice(0, Math.max(4, descW))}
+            <React.Fragment key={s.id}>
+              {/* A vertical rule between cells, spanning both cell rows —
+                  the bar reads as discrete sessions, not one run of text. */}
+              <Box width={1} flexShrink={0} flexDirection="column">
+                <Text dimColor>│</Text>
+                <Text dimColor>│</Text>
+              </Box>
+              <Box width={NAV_ITEM_W} flexShrink={0} flexDirection="column">
+                <Text wrap="truncate">
+                  {' '}
+                  <Text color={cursorHere ? 'cyan' : g.color} dimColor={!cursorHere && g.dim}>
+                    {cursorHere ? SELECTION_GLYPH : g.glyph}
+                  </Text>{' '}
+                  <Text
+                    color={cursorHere ? 'cyan' : attention.has(s.id) ? 'cyan' : undefined}
+                    inverse={cursorHere}
+                    bold={isOpen}
+                    dimColor={!cursorHere && !attention.has(s.id) && g.dim}
+                  >
+                    {cursorHere
+                      ? ` ${desc.slice(0, Math.max(4, descW - 2))} `
+                      : desc.slice(0, Math.max(4, descW))}
+                  </Text>
                 </Text>
-              </Text>
-              <Text wrap="truncate">
-                {'   '}
-                <Text dimColor>
-                  {shortAge(lastEventAt(s))} · {s.source === 'laptop' ? 'laptop' : 'cloud'}
-                  {attention.has(s.id) ? ' · needs you' : ''}
+                <Text wrap="truncate">
+                  {'   '}
+                  <Text dimColor>
+                    {shortAge(lastEventAt(s))} · {s.source === 'laptop' ? 'laptop' : 'cloud'}
+                    {attention.has(s.id) ? ' · needs you' : ''}
+                  </Text>
                 </Text>
-              </Text>
-            </Box>
+              </Box>
+            </React.Fragment>
           )
         })}
         {win.end < rows.length && (
@@ -647,9 +677,9 @@ const PICKER_ROWS: readonly PickerRow[] = [
 ]
 
 // The new-session pane, mirroring the dashboard's home composer
-// (app.ellipsis.dev/[login]): a centered "What would you like to do?"
-// heading a third of the way down, then ONE box — a single-line prompt
-// input with the Agent / Model / Repository selects as compact chips along
+// (app.ellipsis.dev/[login]): a centered "What are we shipping today?"
+// heading a third of the way down, then ONE box — a prompt input that wraps
+// as you type, with the Agent / Model / Repository selects as compact chips along
 // the box's bottom edge. ↓ from the prompt reaches the chip row, ←/→ move
 // between chips, enter/↓ opens a chip's option list ([x] marks the pick).
 // Inside an open list ↑/↓ walk, → (or enter/space) activates the
@@ -665,6 +695,7 @@ function NewSessionPane({
   error,
   configs,
   repos,
+  models,
   onSubmit,
   onLeave,
   rawMode,
@@ -677,6 +708,7 @@ function NewSessionPane({
   // null while loading; [] when the account has none / the fetch failed.
   configs: SavedAgentConfig[] | null
   repos: string[] | null
+  models: SupportedModel[] | null
   onSubmit: (
     text: string,
     choices: { configId: string | null; model: string | null; repos: string[] },
@@ -708,7 +740,9 @@ function NewSessionPane({
     ],
     [configs],
   )
-  const modelOptions = COMPOSER_MODELS
+  // The server's selectable set (GET /v1/models); before it lands — and on an
+  // older server that has no such route — the built-in fallback list.
+  const modelOptions = useMemo(() => composerModelOptions(models ?? []), [models])
   const repoOptions = useMemo(
     () => [
       { id: null as string | null, label: 'Default (detected)' },
@@ -794,6 +828,15 @@ function NewSessionPane({
         return
       }
       if (starting) return
+      // Word/line jumps and kills (option+←/→, ctrl+a/e/w/u/k, …) act on the
+      // prompt from anywhere in the form, dropping focus back onto it.
+      const edited = applyEditShortcut({ text, cursor }, ch, key)
+      if (edited) {
+        setRow('prompt')
+        setText(edited.text)
+        setCursor(edited.cursor)
+        return
+      }
       if (row !== 'prompt') {
         // The option rows under the prompt box, walked vertically: ↑/↓ move
         // between them (↑ off the first returns to the prompt, ↓ off the
@@ -876,6 +919,10 @@ function NewSessionPane({
   // How many dropdown options fit in the space above the input: the pane
   // minus the heading, notices, input box, rows, and hints (~13 rows).
   const dropdownCapacity = Math.max(3, height - 13)
+  // The wrap width inside the input box: the pane minus the box's own left
+  // and right padding (the "▶ " prompt is part of the wrapped text).
+  const inputWidth = Math.max(8, width - 2)
+  const caretVisible = focused && row === 'prompt' && !starting && openPicker === null
   const open = openPicker
   const openOptions = open ? optionsFor(open.key) : []
   const openHover = open ? Math.min(open.hover, openOptions.length - 1) : 0
@@ -889,19 +936,21 @@ function NewSessionPane({
     // + option rows pin to the bottom edge (just above the session nav),
     // where they NEVER move — an open dropdown expands upward instead of
     // pushing the input around.
-    <Box width={width} height={height} flexDirection="column" paddingLeft={1}>
+    // No pane padding: the input's rules span the full terminal width like
+    // the header's and the nav's (the rows inside carry their own indents).
+    <Box width={width} height={height} flexDirection="column">
       <Box flexGrow={1} />
       <Box justifyContent="center">
-        <Text bold>What would you like to do?</Text>
+        <Text bold>What are we shipping today?</Text>
       </Box>
       <Box flexGrow={1} />
-      {error && <Text color="red">✗ {error}</Text>}
-      {starting && <Text dimColor>✻ Starting session…</Text>}
+      {error && <Text color="red"> ✗ {error}</Text>}
+      {starting && <Text dimColor> ✻ Starting session…</Text>}
       {/* The open row's option list, a popup ABOVE the input (the input is
           docked; menus open upward like any bottom bar's): ↑/↓ walk,
           → activates, ← backs out. [x] marks the pick. */}
       {open && (
-        <Box flexDirection="column" paddingLeft={4}>
+        <Box flexDirection="column" paddingLeft={5}>
           <Text dimColor>{PICKER_ROWS.find((r) => r.key === open.key)?.label}:</Text>
           {win.start > 0 && <Text dimColor>… {win.start} more</Text>}
           {openOptions.slice(win.start, win.end).map((opt, j) => {
@@ -943,24 +992,27 @@ function NewSessionPane({
         minHeight={5}
         alignItems="flex-start"
         paddingLeft={1}
+        paddingRight={1}
       >
-        <Text wrap="truncate" key={`${text}:${cursor}:${focused && row === 'prompt'}`}>
-          <Text color="cyan" dimColor={!focused || row !== 'prompt'}>
-            {SELECTION_GLYPH}{' '}
+        {/* Wraps instead of truncating: a long prompt flows onto the next
+            row (the box grows downward into the spacer above) rather than
+            running off the right edge. The explicit width is what ink wraps
+            against; the key remounts the node so a stale measurement can't
+            wrap the caret onto the border row. */}
+        <Box width={inputWidth}>
+          <Text wrap="wrap" key={`${text}:${cursor}:${focused && row === 'prompt'}`}>
+            <Text color="cyan" dimColor={!focused || row !== 'prompt'}>
+              {SELECTION_GLYPH}{' '}
+            </Text>
+            {text.slice(0, cursor)}
+            {caretVisible && (
+              <Text inverse>{cursor < text.length ? text[cursor] : ' '}</Text>
+            )}
+            {cursor < text.length ? text.slice(cursor + (caretVisible ? 1 : 0)) : ''}
+            {text === '' && !caretVisible && ' '}
+            {text === '' && <Text dimColor>Describe the task…</Text>}
           </Text>
-          {text.slice(0, cursor)}
-          {focused && row === 'prompt' && !starting && openPicker === null && (
-            <Text inverse>{cursor < text.length ? text[cursor] : ' '}</Text>
-          )}
-          {cursor < text.length
-            ? text.slice(
-                cursor +
-                  (focused && row === 'prompt' && !starting && openPicker === null ? 1 : 0),
-              )
-            : ''}
-          {text === '' && (focused && row === 'prompt' ? '' : ' ')}
-          {text === '' && <Text dimColor>Describe the task…</Text>}
-        </Text>
+        </Box>
       </Box>
       {/* The run controls, one row each below the input: Repository, Agent,
           Model. →/enter opens a row's option list ABOVE the input (the
@@ -971,7 +1023,7 @@ function NewSessionPane({
         const isOpen = openPicker?.key === r.key
         return (
           <Text key={r.key} wrap="truncate">
-            {'  '}
+            {'   '}
             <Text color="cyan" dimColor={!active && !isOpen}>
               {active || isOpen ? SELECTION_GLYPH : ' '}
             </Text>{' '}
@@ -990,7 +1042,7 @@ function NewSessionPane({
       {/* Always rendered (blank while a dropdown is open) so the docked
           input never shifts by the hint row's height. */}
       <Text dimColor>
-        {open ? ' ' : '  enter: start · ↓ options · esc: sessions'}
+        {open ? ' ' : '   enter: start · ↓ options · esc: sessions'}
       </Text>
     </Box>
   )

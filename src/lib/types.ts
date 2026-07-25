@@ -336,6 +336,19 @@ export interface ListAgentTemplatesResponse {
   first_run_yaml: string
 }
 
+// One model a customer may select for their agent, from the registry behind
+// the dashboard's rate table. `is_default_agent_model` marks what the server
+// resolves "Default" to.
+export interface SupportedModel {
+  id: string
+  display_name: string
+  is_default_agent_model: boolean
+}
+
+export interface GetSupportedModelsResponse {
+  models: SupportedModel[]
+}
+
 export interface ListAgentSessionsQuery {
   config_id?: string
   source?: AgentSessionSource[]

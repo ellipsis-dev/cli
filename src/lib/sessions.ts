@@ -1,6 +1,6 @@
 import { sessionStatusWord } from '@ellipsis-dev/sdk/stream'
 import type { AgentSessionWire } from '@ellipsis-dev/sdk'
-import type { AgentSession } from './types'
+import type { AgentSession, SupportedModel } from './types'
 
 // Pure session-model helpers shared by the connect command and the
 // multi-session UI (SessionsApp). No I/O here — everything is testable.
@@ -155,18 +155,30 @@ export function attentionFlip(prevWord: string | undefined, nextWord: string): b
 
 // --------------------------- new-session picker ---------------------------
 
-// The agent-selectable models for the new-session composer, most capable
-// first (the dashboard's GET /models ordering). Static because /models is a
-// dashboard-cookie route the CLI's bearer token can't call; keep in sync
-// with model_registry.py's agent_selectable set. `null` id = let the server
-// pick (DEFAULT_AGENT_MODEL).
-export const COMPOSER_MODELS: ReadonlyArray<{ id: string | null; label: string }> = [
-  { id: null, label: 'Default (Claude Opus 4.8)' },
+export type ComposerModel = { id: string | null; label: string }
+
+// The composer's model list when GET /v1/models is unavailable (an older
+// server): the agent-selectable set as of this build, most expensive first.
+// `null` id = let the server pick (DEFAULT_AGENT_MODEL).
+export const COMPOSER_MODELS: ReadonlyArray<ComposerModel> = [
+  { id: null, label: 'Default' },
   { id: 'claude-fable-5', label: 'Claude Fable 5' },
+  { id: 'claude-opus-5', label: 'Claude Opus 5' },
   { id: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
   { id: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
   { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
 ]
+
+// The composer's model options from the server's list, keeping its order and
+// naming the model "Default" resolves to.
+export function composerModelOptions(models: readonly SupportedModel[]): ComposerModel[] {
+  if (models.length === 0) return [...COMPOSER_MODELS]
+  const fallback = models.find((m) => m.is_default_agent_model)
+  return [
+    { id: null, label: fallback ? `Default (${fallback.display_name})` : 'Default' },
+    ...models.map((m) => ({ id: m.id as string | null, label: m.display_name })),
+  ]
+}
 
 // A saved config's display name (the YAML's ellipsis.name), falling back to
 // the row id.
