@@ -5,17 +5,25 @@ import {
   cursorLineUp,
   deliveredUnechoedSends,
   deriveSandboxState,
-  estimateItemRows,
+  lastLines,
   foldRun,
-  gutterFor,
   hookPhrase,
   humanDuration,
   reshapeTranscript,
-  sandboxStepLine,
-  viewportSlice,
-  withRenderedMarkdown,
-  type SandboxStep,
+  sessionLogText,
 } from '../src/ui/ConnectApp'
+import {
+  anchorAt,
+  anchorIndex,
+  entryRange,
+  gutterFor,
+  itemRows,
+  layOutItems,
+  rowViewport,
+  snapToEntry,
+  withRenderedMarkdown,
+  type TranscriptRow,
+} from '../src/ui/transcriptRows'
 import stripAnsi from 'strip-ansi'
 import type { TranscriptItem } from '@ellipsis-dev/sdk/store'
 
@@ -25,6 +33,13 @@ function rec(recordType: string, payload: Record<string, unknown> = {}, source =
 }
 
 describe('deriveSandboxState', () => {
+  // The whole startup story is ONE flat log, in feed order — the shape that
+  // replaced the old session → sandbox → phase → per-phase-tail tree.
+  const texts = (state: ReturnType<typeof deriveSandboxState>) =>
+    (state?.log ?? []).map((l) => l.text)
+  const kinds = (state: ReturnType<typeof deriveSandboxState>) =>
+    (state?.log ?? []).map((l) => l.kind)
+
   it('returns null before any lifecycle record', () => {
     expect(deriveSandboxState([], 0)).toBeNull()
     expect(deriveSandboxState([rec('assistant', {}, 'claude_code')], 0)).toBeNull()
@@ -34,7 +49,6 @@ describe('deriveSandboxState', () => {
     const scheduled = deriveSandboxState([rec('session_scheduled', { source: 'cli' })], 0)
     expect(scheduled?.headline).toBe('Session scheduled…')
     expect(scheduled?.done).toBe(false)
-    expect(scheduled?.sandboxLine).toBeNull()
 
     const starting = deriveSandboxState(
       [
@@ -59,17 +73,7 @@ describe('deriveSandboxState', () => {
     expect(ready?.sandboxDone).toBe(true)
   })
 
-  it('carries the config name as its own child line, not in the headline', () => {
-    const state = deriveSandboxState(
-      [rec('session_scheduled', { source: 'cli', config_name: 'deployer' })],
-      0,
-    )
-    expect(state?.headline).toBe('Session scheduled…')
-    expect(state?.configName).toBe('deployer')
-    expect(state?.configCommitSha).toBeNull()
-  })
-
-  it('carries the config commit sha when the backend sends it', () => {
+  it('heads the log with the config, and keeps it across the starting transition', () => {
     const state = deriveSandboxState(
       [
         rec('session_scheduled', {
@@ -77,25 +81,17 @@ describe('deriveSandboxState', () => {
           config_name: 'deployer',
           config_commit_sha: 'abc1234def5678',
         }),
-      ],
-      0,
-    )
-    expect(state?.configCommitSha).toBe('abc1234def5678')
-  })
-
-  it('keeps the config name across the starting transition (no flash)', () => {
-    const state = deriveSandboxState(
-      [
-        rec('session_scheduled', { source: 'cli', config_name: 'deployer' }),
         rec('session_starting', { attempt: 0, wake_index: 0 }),
       ],
       0,
     )
+    // The config outlives the restart that clears the log below it.
     expect(state?.headline).toBe('Session starting…')
     expect(state?.configName).toBe('deployer')
+    expect(texts(state)[0]).toBe('Using deployer @ abc1234')
   })
 
-  it('builds the phase timeline from sandbox_phase transitions', () => {
+  it('logs each phase as ONE line, opened then closed in place', () => {
     const state = deriveSandboxState(
       [
         rec('sandbox_starting', { repositories: ['o/r'] }),
@@ -110,152 +106,71 @@ describe('deriveSandboxState', () => {
       ],
       0,
     )
-    expect(state).not.toBeNull()
-    expect(state?.done).toBe(false)
-    expect(state?.sandboxLine).toBe('Sandbox starting…')
-    expect(state?.steps.map((s) => [s.key, s.status])).toEqual([
-      ['image', 'done'],
-      ['clone', 'running'],
+    // Not "Preparing image…" AND "Preparing image ✓" — the same line closes.
+    expect(texts(state)).toEqual([
+      'Starting sandbox…',
+      'Preparing image · cached image (1.2s)',
+      'Fetching repositories…',
     ])
-    expect(state?.steps[0].label).toBe('Preparing image')
-    expect(state?.steps[0].note).toBe('cached image (1.2s)')
+    expect(kinds(state)).toEqual(['step', 'done', 'step'])
   })
 
-  it('attaches output chunks to the transition-opened step', () => {
+  it('puts build and setup OUTPUT in the same flat log, in order', () => {
     const state = deriveSandboxState(
       [
-        rec('sandbox_phase', { phase: 'clone', status: 'started' }),
-        rec('sandbox_output', { phase: 'clone', step: 'o/r', chunk: 0, lines: ['HEAD is now at x'] }),
-        rec('sandbox_output', { phase: 'clone', step: 'o/r', chunk: 1, lines: ['done'] }),
-      ],
-      0,
-    )
-    expect(state?.steps).toHaveLength(1)
-    expect(state?.steps[0].key).toBe('clone')
-    expect(state?.steps[0].lines).toEqual(['HEAD is now at x', 'done'])
-  })
-
-  it('keys per-step transitions (hooks) separately and labels them as hooks', () => {
-    const state = deriveSandboxState(
-      [
+        rec('sandbox_phase', { phase: 'image', step: 'build', status: 'started' }),
+        rec('sandbox_output', { phase: 'image', step: 'build', chunk: 0, lines: ['#1 FROM base'] }),
+        rec('sandbox_output', { phase: 'image', step: 'build', chunk: 1, lines: ['#2 RUN npm ci'] }),
+        rec('sandbox_phase', {
+          phase: 'image',
+          step: 'build',
+          status: 'completed',
+          duration_ms: 42000,
+        }),
         rec('sandbox_phase', { phase: 'hooks', step: 'post_clone', status: 'started' }),
         rec('sandbox_output', { phase: 'hooks', step: 'post_clone', chunk: 0, lines: ['npm ci'] }),
-        rec('sandbox_phase', {
-          phase: 'hooks',
-          step: 'post_clone',
-          status: 'completed',
-          duration_ms: 800,
-        }),
       ],
       0,
     )
-    expect(state?.steps.map((s) => s.key)).toEqual(['hooks:post_clone'])
-    expect(state?.steps[0].label).toBe('Post-clone setup')
-    expect(state?.steps[0].status).toBe('done')
-    expect(state?.steps[0].note).toBe('(800ms)')
-    expect(state?.steps[0].lines).toEqual(['npm ci'])
-    // No bare 'hooks' phase entry ever opens, so hook steps stay flat.
-    expect(state?.steps[0].child).toBe(false)
-  })
-
-  it('nests the image build/container/smoke steps under Preparing image', () => {
-    const state = deriveSandboxState(
-      [
-        rec('sandbox_starting', { repositories: ['o/r'] }),
-        rec('sandbox_phase', { phase: 'image', status: 'started' }),
-        rec('sandbox_phase', { phase: 'image', step: 'build', status: 'started' }),
-        rec('sandbox_output', {
-          phase: 'image',
-          step: 'build',
-          chunk: 0,
-          lines: ['#1 FROM base'],
-        }),
-        rec('sandbox_output', {
-          phase: 'image',
-          step: 'build',
-          chunk: 1,
-          lines: ['#2 RUN npm ci'],
-        }),
-        rec('sandbox_phase', {
-          phase: 'image',
-          step: 'build',
-          status: 'completed',
-          duration_ms: 42000,
-        }),
-        rec('sandbox_phase', { phase: 'image', step: 'container', status: 'started' }),
-        rec('sandbox_phase', {
-          phase: 'image',
-          step: 'container',
-          status: 'completed',
-          duration_ms: 829000,
-        }),
-        rec('sandbox_phase', { phase: 'image', step: 'smoke', status: 'started' }),
-        rec('sandbox_phase', {
-          phase: 'image',
-          step: 'smoke',
-          status: 'completed',
-          duration_ms: 1200,
-        }),
-        rec('sandbox_phase', {
-          phase: 'image',
-          status: 'completed',
-          duration_ms: 873000,
-          detail: { cache_tier: 'full' },
-        }),
-      ],
-      0,
-    )
-    expect(state?.steps.map((s) => [s.key, s.label, s.status, s.child])).toEqual([
-      ['image', 'Preparing image', 'done', false],
-      ['image:build', 'Building image', 'done', true],
-      ['image:container', 'Starting container', 'done', true],
-      ['image:smoke', 'Smoke check', 'done', true],
+    // This is the point of the flat log: the output you want while a session
+    // is slow to start is right there, not three keystrokes deep.
+    expect(texts(state)).toEqual([
+      'Building image (42s)',
+      '#1 FROM base',
+      '#2 RUN npm ci',
+      'Post-clone setup…',
+      'npm ci',
     ])
-    // The live builder log attaches to the build step, not the bare phase.
-    expect(state?.steps[0].lines).toEqual([])
-    expect(state?.steps[1].lines).toEqual(['#1 FROM base', '#2 RUN npm ci'])
-    expect(state?.steps[1].note).toBe('(42s)')
-    expect(state?.steps[2].note).toBe('(13m 49s)')
-    expect(state?.steps[3].note).toBe('(1.2s)')
-    expect(state?.steps[0].note).toBe('full build (14m 33s)')
+    expect(kinds(state)).toEqual(['done', 'output', 'output', 'step', 'output'])
   })
 
-  it('keeps the sandbox_ready total on phase_timings, never the step durations', () => {
+  it('logs output that arrives with no phase transition to open it', () => {
     const state = deriveSandboxState(
       [
-        rec('sandbox_starting', {}),
-        rec('sandbox_phase', { phase: 'image', status: 'started' }),
-        rec('sandbox_phase', { phase: 'image', step: 'build', status: 'started' }),
-        rec('sandbox_phase', {
-          phase: 'image',
-          step: 'build',
-          status: 'completed',
-          duration_ms: 42000,
-        }),
-        rec('sandbox_phase', { phase: 'image', status: 'completed', duration_ms: 43000 }),
-        rec('sandbox_ready', {
-          cache_tier: 'full',
-          phase_timings: { image: 43, clone: 17 },
-        }),
+        rec('sandbox_starting'),
+        rec('sandbox_output', { phase: 'setup', chunk: 0, lines: ['a'] }),
+        rec('sandbox_output', { phase: 'setup', chunk: 1, lines: ['b', 'c'] }),
       ],
       0,
     )
-    expect(state?.sandboxLine).toBe('Sandbox ready · full build (1m)')
+    expect(texts(state)).toEqual(['Starting sandbox…', 'a', 'b', 'c'])
   })
 
-  it('renders unknown image steps verbatim without nesting surprises (open vocabulary)', () => {
-    const state = deriveSandboxState(
-      [
-        rec('sandbox_phase', { phase: 'image', step: 'warm_cache', status: 'started' }),
-      ],
-      0,
-    )
-    expect(state?.steps[0].label).toBe('warm_cache')
-    // No bare image entry in this feed, so the step stays flat.
-    expect(state?.steps[0].child).toBe(false)
+  it('labels phases through the open vocabulary, unknown ones verbatim', () => {
+    expect(
+      texts(deriveSandboxState([rec('sandbox_phase', { phase: 'warmup', status: 'started' })], 0)),
+    ).toEqual(['Warmup…'])
+    expect(
+      texts(
+        deriveSandboxState(
+          [rec('sandbox_phase', { phase: 'image', step: 'warm_cache', status: 'started' })],
+          0,
+        ),
+      ),
+    ).toEqual(['warm_cache…'])
   })
 
-  it('marks a failed transition and keeps its duration', () => {
+  it('marks a failed phase and keeps its duration', () => {
     const state = deriveSandboxState(
       [
         rec('sandbox_phase', { phase: 'setup', status: 'started' }),
@@ -263,38 +178,11 @@ describe('deriveSandboxState', () => {
       ],
       0,
     )
-    expect(state?.steps[0].status).toBe('failed')
-    expect(sandboxStepLine(state!.steps[0])).toBe('Running setup failed (4s)')
+    expect(texts(state)).toEqual(['Running setup failed (4s)'])
+    expect(kinds(state)).toEqual(['failed'])
   })
 
-  it('renders unknown phases generically (open vocabulary)', () => {
-    const state = deriveSandboxState(
-      [rec('sandbox_phase', { phase: 'warmup', status: 'started' })],
-      0,
-    )
-    expect(state?.steps[0].label).toBe('Warmup')
-  })
-
-  it('infers steps from bare output chunks (feeds without transitions)', () => {
-    const state = deriveSandboxState(
-      [
-        rec('sandbox_starting'),
-        rec('sandbox_output', { phase: 'setup', chunk: 0, lines: ['a'] }),
-        rec('sandbox_output', { phase: 'setup', chunk: 1, lines: ['b', 'c'] }),
-        rec('sandbox_output', { phase: 'hooks', step: 'post_clone', chunk: 0, lines: ['d'] }),
-      ],
-      0,
-    )
-    expect(state?.steps.map((s) => [s.key, s.status])).toEqual([
-      ['setup', 'done'],
-      ['post_clone', 'running'],
-    ])
-    expect(state?.steps[0].lines).toEqual(['a', 'b', 'c'])
-    expect(state?.steps[0].label).toBe('Building image')
-    expect(state?.steps[1].label).toBe('Post-clone setup')
-  })
-
-  it('closes on sandbox_ready: sandbox summary line + Session ready! headline', () => {
+  it('closes on sandbox_ready with the phase_timings total, not step durations', () => {
     const state = deriveSandboxState(
       [
         rec('session_scheduled', { source: 'cli' }),
@@ -311,13 +199,17 @@ describe('deriveSandboxState', () => {
     )
     expect(state?.headline).toBe('Session ready!')
     expect(state?.done).toBe(true)
-    expect(state?.sandboxLine).toBe('Sandbox ready · cached image (29s)')
     expect(state?.sandboxDone).toBe(true)
-    // A phase still open at ready closes as done.
-    expect(state?.steps[0].status).toBe('done')
+    expect(texts(state)).toEqual([
+      'Starting sandbox…',
+      'Preparing image…',
+      'Sandbox ready · cached image (29s)',
+    ])
+    // A phase still open when the box came up is no longer live.
+    expect(kinds(state)).toEqual(['step', 'done', 'done'])
   })
 
-  it('starts a fresh story on a wake: Waking headline, ready via session_resumed', () => {
+  it('starts a fresh log on a wake, dropping the previous start', () => {
     const state = deriveSandboxState(
       [
         rec('session_scheduled', { source: 'cli' }),
@@ -334,9 +226,7 @@ describe('deriveSandboxState', () => {
     )
     expect(state?.headline).toBe('Waking the session…')
     expect(state?.done).toBe(false)
-    expect(state?.sandboxLine).toBe('Sandbox starting…')
-    expect(state?.steps.map((s) => s.key)).toEqual(['restore'])
-    expect(state?.steps[0].label).toBe('Restoring workspace')
+    expect(texts(state)).toEqual(['Starting sandbox…', 'Restoring workspace…'])
 
     const resumed = deriveSandboxState(
       [
@@ -365,7 +255,7 @@ describe('deriveSandboxState', () => {
     expect(state?.done).toBe(true)
   })
 
-  it('shows Retrying as the headline on an infra retry', () => {
+  it('shows Retrying as the headline and drops the failed start log', () => {
     const state = deriveSandboxState(
       [
         rec('session_starting', { attempt: 0, wake_index: 0 }),
@@ -376,9 +266,7 @@ describe('deriveSandboxState', () => {
     )
     expect(state?.headline).toBe('Retrying · sandbox provisioning failed')
     expect(state?.done).toBe(false)
-    // The failed start's sandbox children drop with the fresh story.
-    expect(state?.sandboxLine).toBeNull()
-    expect(state?.steps).toHaveLength(0)
+    expect(state?.log).toHaveLength(0)
   })
 
   it('ignores records at or below the render cursor (--no-records)', () => {
@@ -388,36 +276,23 @@ describe('deriveSandboxState', () => {
   })
 })
 
-describe('sandboxStepLine', () => {
-  const step = (over: Partial<SandboxStep>): SandboxStep => ({
-    key: 'clone',
-    label: 'Fetching repositories',
-    status: 'running',
-    note: null,
-    lines: [],
-    inferred: false,
-    child: false,
-    ...over,
+describe('lastLines', () => {
+  const log = Array.from({ length: 25 }, (_, i) => ({
+    key: `k${i}`,
+    kind: 'output' as const,
+    text: `line ${i}`,
+  }))
+
+  it('keeps the NEWEST lines — the tail is what you watch during a build', () => {
+    expect(lastLines(log, 10).map((l) => l.text)).toEqual([
+      'line 15','line 16','line 17','line 18','line 19',
+      'line 20','line 21','line 22','line 23','line 24',
+    ])
   })
 
-  it('shows a running step as its bare label (the log tail renders beneath, not inline)', () => {
-    expect(sandboxStepLine(step({}))).toBe('Fetching repositories…')
-    expect(sandboxStepLine(step({ lines: ['a', 'HEAD is now at x'] }))).toBe(
-      'Fetching repositories…',
-    )
-  })
-
-  it('shows a done step with its closing note', () => {
-    expect(sandboxStepLine(step({ status: 'done' }))).toBe('Fetching repositories')
-    expect(sandboxStepLine(step({ status: 'done', note: 'cached image (1.2s)' }))).toBe(
-      'Fetching repositories · cached image (1.2s)',
-    )
-  })
-
-  it('says failed', () => {
-    expect(sandboxStepLine(step({ status: 'failed', note: '(4s)' }))).toBe(
-      'Fetching repositories failed (4s)',
-    )
+  it('returns everything when the log is shorter than the window', () => {
+    expect(lastLines(log.slice(0, 3), 10)).toHaveLength(3)
+    expect(lastLines([], 10)).toEqual([])
   })
 })
 
@@ -558,6 +433,126 @@ describe('reshapeTranscript', () => {
     expect(items[1].text).toBe('turn ended with an error')
     expect(items[1].isError).toBe(true)
   })
+
+  it('logs the session going to sleep and waking, in feed order', () => {
+    const { items } = reshapeTranscript(
+      [
+        assistant('done for now'),
+        rec('session_idle'),
+        rec('session_starting', { wake_index: 1 }),
+        rec('session_resumed'),
+        assistant('back'),
+      ],
+      0,
+    )
+    expect(items.map((i) => i.text)).toEqual([
+      'done for now',
+      'Session asleep — your next message wakes it',
+      'Waking the session…',
+      'Session awake — picking up where it left off',
+      'back',
+    ])
+  })
+
+  it('leaves startup detail out of the chat — that story is the startup block', () => {
+    const { items } = reshapeTranscript(
+      [
+        rec('sandbox_starting'),
+        rec('sandbox_phase', { phase: 'setup', status: 'started' }),
+        rec('sandbox_output', { lines: ['installing…'] }),
+        rec('sandbox_ready', { cache_tier: 'exact' }),
+        rec('turn_started'),
+        assistant('hello'),
+      ],
+      0,
+    )
+    expect(items.map((i) => i.text)).toEqual(['hello'])
+  })
+})
+
+describe('sessionLogText', () => {
+  const lc = (record_type: string, payload: Record<string, unknown> = {}) =>
+    ({ feed_seq: 1, source: 'lifecycle', record_type, payload })
+
+  it('does not log the FIRST start — the startup block tells that story', () => {
+    expect(sessionLogText(lc('session_starting', {}))).toBeNull()
+    expect(sessionLogText(lc('session_starting', { wake_index: 0 }))).toBeNull()
+  })
+
+  it('logs a wake, which happens long after the startup block settled', () => {
+    expect(sessionLogText(lc('session_starting', { wake_index: 2 }))).toBe('Waking the session…')
+  })
+
+  it('logs an infra retry distinctly from a wake', () => {
+    expect(sessionLogText(lc('session_starting', { attempt: 1 }))).toContain('transient error')
+    expect(sessionLogText(lc('session_retrying', { reason: 'node lost' }))).toBe(
+      'Retrying · node lost',
+    )
+  })
+
+  it('logs a cancellation with its reason when there is one', () => {
+    expect(sessionLogText(lc('session_cancelled', {}))).toBe('Session cancelled')
+    expect(sessionLogText(lc('session_cancelled', { reason: 'budget' }))).toBe(
+      'Session cancelled · budget',
+    )
+  })
+
+  it('ignores provisioning chatter', () => {
+    for (const t of ['sandbox_starting', 'sandbox_phase', 'sandbox_output', 'sandbox_ready', 'turn_started']) {
+      expect(sessionLogText(lc(t))).toBeNull()
+    }
+  })
+})
+
+describe('layOutItems', () => {
+  const prose = (key: string): TranscriptItem => ({ key, kind: 'assistant', text: 'hi' })
+  const user = (key: string): TranscriptItem => ({ key, kind: 'user', text: 'do it' })
+  const call = (key: string): TranscriptItem => ({ key, kind: 'tool', text: 'Bash' })
+  const res = (key: string): TranscriptItem => ({ key, kind: 'tool_result', text: 'ok' })
+  const fold = (key: string): TranscriptItem => ({ key: `grp:${key}`, kind: 'notice', text: 'Ran 2' })
+
+  it('nests a call and its result under the message that made them', () => {
+    const out = layOutItems([prose('a'), call('t1'), res('r1')])
+    expect(out.map((p) => [p.item.key, p.indent, p.nested])).toEqual([
+      ['a', 0, false],
+      ['t1', 2, true],
+      ['r1', 2, true],
+    ])
+  })
+
+  it('attaches nested lines, so no blank row detaches them from the parent', () => {
+    const out = layOutItems([prose('a'), call('t1'), res('r1')])
+    expect(out.map((p) => p.attach)).toEqual([false, true, true])
+  })
+
+  it('nests a collapsed fold too — it stands in for the run', () => {
+    const out = layOutItems([prose('a'), fold('t1')])
+    expect(out[1]).toMatchObject({ indent: 2, nested: true })
+  })
+
+  it('nests a turn-opening tool call under the user message that prompted it', () => {
+    const out = layOutItems([user('u'), call('t1')])
+    expect(out[1]).toMatchObject({ indent: 2, nested: true })
+  })
+
+  it('leaves a run with no parent above it flat', () => {
+    // Replayed history can start mid-burst; there is nothing to hang off.
+    const out = layOutItems([call('t1'), res('r1'), prose('a')])
+    expect(out.map((p) => p.nested)).toEqual([false, false, false])
+  })
+
+  it('indents an opened fold\'s children one level FURTHER than the fold', () => {
+    const out = layOutItems([prose('a'), fold('t1'), call('t1'), res('r1')], {
+      indentedKeys: new Set(['t1', 'r1']),
+    })
+    expect(out.map((p) => p.indent)).toEqual([0, 2, 4, 4])
+  })
+
+  it('keeps prose, user messages and notices flat', () => {
+    const notice: TranscriptItem = { key: 'n', kind: 'notice', text: 'Session asleep' }
+    const out = layOutItems([prose('a'), user('u'), notice])
+    expect(out.every((p) => !p.nested && p.indent === 0)).toBe(true)
+  })
 })
 
 describe('gutterFor', () => {
@@ -655,64 +650,201 @@ describe('cursorLineDown', () => {
   })
 })
 
-describe('viewportSlice', () => {
-  const heights = [2, 3, 1, 1]
-
-  it('follows the bottom, fitting as many entries as the budget allows', () => {
-    expect(viewportSlice(heights, 5, { type: 'bottom' })).toEqual({ start: 1, end: 4 })
-    expect(viewportSlice(heights, 100, { type: 'bottom' })).toEqual({ start: 0, end: 4 })
+describe('rowViewport', () => {
+  it('follows the bottom by default, filling the window', () => {
+    expect(rowViewport(10, 4, null)).toMatchObject({ start: 7, end: 10, hiddenBelow: 0 })
+    // The "N above" marker costs a row, so only 3 content rows fit in 4.
+    expect(rowViewport(10, 4, null).hiddenAbove).toBe(7)
   })
 
-  it('anchors to a top entry when scrolled', () => {
-    expect(viewportSlice(heights, 4, { type: 'top', index: 1 })).toEqual({ start: 1, end: 3 })
-    expect(viewportSlice(heights, 2, { type: 'top', index: 0 })).toEqual({ start: 0, end: 1 })
+  it('shows everything when it fits, with no markers', () => {
+    expect(rowViewport(3, 10, null)).toMatchObject({
+      start: 0,
+      end: 3,
+      hiddenAbove: 0,
+      hiddenBelow: 0,
+    })
   })
 
-  it('anchors an entry to the bottom edge for the ↓-snap', () => {
-    expect(viewportSlice(heights, 4, { type: 'end', index: 2 })).toEqual({ start: 1, end: 3 })
+  it('anchors a row to the top when scrolled', () => {
+    // Rows 4..6 with both markers eating a row each out of the 5-row budget.
+    expect(rowViewport(20, 5, 4)).toMatchObject({ start: 4, end: 7 })
   })
 
-  it('always includes the anchor entry, even when it alone overflows', () => {
-    expect(viewportSlice([10], 3, { type: 'bottom' })).toEqual({ start: 0, end: 1 })
-    expect(viewportSlice([10], 3, { type: 'top', index: 0 })).toEqual({ start: 0, end: 1 })
+  it('packs the window full at the bottom edge instead of leaving dead rows', () => {
+    // Anchoring row 18 of 20 in a 6-row budget would show 2 rows and waste 4;
+    // it backs up so the frame is full.
+    const view = rowViewport(20, 6, 18)
+    expect(view.end).toBe(20)
+    expect(view.end - view.start).toBe(5) // one row goes to the "above" marker
+    expect(view.hiddenBelow).toBe(0)
   })
 
   it('handles an empty list', () => {
-    expect(viewportSlice([], 5, { type: 'bottom' })).toEqual({ start: 0, end: 0 })
+    expect(rowViewport(0, 5, null)).toMatchObject({ start: 0, end: 0 })
+  })
+
+  // The layout's load-bearing invariant: one row too many and ink's frame
+  // outgrows the pane, which scrolls the render region and smears stale rows.
+  it('never renders more rows than the budget, for any input', () => {
+    const bad: string[] = []
+    for (let total = 0; total <= 40; total++) {
+      for (let budget = 1; budget <= 20; budget++) {
+        const anchors: (number | null)[] = [null]
+        for (let a = -2; a <= total + 2; a++) anchors.push(a)
+        for (const anchor of anchors) {
+          const v = rowViewport(total, budget, anchor)
+          const rendered =
+            v.end - v.start + (v.showAbove ? 1 : 0) + (v.showBelow ? 1 : 0)
+          if (total > 0 && rendered > budget) {
+            bad.push(`total=${total} budget=${budget} anchor=${anchor}: ${rendered} rows`)
+          }
+          if (v.hiddenAbove !== v.start || v.hiddenBelow !== total - v.end) {
+            bad.push(`counts disagree with slice: ${JSON.stringify(v)}`)
+          }
+          if (v.start > v.end) bad.push(`inverted slice: ${JSON.stringify(v)}`)
+        }
+      }
+    }
+    expect(bad.slice(0, 10)).toEqual([])
+  })
+
+  it('can always reach the very top and the very bottom', () => {
+    for (let total = 1; total <= 30; total++) {
+      for (let budget = 1; budget <= 12; budget++) {
+        // Anchored at row 0 the window starts at the top, with nothing hidden
+        // above it; following the bottom, nothing is hidden below.
+        expect(rowViewport(total, budget, 0).hiddenAbove).toBe(0)
+        expect(rowViewport(total, budget, null).hiddenBelow).toBe(0)
+      }
+    }
   })
 })
 
-describe('estimateItemRows', () => {
-  it('counts plain lines plus the spacer row', () => {
-    expect(estimateItemRows({ key: 'a', kind: 'assistant', text: 'hi' }, 80, false)).toBe(1)
-    expect(
-      estimateItemRows(
-        { key: 'a', kind: 'assistant', text: 'hi\nthere', spaceBefore: true },
-        80,
-        false,
-      ),
-    ).toBe(3)
+describe('itemRows', () => {
+  it('spends no rows on vertical padding, so exchanges pack tightly', () => {
+    const rows = itemRows({ key: 'a', kind: 'assistant', text: 'hi' }, 40, {
+      clamp: false,
+    })
+    expect(rows).toHaveLength(1)
+    expect(rows[0].panel).toBe(true)
   })
 
-  it('accounts for wrapping at the given width', () => {
-    expect(estimateItemRows({ key: 'a', kind: 'assistant', text: 'x'.repeat(100) }, 40, false)).toBe(3)
+  it('emits one row per line of a multi-line body', () => {
+    const rows = itemRows({ key: 'a', kind: 'assistant', text: 'one\ntwo\nthree' }, 40, {
+      clamp: false,
+    })
+    expect(rows.map((r) => r.spans[0].text)).toEqual(['one', 'two', 'three'])
   })
 
-  it('counts the clamped body and the +N marker for collapsible items', () => {
-    const item = {
-      key: 'r',
-      kind: 'tool_result' as const,
-      text: Array.from({ length: 10 }, (_, i) => `l${i}`).join('\n'),
+  it('never emits a row wider than the pane', () => {
+    const rows = itemRows({ key: 'a', kind: 'assistant', text: 'x'.repeat(200) }, 40, {
+      clamp: false,
+    })
+    for (const row of rows) {
+      const width = row.spans.reduce((n, s) => n + stripAnsi(s.text).length, 0)
+      expect(width).toBeLessThanOrEqual(40)
     }
-    expect(estimateItemRows(item, 80, true)).toBe(7) // 6 clamped lines + marker
-    expect(estimateItemRows(item, 80, false)).toBe(10)
+  })
+
+  it('puts the gutter glyph on the first content row only', () => {
+    const rows = itemRows({ key: 'a', kind: 'user', text: 'one\ntwo' }, 40, {
+      clamp: false,
+    })
+    const withGutter = rows.filter((r) => r.gutter)
+    expect(withGutter).toHaveLength(1)
+    expect(withGutter[0].gutter?.text).toBe('◆')
+  })
+
+  it('leads with a spacer row when the item wants space before it', () => {
+    const rows = itemRows({ key: 'a', kind: 'notice', text: 'note', spaceBefore: true }, 40, {
+      clamp: false,
+    })
+    expect(rows[0].spacer).toBe(true)
+  })
+
+  it('clamps a long body, marking how many lines are hidden', () => {
+    const text = Array.from({ length: 10 }, (_, i) => `l${i}`).join('\n')
+    const item = { key: 'r', kind: 'tool_result' as const, text }
+    const collapsed = itemRows(item, 40, { clamp: true })
+    expect(collapsed).toHaveLength(7) // 6 lines + the "+N lines" marker
+    // The row carries the COUNT; the renderer writes the hint, because which
+    // key opens it (→ vs ctrl+r) depends on the highlight — a render concern.
+    expect(collapsed[6].clampedLines).toBe(4)
+    expect(itemRows(item, 40, { clamp: false })).toHaveLength(10)
   })
 
   it('measures visible columns, not escape sequences', () => {
     // A markdown-rendered line carries ANSI codes that occupy no columns.
-    // Counting them would over-estimate the height and desync the viewport.
-    const styled = `[1m${'x'.repeat(30)}[22m`
-    expect(estimateItemRows({ key: 'a', kind: 'assistant', text: styled }, 40, false)).toBe(1)
+    // Counting them would over-count rows and desync the window.
+    const styled = `\u001b[1m${'x'.repeat(30)}\u001b[22m`
+    const rows = itemRows({ key: 'a', kind: 'assistant', text: styled }, 40, {
+      clamp: false,
+    })
+    expect(rows.filter((r) => r.spans.length > 0)).toHaveLength(1)
+  })
+})
+
+describe('row anchors', () => {
+  const rows: TranscriptRow[] = [
+    { id: '0', entryKey: 'a', spans: [] },
+    { id: '1', entryKey: 'b', spans: [], spacer: true },
+    { id: '2', entryKey: 'b', spans: [] },
+    { id: '3', entryKey: 'b', spans: [] },
+    { id: '4', entryKey: 'c', spans: [] },
+  ]
+
+  it('round-trips a row index through an entry-relative anchor', () => {
+    const anchor = anchorAt(rows, 3)
+    expect(anchor).toEqual({ entryKey: 'b', rowOffset: 2 })
+    expect(anchorIndex(rows, anchor!)).toBe(3)
+  })
+
+  it('survives rows being prepended above the anchor', () => {
+    const anchor = anchorAt(rows, 3)!
+    const grown = [{ id: 'x', entryKey: 'z', spans: [] }, ...rows]
+    // Same content row, new flat index — this is what keeps a streamed
+    // append from sliding the window.
+    expect(anchorIndex(grown, anchor)).toBe(4)
+  })
+
+  it('reports a vanished entry so the caller can follow the bottom', () => {
+    expect(anchorIndex(rows, { entryKey: 'gone', rowOffset: 0 })).toBeNull()
+  })
+
+  it('skips an entry leading spacer, which is a separator not content', () => {
+    expect(entryRange(rows, 'b')).toEqual({ first: 2, last: 3 })
+  })
+})
+
+describe('snapToEntry', () => {
+  // Entry 'b' is 10 rows tall, taller than a 4-row window.
+  const rows: TranscriptRow[] = [
+    { id: 'a', entryKey: 'a', spans: [] },
+    ...Array.from({ length: 10 }, (_, i) => ({ id: `b${i}`, entryKey: 'b', spans: [] })),
+    { id: 'c', entryKey: 'c', spans: [] },
+  ]
+
+  it('brings an entry entered from above to the top of the window', () => {
+    expect(snapToEntry(rows, 'a', { start: 5, end: 9 }, 4)).toBe(0)
+  })
+
+  it('shows a too-tall entry from its FIRST line, so it reads from the top', () => {
+    expect(snapToEntry(rows, 'b', { start: 0, end: 4 }, 4)).toBe(1)
+  })
+
+  it('aligns an entry arriving from below to the bottom edge', () => {
+    // 'c' is one row at index 11, entering a 4-row window that ends at 8.
+    expect(snapToEntry(rows, 'c', { start: 4, end: 8 }, 4)).toBe(8)
+  })
+
+  it('leaves the window alone for an entry already fully in frame', () => {
+    const short: TranscriptRow[] = [
+      { id: 'a', entryKey: 'a', spans: [] },
+      { id: 'b', entryKey: 'b', spans: [] },
+      { id: 'c', entryKey: 'c', spans: [] },
+    ]
+    expect(snapToEntry(short, 'b', { start: 0, end: 3 }, 3)).toBeNull()
   })
 })
 
