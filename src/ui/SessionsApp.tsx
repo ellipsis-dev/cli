@@ -8,7 +8,7 @@ import React, {
 } from 'react'
 import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink'
 import type { OpenSocket } from '@ellipsis-dev/sdk/stream'
-import { SESSION_STREAM_PROTOCOL_VERSION, sessionStatusWord } from '@ellipsis-dev/sdk/stream'
+import { SESSION_STREAM_PROTOCOL_VERSION } from '@ellipsis-dev/sdk/stream'
 import { SessionTranscriptStore } from '@ellipsis-dev/sdk/store'
 import type { AgentSessionWire } from '@ellipsis-dev/sdk'
 import type { ApiClient } from '../lib/api'
@@ -22,37 +22,42 @@ import type {
 import { applyEditShortcut } from '../lib/editing'
 import { hyperlink, sessionUrl } from '../lib/urls'
 import { usdNumberFromMillicents } from '../lib/output'
-import { VERSION } from '../lib/constants'
 import {
   attentionFlip,
+  compactTokens,
   composerModelOptions,
   configDisplayName,
   connectability,
-  lastEventAt,
   repoOverrideEntry,
   rowDescription,
   rowGlyph,
+  rowMeta,
   rowStatusWord,
+  navSlice,
+  sessionSource,
   SELECTION_GLYPH,
-  shortAge,
   sidebarSlice,
-  sortSidebarSessions,
+  mergeSidebarSessions,
 } from '../lib/sessions'
+import { randomFact } from '../lib/facts'
+import { SURFACE_ACTIVE, SURFACE_ELEVATED, theme } from '../lib/theme'
 import { ConnectApp } from './ConnectApp'
 
 // The multi-session UI, a vertical stack of four bands:
-//   1. the header — " ellipsis.dev" plus the focused session's meta
-//      (status · cost · model · id · version), closed by a rule
+//   1. the header — " ellipsis.dev" top-left; top-right the focused
+//      session's meta (id · model · cost · tokens), or the who-tag when
+//      no session is focused
 //   2. the chat window (the hosted ConnectApp, full width)
 //   3. the text input (the ConnectApp's composer)
-//   4. the session nav — your running sessions as a horizontal bar
+//   4. the session nav — a vertical list: "+ New session" then your five
+//      most recent sessions
 // This is what a bare `agent`, `agent "prompt"`, and `agent session
 // connect <id>` all open.
 //
 // Focus is modal and esc steps outward: inside the chat esc closes panels,
-// then transcript navigation, then lands on the nav bar. ↓ at the composer's
-// last line reaches the nav too; enter (or ↑/esc) hands it back. Exactly one
-// useInput handler is active at a time.
+// then transcript navigation, then lands on the nav list. ↓ at the composer's
+// last line reaches the nav too; enter (or esc, or ↑ off the top row) hands it
+// back. Exactly one useInput handler is active at a time.
 //
 // Liveness: ONE WebSocket — the focused session's, owned by its ConnectApp —
 // plus a 5s REST poll of the session list for the nav. Transcript stores are
@@ -63,13 +68,26 @@ const SIDEBAR_POLL_MS = 5_000
 const SIDEBAR_LIMIT = 50
 // The nav clock driving the "12s" age tags.
 const AGE_TICK_MS = 5_000
-// One nav cell: dot + truncated description + age, fixed width so the bar
-// windows predictably.
-const NAV_ITEM_W = 30
-// The pinned new-session cell, wide enough for its whole label plus the
-// selected state's padding — it never truncates to "+ Ne…".
 const NAV_NEW_LABEL = '+ New session'
-const NAV_NEW_W = NAV_NEW_LABEL.length + 3
+// The header title pinned to the left edge, and its width — the meta line on
+// the right budgets itself against what's left of the row.
+const HEADER_TITLE = 'ellipsis.dev'
+const TITLE_WIDTH = HEADER_TITLE.length
+// The nav shows six rows: the pinned new-session row plus the five most
+// recent sessions, which scroll under the highlight.
+const NAV_SESSION_ROWS = 5
+
+// Blank canvas cells between the frame and the terminal edge, on all four
+// sides. Everything inside lays out against the inset width/height.
+const APP_INSET = 1
+
+// Extra indent for the session-nav rows, on top of the app inset — the list
+// reads as a distinct column rather than type hanging off the frame edge.
+const NAV_GUTTER = 1
+
+// Horizontal breathing room inside the composer panel — wider than the 1-cell
+// vertical pad so the caret and text start well clear of the panel edge.
+const COMPOSER_PAD_X = 2
 
 export interface SessionsAppProps {
   api: ApiClient
@@ -77,9 +95,16 @@ export interface SessionsAppProps {
   // app.ellipsis.dev base + the customer login, for per-session dashboard links.
   appBase: string
   customerLogin: string
+  // My GitHub login for the header's "@me in account" tag; null on an API-key
+  // credential, which has no GitHub user behind it.
+  ghLogin: string | null
   // My GitHub account id — the sidebar lists sessions attributed to me. null
   // (e.g. an API-key credential) lists the whole account's sessions.
   authorId: number | null
+  // The repo detected from the cwd's origin remote ("owner/name"), which is
+  // what the server's default resolution checks out — shown as the composer's
+  // resting Repository value. null when the cwd isn't an enrolled repo.
+  detectedRepo: string | null
   // Open focused on this session (connect / prompt shorthand); undefined
   // opens on the new-session composer (a bare `agent`).
   initialSessionId?: string
@@ -124,6 +149,11 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     }
   }, [stdout])
   const height = Math.max(8, termRows - 1)
+  // The app inset: one blank cell of canvas on all four sides of the whole
+  // frame, so nothing sits flush against the terminal edge. The bands lay out
+  // inside it, so every width/height below is the INNER box, not the terminal.
+  const contentCols = Math.max(20, termCols - APP_INSET * 2)
+  const contentRows = Math.max(6, height - APP_INSET * 2)
 
   // ------------------------------ sidebar data ------------------------------
 
@@ -173,8 +203,11 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     return () => clearInterval(t)
   }, [])
 
+  // Cloud sessions only. A laptop session is a local `claude` run synced up for
+  // the record; opening one here has nothing to connect to, so it would be a
+  // dead row taking a slot from the five cloud sessions worth showing.
   const rows = useMemo(
-    () => sortSidebarSessions([...localSessions, ...sessions]),
+    () => mergeSidebarSessions(sessions, localSessions).filter((s) => sessionSource(s) !== 'laptop'),
     [localSessions, sessions],
   )
 
@@ -343,17 +376,21 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     setFocus('chat')
   }, [selected])
 
-  // The selectable id list, left to right: the pinned new cell, then sessions.
+  // The selectable id list, top to bottom: the pinned new row, then sessions.
   const selectable = useMemo(() => ['new', ...rows.map((s) => s.id)], [rows])
 
   useInput(
     (ch, key) => {
-      // The nav is a horizontal bar: ←/→ move the highlight, enter opens
-      // the highlighted session, ↑/esc return to the chat.
-      if (key.leftArrow || key.rightArrow) {
+      // The nav is a vertical list: ↑/↓ move the highlight, enter opens the
+      // highlighted session, esc (or ↑ off the top row) returns to the chat.
+      if (key.upArrow || key.downArrow) {
         const idx = selectable.indexOf(selected)
-        const next = key.leftArrow
-          ? Math.max(0, idx < 0 ? 0 : idx - 1)
+        if (key.upArrow && idx <= 0) {
+          setFocus('chat')
+          return
+        }
+        const next = key.upArrow
+          ? Math.max(0, idx - 1)
           : Math.min(selectable.length - 1, idx < 0 ? 0 : idx + 1)
         setSelected(selectable[next])
         return
@@ -362,7 +399,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
         openSelected()
         return
       }
-      if (key.upArrow || key.escape) {
+      if (key.escape) {
         setFocus('chat')
         return
       }
@@ -387,25 +424,59 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
 
   // ------------------------------- rendering --------------------------------
 
-  // Band heights: header = blank + title line + rule (3); nav = rule +
-  // 2-line cells + hint (4). The chat band gets the rest.
+  // Band heights: header = blank + title line + rule (3); nav = rule + the
+  // new-session row + five session rows + hint (8). The chat band gets the
+  // rest, and a terminal too short for both drops session rows rather than
+  // growing the frame past the screen.
   const headerRows = 3
-  const navRows = 4
-  const chatRows = Math.max(4, height - headerRows - navRows)
+  const navSessionRows = Math.max(1, Math.min(NAV_SESSION_ROWS, contentRows - 10))
+  const navRows = 3 + navSessionRows
+  const chatRows = Math.max(4, contentRows - headerRows - navRows)
 
   // ---- band 1: the header ----
-  // The focused session's live meta (status · cost · model · id · version),
-  // derived from its transcript store so it ticks like the old footer did.
+  // "ellipsis.dev" pins the left edge as always; the right edge carries the
+  // focused session's live meta (id · model · cost · tokens), derived from
+  // its transcript store so it ticks like the old footer did. With no
+  // session focused the right edge falls back to the who-tag.
   const focusedEntry = mainPane.type === 'chat' ? entries.get(mainPane.sessionId) : undefined
-  const metaText = useHeaderMeta(focusedEntry, mainPane, appBase, customerLogin)
+  const metaText = useHeaderMeta(focusedEntry, mainPane, appBase, customerLogin, contentCols - 4)
+  const whoText = props.ghLogin
+    ? `@${props.ghLogin} in ${customerLogin}`
+    : customerLogin
   const header = (
-    <Box flexDirection="column" height={headerRows} flexShrink={0}>
-      <Box height={1} flexShrink={0} />
-      <Box paddingLeft={1}>
-        <Text bold>ellipsis.dev</Text>
-        {metaText && <Text dimColor>  ·  {metaText}</Text>}
+    // The top bar is a lifted surface, like the composer: the panel tint (not
+    // a rule) is what separates it from the transcript below. Its own 2-cell
+    // pad sits inside the tint, so the bar reads as a band with the title
+    // floating in it rather than type pinned to an edge.
+    <Box
+      flexDirection="column"
+      width={contentCols}
+      height={headerRows}
+      flexShrink={0}
+      backgroundColor={theme.panel}
+      paddingLeft={2}
+      paddingRight={2}
+      justifyContent="center"
+    >
+      {/* The explicit width is what wrap="truncate" measures against: without
+          it the meta line sizes the row to its own content and overflows the
+          terminal instead of clipping. */}
+      <Box width={contentCols - 4}>
+        <Box flexGrow={1}>
+          <Text wrap="truncate">
+            <Text bold color={theme.foreground}>
+              {HEADER_TITLE}
+            </Text>
+          </Text>
+        </Box>
+        <Box flexShrink={0}>
+          {/* truncate, never wrap: the bar is budgeted at exactly one row, and
+              a wrapped meta line pushes the rule off the bottom of the band. */}
+          <Text dimColor wrap="truncate">
+            {metaText ?? whoText}
+          </Text>
+        </Box>
       </Box>
-      <Text dimColor>{'─'.repeat(Math.max(0, termCols))}</Text>
     </Box>
   )
 
@@ -415,9 +486,9 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     main = (
       // Full width, no side padding: the prompt input's rules span the
       // terminal exactly like the header's and the nav's do.
-      <Box width={termCols} height={chatRows} flexDirection="column" overflow="hidden">
+      <Box width={contentCols} height={chatRows} flexDirection="column" overflow="hidden">
         <NewSessionPane
-          width={termCols}
+          width={contentCols}
           height={chatRows}
           focused={focus === 'chat'}
           starting={starting}
@@ -425,6 +496,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
           configs={configs}
           repos={repos}
           models={models}
+          detectedRepo={props.detectedRepo}
           onSubmit={(text, choices) => void startSession(text, choices)}
           onLeave={focusNav}
           rawMode={isRawModeSupported}
@@ -436,7 +508,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     if (!entry) {
       main = (
         <Box
-          width={termCols}
+          width={contentCols}
           height={chatRows}
           flexDirection="column"
           paddingLeft={2}
@@ -459,12 +531,10 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
         // region and smears stale rows on every hop). The meta line is
         // hidden here — the header renders it.
         <Box
-          width={termCols}
+          width={contentCols}
           height={chatRows}
           flexDirection="column"
           overflow="hidden"
-          paddingLeft={1}
-          paddingRight={1}
         >
           <ConnectApp
             key={mainPane.sessionId}
@@ -478,7 +548,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
             initialNotice={entry.notice}
             model={entry.model}
             configName={entry.configName}
-            paneWidth={termCols - 2}
+            paneWidth={contentCols}
             paneHeight={chatRows}
             focused={focus === 'chat'}
             onFocusNav={focusNav}
@@ -491,113 +561,107 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   }
 
   // ---- band 4: the session nav ----
-  // A horizontal bar of fixed-width cells (status dot + description over a
-  // dim age line) separated by vertical rules, windowed around the
-  // highlight. The pinned new-session cell leads, at its full label width —
-  // so a terminal too narrow for even one session cell shows zero of them
-  // (the "› N more" tail still says what's there) rather than wrapping the
-  // bar onto an extra row and pushing the layout past the frame.
-  const cellCapacity = Math.max(
-    0,
-    Math.floor((termCols - NAV_NEW_W - 10) / (NAV_ITEM_W + 1)),
-  )
+  // A vertical list of six rows: the pinned new-session row, then the five
+  // most recent sessions (status dot + description + a dim age tag), windowed
+  // so the highlight parks on the second-to-last row and the list scrolls
+  // under it. The band's height is fixed, so a short list leaves blank rows
+  // rather than moving the chat above it.
   const selectedRowIdx = Math.max(0, rows.findIndex((s) => s.id === selected))
-  // sidebarSlice always keeps one entry in frame, so the no-room case is
-  // handled here rather than by widening its contract.
-  const win =
-    cellCapacity === 0
-      ? { start: 0, end: 0 }
-      : sidebarSlice(rows.length, cellCapacity, selectedRowIdx)
+  const win = navSlice(rows.length, navSessionRows, selectedRowIdx)
   const navFocused = focus === 'nav'
   const nav = (
-    <Box flexDirection="column" height={navRows} flexShrink={0}>
-      <Text dimColor>{'─'.repeat(Math.max(0, termCols))}</Text>
-      <Box>
-        {/* The pinned new-session cell, always at its full label width
-            (flexShrink=0 + an explicit width, so a crowded bar drops
-            session cells instead of clipping this one). */}
-        <Box width={NAV_NEW_W} flexShrink={0} flexDirection="column">
-          <Text>
-            {' '}
+    // The session list gets a gutter of its own on top of the app inset, so the
+    // column of dots sits inboard of the frame edge instead of hugging it. The
+    // pad is on the band, so every row (and the hint) shares one left edge.
+    <Box
+      flexDirection="column"
+      height={navRows}
+      flexShrink={0}
+      paddingLeft={NAV_GUTTER}
+      paddingRight={NAV_GUTTER}
+    >
+      <Box height={1} flexShrink={0} />
+      {/* The highlighted row — this one and the session rows below — takes
+          the active surface across its full width (the same lighter panel
+          the focused composer sits on), never the inverse bar. */}
+      <Box backgroundColor={selected === 'new' && navFocused ? SURFACE_ACTIVE : undefined}>
+        <Box flexGrow={1}>
+          <Text wrap="truncate">
             {selected === 'new' && navFocused ? (
-              <Text bold color="cyan" inverse>
-                {` ${SELECTION_GLYPH} ${NAV_NEW_LABEL.slice(2)} `}
+              <Text bold color={theme.foreground}>
+                {`${SELECTION_GLYPH} ${NAV_NEW_LABEL.slice(2)}`}
               </Text>
             ) : (
-              <Text bold color="cyan">
+              <Text bold color={theme.foreground}>
                 {NAV_NEW_LABEL}
               </Text>
             )}
           </Text>
-          <Text> </Text>
         </Box>
-        {win.start > 0 && (
-          <Box width={2} flexShrink={0}>
-            <Text dimColor>‹</Text>
-          </Box>
-        )}
-        {rows.slice(win.start, win.end).map((s) => {
-          const word = rowStatusWord(s)
-          const g = rowGlyph(word)
-          const cursorHere = selected === s.id && navFocused
-          const isOpen = mainPane.type === 'chat' && mainPane.sessionId === s.id
-          const desc = rowDescription(s)
-          const descW = NAV_ITEM_W - 4
-          return (
-            <React.Fragment key={s.id}>
-              {/* A vertical rule between cells, spanning both cell rows —
-                  the bar reads as discrete sessions, not one run of text. */}
-              <Box width={1} flexShrink={0} flexDirection="column">
-                <Text dimColor>│</Text>
-                <Text dimColor>│</Text>
-              </Box>
-              <Box width={NAV_ITEM_W} flexShrink={0} flexDirection="column">
-                <Text wrap="truncate">
-                  {' '}
-                  <Text color={cursorHere ? 'cyan' : g.color} dimColor={!cursorHere && g.dim}>
-                    {cursorHere ? SELECTION_GLYPH : g.glyph}
-                  </Text>{' '}
-                  <Text
-                    color={cursorHere ? 'cyan' : attention.has(s.id) ? 'cyan' : undefined}
-                    inverse={cursorHere}
-                    bold={isOpen}
-                    dimColor={!cursorHere && !attention.has(s.id) && g.dim}
-                  >
-                    {cursorHere
-                      ? ` ${desc.slice(0, Math.max(4, descW - 2))} `
-                      : desc.slice(0, Math.max(4, descW))}
-                  </Text>
-                </Text>
-                <Text wrap="truncate">
-                  {'   '}
-                  <Text dimColor>
-                    {shortAge(lastEventAt(s))} · {s.source === 'laptop' ? 'laptop' : 'cloud'}
-                    {attention.has(s.id) ? ' · needs you' : ''}
-                  </Text>
-                </Text>
-              </Box>
-            </React.Fragment>
-          )
-        })}
-        {win.end < rows.length && (
-          <Box flexShrink={0}>
-            <Text dimColor>› {rows.length - win.end} more</Text>
-          </Box>
-        )}
-        {rows.length === 0 && (
-          <Text dimColor>{polledOnce ? ' no sessions yet' : ' loading sessions…'}</Text>
-        )}
       </Box>
+      {rows.slice(win.start, win.end).map((s) => {
+        const word = rowStatusWord(s)
+        const g = rowGlyph(word)
+        const cursorHere = selected === s.id && navFocused
+        const isOpen = mainPane.type === 'chat' && mainPane.sessionId === s.id
+        const desc = rowDescription(s)
+        // The meta tag rides the right edge; the description takes what's left
+        // and truncates, so a long prompt can never push the tag off the row.
+        const meta = `${rowMeta(s)}${attention.has(s.id) ? ' · needs you' : ''}`
+        const descW = Math.max(8, contentCols - NAV_GUTTER * 2 - meta.length - 6)
+        return (
+          // The highlighted row's background spans the whole width — the
+          // meta tag included — on the same active surface as everywhere
+          // else, replacing the old inverse (bone-white) description bar.
+          <Box key={s.id} backgroundColor={cursorHere ? SURFACE_ACTIVE : undefined}>
+            <Box flexGrow={1} flexShrink={1}>
+              <Text wrap="truncate">
+                <Text color={cursorHere ? theme.foreground : g.color} dimColor={!cursorHere && g.dim}>
+                  {cursorHere ? SELECTION_GLYPH : g.glyph}
+                </Text>{' '}
+                <Text
+                  color={cursorHere ? theme.foreground : attention.has(s.id) ? theme.foreground : undefined}
+                  bold={isOpen}
+                  dimColor={!cursorHere && !attention.has(s.id) && g.dim}
+                >
+                  {desc.slice(0, descW)}
+                </Text>
+              </Text>
+            </Box>
+            <Box flexShrink={0}>
+              <Text dimColor>{meta}</Text>
+            </Box>
+          </Box>
+        )
+      })}
+      {rows.length === 0 && (
+        <Text dimColor>{polledOnce ? 'no sessions yet' : 'loading sessions…'}</Text>
+      )}
+      {/* Absorbs the rows a short list leaves empty, keeping the hint on the
+          band's bottom edge. */}
+      <Box flexGrow={1} />
       <Text wrap="truncate" dimColor>
         {navFocused
-          ? ' ←→ move · enter open · n new · ↑ chat · q quit'
-          : ' ↓/esc: sessions'}
+          ? `↑↓ move · enter open · n new · esc chat · q quit${
+              win.end < rows.length ? ` · ${rows.length - win.end} more below` : ''
+            }`
+          : '↓/esc: sessions'}
       </Text>
     </Box>
   )
 
   return (
-    <Box flexDirection="column" minHeight={height}>
+    // The brand canvas, painted edge to edge: every band sits on it, and the
+    // composer's panel is the one surface lifted above it. Painting the root
+    // (rather than letting the terminal's own background show through) is what
+    // makes the charcoal→panel step read as intentional depth on ANY terminal
+    // theme instead of only on a dark one.
+    <Box
+      flexDirection="column"
+      minHeight={height}
+      backgroundColor={theme.canvas}
+      padding={APP_INSET}
+    >
       {header}
       {main}
       {nav}
@@ -605,14 +669,16 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   )
 }
 
-// The header's live meta for the focused session: status · cost · model ·
-// id (hyperlinked) · version, derived from the session's transcript store
-// so it ticks with the stream exactly like the old in-chat footer.
+// The header's right-edge meta for the focused session: the full id
+// (hyperlinked) · model · total cost · tokens, derived from the session's
+// transcript store so it ticks with the stream exactly like the old in-chat
+// footer. The id is never shortened — it's there to be copy-pasted.
 function useHeaderMeta(
   entry: ChatEntry | undefined,
   mainPane: MainPane,
   appBase: string,
   customerLogin: string,
+  cols: number,
 ): string | null {
   const subscribe = useCallback(
     (cb: () => void) => (entry ? entry.store.subscribe(cb) : () => {}),
@@ -625,7 +691,6 @@ function useHeaderMeta(
   )
   if (mainPane.type !== 'chat' || !entry) return null
   const session = snapshot?.session as AgentSessionWire | undefined | null
-  const statusWord = session ? sessionStatusWord(session) : 'starting'
   const costUsd = session
     ? usdNumberFromMillicents(
         session.cost_tokens +
@@ -634,16 +699,27 @@ function useHeaderMeta(
           session.cost_fee,
       )
     : 0
-  return [
-    `${statusWord} · $${costUsd.toFixed(2)}`,
-    ...(entry.model ? [entry.model] : []),
-    hyperlink(
-      sessionUrl(appBase, customerLogin, mainPane.sessionId),
-      `${mainPane.sessionId.slice(0, 20)}…`,
-    ),
-    ...(entry.configName ? [entry.configName] : []),
-    `v${VERSION}`,
-  ].join(' · ')
+  const tokens = session?.tokens_total ?? 0
+  const id = mainPane.sessionId
+  const line = (idText: string, model: string | null | undefined): string =>
+    [
+      idText,
+      ...(model ? [model] : []),
+      `$${costUsd.toFixed(2)}`,
+      `${compactTokens(tokens)} tokens`,
+    ].join(' · ')
+  // Sized to fit one row by construction: Ink measures the OSC-8 link's
+  // invisible URL bytes as width, so the linked id only ships when the whole
+  // line fits beside the title. Failing that the id goes out as plain text,
+  // then the model drops, then the spend — the id is here to be copy-pasted,
+  // so it is the last thing standing and is never shortened.
+  const budget = cols - TITLE_WIDTH - 1
+  const tiers = [
+    line(hyperlink(sessionUrl(appBase, customerLogin, id), id), entry.model),
+    line(id, entry.model),
+    line(id, undefined),
+  ]
+  return tiers.find((t) => t.length <= budget) ?? id
 }
 
 // Swallows everything except esc and ← — the keyboard owner for placeholder
@@ -678,15 +754,19 @@ const PICKER_ROWS: readonly PickerRow[] = [
 
 // The new-session pane, mirroring the dashboard's home composer
 // (app.ellipsis.dev/[login]): a centered "What are we shipping today?"
-// heading a third of the way down, then ONE box — a prompt input that wraps
-// as you type, with the Agent / Model / Repository selects as compact chips along
-// the box's bottom edge. ↓ from the prompt reaches the chip row, ←/→ move
-// between chips, enter/↓ opens a chip's option list ([x] marks the pick).
-// Inside an open list ↑/↓ walk, → (or enter/space) activates the
-// highlighted option, ← (or esc) backs out of the subtree unchanged.
-// "Default" everywhere means the server resolves it (defaults ladder,
-// DEFAULT_AGENT_MODEL, the detected repo). Esc — or ← at the prompt's left
-// edge / the leftmost chip — hands focus to the sidebar.
+// heading floating in the empty space, and the input panel docked at the
+// bottom — the Repository / Agent / Model rows inside the tinted box with
+// the ❯ prompt line beneath them (the dashboard card's controls-inside-the-
+// composer shape). The ❯ glyph marks whichever row is selected; the whole
+// panel steps to the lighter active surface while any row has focus. ↑ from
+// the prompt climbs into the option rows, ↑/↓ walk them (↓ off the last
+// returns to the prompt), →/enter unfolds a row's option list in place,
+// inside the panel ([x] marks the pick). Inside an open list ↑/↓ walk, → (or
+// enter/space) activates the
+// highlighted option, ← (or esc) backs out unchanged. "Default" everywhere
+// means the server resolves it (defaults ladder, DEFAULT_AGENT_MODEL, the
+// detected repo). Esc — or ↓ / ← at the prompt's left edge — hands focus to
+// the session nav.
 function NewSessionPane({
   width,
   height,
@@ -696,6 +776,7 @@ function NewSessionPane({
   configs,
   repos,
   models,
+  detectedRepo,
   onSubmit,
   onLeave,
   rawMode,
@@ -709,6 +790,9 @@ function NewSessionPane({
   configs: SavedAgentConfig[] | null
   repos: string[] | null
   models: SupportedModel[] | null
+  // The cwd's repo ("owner/name") — what the server's default resolution
+  // checks out; named on the Repository row instead of a bare "Default".
+  detectedRepo: string | null
   onSubmit: (
     text: string,
     choices: { configId: string | null; model: string | null; repos: string[] },
@@ -718,6 +802,9 @@ function NewSessionPane({
 }): React.ReactElement {
   const [text, setText] = useState('')
   const [cursor, setCursor] = useState(0)
+  // One fact per visit — the lazy initializer keeps it stable across
+  // re-renders so the line doesn't shuffle while you type.
+  const [fact] = useState(randomFact)
   // Where the form cursor is: the prompt line, or one of the option rows
   // beneath it (by PICKER_ROWS index).
   const [row, setRow] = useState<'prompt' | number>('prompt')
@@ -743,29 +830,39 @@ function NewSessionPane({
   // The server's selectable set (GET /v1/models); before it lands — and on an
   // older server that has no such route — the built-in fallback list.
   const modelOptions = useMemo(() => composerModelOptions(models ?? []), [models])
-  const repoOptions = useMemo(
-    () => [
-      { id: null as string | null, label: 'Default (detected)' },
-      ...(repos ?? []).map((r) => ({ id: r as string | null, label: r })),
-    ],
-    [repos],
-  )
+  // When the cwd names a repo there is no "Default" row: the detected repo
+  // heads the list as a normal checkable entry — it reads [x] while the
+  // selection is empty (the server checks it out by default) and can be
+  // checked alongside any others (repositories multi-select). Only with no
+  // detection does the null Default row appear (the server still resolves
+  // one, but there's no name to show).
+  const repoOptions = useMemo(() => {
+    const listed = (repos ?? []).filter((r) => r !== detectedRepo)
+    return detectedRepo
+      ? [detectedRepo, ...listed].map((r) => ({ id: r as string | null, label: r }))
+      : [
+          { id: null as string | null, label: 'Default' },
+          ...listed.map((r) => ({ id: r as string | null, label: r })),
+        ]
+  }, [repos, detectedRepo])
   const optionsFor = (key: PickerRow['key']) =>
     key === 'config' ? configOptions : key === 'model' ? modelOptions : repoOptions
-  // Whether an option is currently picked. Repo is a multi-select (id null
-  // = the Default entry, picked while the set is empty); the others match
-  // their single index.
+  // Whether an option is currently picked. Repo is a multi-select: an empty
+  // selection means the server's default checkout, so the detected repo (or
+  // the null Default row) reads [x] while nothing is explicitly checked; the
+  // single-pickers match their index.
   const isPicked = (key: PickerRow['key'], at: number): boolean => {
     if (key === 'repo') {
       const id = repoOptions[at]?.id
-      return id === null ? repoSel.size === 0 : repoSel.has(id ?? '')
+      if (repoSel.size === 0) return id === null || id === detectedRepo
+      return id !== null && repoSel.has(id)
     }
     const idx = key === 'config' ? configIdx : modelIdx
     return at === Math.min(idx, optionsFor(key).length - 1)
   }
   // Activating an option: single-pickers pick and close; the repo list
   // TOGGLES the entry ([x]↔[ ]) and stays open so several can be checked
-  // (Default clears the set).
+  // (the null Default row, shown only with no detected repo, clears the set).
   const activate = (key: PickerRow['key'], at: number): void => {
     if (key === 'config') {
       setConfigIdx(at)
@@ -787,10 +884,11 @@ function NewSessionPane({
     }
   }
 
+  // Enter with an empty prompt is a real start: the session comes up idle and
+  // waits for the first message, so you can open a sandbox before you know
+  // what to ask it.
   const submit = (): void => {
-    const trimmed = text.trim()
-    if (!trimmed) return
-    onSubmit(trimmed, {
+    onSubmit(text.trim(), {
       configId: configOptions[Math.min(configIdx, configOptions.length - 1)]?.id ?? null,
       model: modelOptions[Math.min(modelIdx, modelOptions.length - 1)]?.id ?? null,
       repos: [...repoSel],
@@ -838,17 +936,16 @@ function NewSessionPane({
         return
       }
       if (row !== 'prompt') {
-        // The option rows under the prompt box, walked vertically: ↑/↓ move
-        // between them (↑ off the first returns to the prompt, ↓ off the
-        // last continues to the session nav), →/enter opens the row's list,
-        // ← leaves for the nav, typing returns to the prompt.
+        // The option rows above the prompt, inside the panel, walked
+        // vertically: ↑/↓ move between them (↑ stops at the first, ↓ off the
+        // last returns to the prompt), →/enter opens the row's list, ←
+        // leaves for the nav, typing returns to the prompt.
         if (key.upArrow) {
-          if (row === 0) setRow('prompt')
-          else setRow(row - 1)
+          setRow(Math.max(0, row - 1))
           return
         }
         if (key.downArrow) {
-          if (row >= PICKER_ROWS.length - 1) onLeave()
+          if (row >= PICKER_ROWS.length - 1) setRow('prompt')
           else setRow(row + 1)
           return
         }
@@ -871,8 +968,14 @@ function NewSessionPane({
         submit()
         return
       }
+      // At the prompt: ↑ climbs into the option rows above it (landing on
+      // the nearest, Model), ↓ continues past the input to the session nav.
+      if (key.upArrow) {
+        setRow(PICKER_ROWS.length - 1)
+        return
+      }
       if (key.downArrow) {
-        setRow(0)
+        onLeave()
         return
       }
       if (key.leftArrow) {
@@ -894,7 +997,7 @@ function NewSessionPane({
         }
         return
       }
-      if (key.ctrl || key.meta || key.tab || key.upArrow) return
+      if (key.ctrl || key.meta || key.tab) return
       if (ch) {
         setText((t) => t.slice(0, cursor) + ch + t.slice(cursor))
         setCursor((c) => c + ch.length)
@@ -904,11 +1007,11 @@ function NewSessionPane({
   )
 
   // The summary shown on a row: the single pick's label, or the checked
-  // repo set joined (Default when empty).
+  // repo set joined (the detected repo when nothing is checked).
   const rowValue = (key: PickerRow['key']): string => {
     if (key === 'repo') {
       if (repos === null) return 'loading…'
-      return repoSel.size === 0 ? 'Default (detected)' : [...repoSel].join(', ')
+      return repoSel.size === 0 ? (detectedRepo ?? 'Default') : [...repoSel].join(', ')
     }
     if (key === 'config' && configs === null) return 'loading…'
     const options = optionsFor(key)
@@ -916,12 +1019,13 @@ function NewSessionPane({
     return options[Math.min(idx, options.length - 1)]?.label ?? 'Default'
   }
 
-  // How many dropdown options fit in the space above the input: the pane
-  // minus the heading, notices, input box, rows, and hints (~13 rows).
-  const dropdownCapacity = Math.max(3, height - 13)
+  // How many option rows an open picker shows inside the panel: the pane
+  // minus the heading, notices, and the panel's other rows (~12); the panel
+  // grows upward into the spacer above, so the prompt never moves.
+  const dropdownCapacity = Math.max(3, height - 12)
   // The wrap width inside the input box: the pane minus the box's own left
   // and right padding (the "▶ " prompt is part of the wrapped text).
-  const inputWidth = Math.max(8, width - 2)
+  const inputWidth = Math.max(8, width - COMPOSER_PAD_X * 2)
   const caretVisible = focused && row === 'prompt' && !starting && openPicker === null
   const open = openPicker
   const openOptions = open ? optionsFor(open.key) : []
@@ -943,107 +1047,121 @@ function NewSessionPane({
       <Box justifyContent="center">
         <Text bold>What are we shipping today?</Text>
       </Box>
-      <Box flexGrow={1} />
-      {error && <Text color="red"> ✗ {error}</Text>}
-      {starting && <Text dimColor> ✻ Starting session…</Text>}
-      {/* The open row's option list, a popup ABOVE the input (the input is
-          docked; menus open upward like any bottom bar's): ↑/↓ walk,
-          → activates, ← backs out. [x] marks the pick. */}
-      {open && (
-        <Box flexDirection="column" paddingLeft={5}>
-          <Text dimColor>{PICKER_ROWS.find((r) => r.key === open.key)?.label}:</Text>
-          {win.start > 0 && <Text dimColor>… {win.start} more</Text>}
-          {openOptions.slice(win.start, win.end).map((opt, j) => {
-            const at = win.start + j
-            const hovered = at === openHover
-            const picked = isPicked(open.key, at)
-            return (
-              <Text key={opt.id ?? 'default'} wrap="truncate">
-                <Text color="cyan">{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
-                <Text
-                  color={hovered ? 'cyan' : undefined}
-                  inverse={hovered}
-                  dimColor={!hovered && !picked}
-                >
-                  {hovered
-                    ? ` [${picked ? 'x' : ' '}] ${opt.label} `
-                    : `[${picked ? 'x' : ' '}] ${opt.label}`}
-                </Text>
-              </Text>
-            )
-          })}
-          {win.end < openOptions.length && (
-            <Text dimColor>… {openOptions.length - win.end} more</Text>
-          )}
-          <Text dimColor>
-            {open.key === 'repo' ? '→ toggle · ← done' : '→ select · ← back'}
-          </Text>
-        </Box>
-      )}
-      {/* The prompt input — the SAME box shape as the chat composer: a
-          3-row area framed by full-width top and bottom rules, no side
-          borders. */}
-      <Box
-        flexDirection="column"
-        borderStyle="single"
-        borderLeft={false}
-        borderRight={false}
-        borderDimColor
-        minHeight={5}
-        alignItems="flex-start"
-        paddingLeft={1}
-        paddingRight={1}
-      >
-        {/* Wraps instead of truncating: a long prompt flows onto the next
-            row (the box grows downward into the spacer above) rather than
-            running off the right edge. The explicit width is what ink wraps
-            against; the key remounts the node so a stale measurement can't
-            wrap the caret onto the border row. */}
-        <Box width={inputWidth}>
-          <Text wrap="wrap" key={`${text}:${cursor}:${focused && row === 'prompt'}`}>
-            <Text color="cyan" dimColor={!focused || row !== 'prompt'}>
-              {SELECTION_GLYPH}{' '}
-            </Text>
-            {text.slice(0, cursor)}
-            {caretVisible && (
-              <Text inverse>{cursor < text.length ? text[cursor] : ' '}</Text>
-            )}
-            {cursor < text.length ? text.slice(cursor + (caretVisible ? 1 : 0)) : ''}
-            {text === '' && !caretVisible && ' '}
-            {text === '' && <Text dimColor>Describe the task…</Text>}
+      {/* The fact box is sized to the text (capped so long facts wrap at a
+          readable measure) so short facts sit centered, not left-aligned
+          inside a fixed column. */}
+      <Box justifyContent="center" paddingTop={1}>
+        <Box width={Math.min(fact.length, Math.max(8, width - 4), 72)}>
+          <Text dimColor wrap="wrap">
+            {fact}
           </Text>
         </Box>
       </Box>
-      {/* The run controls, one row each below the input: Repository, Agent,
-          Model. →/enter opens a row's option list ABOVE the input (the
-          input never moves); repositories multi-select ([x] toggles), the
-          others pick one. */}
-      {PICKER_ROWS.map((r, i) => {
-        const active = focused && openPicker === null && row === i
-        const isOpen = openPicker?.key === r.key
-        return (
-          <Text key={r.key} wrap="truncate">
-            {'   '}
-            <Text color="cyan" dimColor={!active && !isOpen}>
-              {active || isOpen ? SELECTION_GLYPH : ' '}
-            </Text>{' '}
-            <Text dimColor>{r.label}: </Text>
-            <Text
-              color={active || isOpen ? 'cyan' : undefined}
-              inverse={active}
-              dimColor={!active && !isOpen}
-            >
-              {active ? ` ${rowValue(r.key)} ` : rowValue(r.key)}
+      <Box flexGrow={1} />
+      {error && <Text color={theme.error}> ✗ {error}</Text>}
+      {starting && <Text dimColor> ✻ Starting session…</Text>}
+      {/* The input panel — the SAME surface as the chat composer, stepping
+          onto the lighter active surface while ANY of its four rows is where
+          you are (a picker row, its open option list, or the prompt), no
+          rules, with a uniform 1-cell pad inside the tint. The run controls
+          live INSIDE it, one row each ABOVE the prompt (the dashboard card's
+          controls-inside-the-composer shape): Repository, Agent, Model, a
+          blank spacer row, then the prompt line. The ❯ selection glyph marks
+          whichever row is selected. →/enter opens a picker row IN PLACE —
+          its value collapses to a bare label and the option list unfolds
+          indented beneath it, inside the panel (the panel grows upward into
+          the spacer above; the prompt never moves). Repositories
+          multi-select ([x] toggles), the others pick one. */}
+      <Box
+        flexDirection="column"
+        backgroundColor={focused && !starting ? SURFACE_ACTIVE : SURFACE_ELEVATED}
+        alignItems="flex-start"
+        paddingY={1}
+        paddingX={COMPOSER_PAD_X}
+      >
+        {PICKER_ROWS.map((r, i) => {
+          const active = focused && openPicker === null && row === i
+          const isOpen = open?.key === r.key
+          if (isOpen) {
+            return (
+              <Box key={r.key} flexDirection="column" width={inputWidth}>
+                <Text dimColor>{'  '}{r.label}:</Text>
+                {win.start > 0 && <Text dimColor>{'    '}… {win.start} more</Text>}
+                {openOptions.slice(win.start, win.end).map((opt, j) => {
+                  const at = win.start + j
+                  const hovered = at === openHover
+                  const picked = isPicked(r.key, at)
+                  return (
+                    <Box key={opt.id ?? 'default'} width={inputWidth}>
+                      <Text wrap="truncate">
+                        {'  '}
+                        <Text color={theme.foreground}>
+                          {hovered ? SELECTION_GLYPH : ' '}
+                        </Text>{' '}
+                        <Text
+                          color={hovered ? theme.foreground : undefined}
+                          dimColor={!hovered && !picked}
+                        >
+                          {`[${picked ? 'x' : ' '}] ${opt.label}`}
+                        </Text>
+                      </Text>
+                    </Box>
+                  )
+                })}
+                {win.end < openOptions.length && (
+                  <Text dimColor>{'    '}… {openOptions.length - win.end} more</Text>
+                )}
+              </Box>
+            )
+          }
+          return (
+            <Box key={r.key} width={inputWidth}>
+              <Text wrap="truncate">
+                <Text color={theme.foreground} dimColor={!active}>
+                  {active ? SELECTION_GLYPH : ' '}
+                </Text>{' '}
+                <Text dimColor>{r.label}: </Text>
+                <Text color={active ? theme.foreground : undefined} dimColor={!active}>
+                  {rowValue(r.key)}
+                </Text>
+              </Text>
+            </Box>
+          )
+        })}
+        {/* One blank row between the run controls and the prompt. */}
+        <Box height={1} flexShrink={0} />
+        {/* The prompt, under the option rows. ONE ❯ on the whole panel: the
+            prompt's gutter carries it only while the prompt is the selected
+            row — a blank cell otherwise, exactly like the picker rows above
+            (whichever row is selected shows the glyph). Wraps instead of
+            truncating: a long prompt flows onto the next row (the box grows
+            downward into the spacer above) rather than running off the right
+            edge. The explicit width is what ink wraps against; the key
+            remounts the node so a stale measurement can't wrap the caret
+            onto the border row. */}
+        <Box width={inputWidth} minHeight={2} alignItems="flex-start">
+          <Text wrap="wrap" key={`${text}:${cursor}:${focused && row === 'prompt'}`}>
+            <Text color={theme.foreground}>
+              {focused && row === 'prompt' && openPicker === null ? SELECTION_GLYPH : ' '}{' '}
             </Text>
-            {active ? <Text dimColor> (→: choose)</Text> : null}
+            {text.slice(0, cursor)}
+            {caretVisible && text !== '' && (
+              <Text inverse>{cursor < text.length ? text[cursor] : ' '}</Text>
+            )}
+            {cursor < text.length ? text.slice(cursor + (caretVisible ? 1 : 0)) : ''}
+            {/* Empty input: the placeholder sits where typed text will land,
+                its first character carrying the caret (inverse) instead of a
+                caret cell of its own pushing it a column right. */}
+            {text === '' && caretVisible && (
+              <Text>
+                <Text inverse>S</Text>
+                <Text dimColor>tart a cloud session…</Text>
+              </Text>
+            )}
+            {text === '' && !caretVisible && <Text dimColor>Start a cloud session…</Text>}
           </Text>
-        )
-      })}
-      {/* Always rendered (blank while a dropdown is open) so the docked
-          input never shifts by the hint row's height. */}
-      <Text dimColor>
-        {open ? ' ' : '   enter: start · ↓ options · esc: sessions'}
-      </Text>
+        </Box>
+      </Box>
     </Box>
   )
 }

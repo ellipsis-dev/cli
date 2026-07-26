@@ -34,8 +34,14 @@ export function canHostSessionsUi(): boolean {
 // no flags of its own (connect, and the composer inside a prompt-shorthand
 // UI): default-config resolution with the detected repository, exactly like
 // a bare `agent` start.
+//
+// An empty prompt starts the session idle instead: the sandbox spins up and
+// Claude Code waits at its prompt, so the first composer message opens turn 0
+// (a local `claude` with no argument).
 export function defaultStartRequest(prompt: string): StartAgentSessionRequest {
-  const req: StartAgentSessionRequest = { prompt }
+  const req: StartAgentSessionRequest = {}
+  if (prompt) req.prompt = prompt
+  else req.idle_start = true
   const contextRepo = repoFromCwd(process.cwd())
   if (contextRepo) req.repository = contextRepo
   return req
@@ -58,7 +64,9 @@ export async function runSessionsUi(options: SessionsUiOptions): Promise<void> {
       openSocket,
       appBase: resolveAppBase(),
       customerLogin: me.customer_login,
+      ghLogin: me.gh_user?.login ?? null,
       authorId: me.gh_user?.id ?? null,
+      detectedRepo: repoFromCwd(process.cwd()) ?? null,
       initialSessionId: options.initialSessionId,
       initialConfigName: options.initialConfigName,
       initialNotice: options.initialNotice,
