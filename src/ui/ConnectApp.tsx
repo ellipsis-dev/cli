@@ -15,7 +15,6 @@ import {
 } from '@ellipsis-dev/sdk/stream'
 import {
   cacheTierLabel,
-  clampLines,
   collapseToolRuns,
   foldCosts,
   lifecycleText,
@@ -25,9 +24,7 @@ import {
   sandboxOutputStep,
   sandboxPhaseLabel,
   statusActivityText,
-  oneLine,
   type CCEvent,
-  type ItemKind,
   type SessionTranscriptStore,
   type TranscriptItem,
 } from '@ellipsis-dev/sdk/store'
@@ -35,10 +32,30 @@ import { ApiClient, ApiError } from '../lib/api'
 import { hyperlink } from '../lib/urls'
 import { usdNumberFromMillicents } from '../lib/output'
 import { applyEditShortcut } from '../lib/editing'
-import { hasMarkdown, renderMarkdown, visibleWidth } from '../lib/markdown'
+import { fitLines } from '../lib/markdown'
 import { SELECTION_GLYPH } from '../lib/sessions'
 import { SURFACE_ACTIVE, SURFACE_ELEVATED, theme } from '../lib/theme'
 import { VERSION } from '../lib/constants'
+import {
+  activityRows,
+  anchorAt,
+  anchorIndex,
+  contentWidth,
+  entryRange,
+  GUTTER_COLS,
+  isCollapsible,
+  itemRows,
+  layOutItems,
+  LIVE_GLYPH,
+  MESSAGE_PAD,
+  pendingMessageRows,
+  rowViewport,
+  snapToEntry,
+  spacerRow,
+  type RowSpan,
+  type ScrollAnchor,
+  type TranscriptRow,
+} from './transcriptRows'
 
 // The interactive `agent session connect` UI, modelled on Claude Code: a
 // committed transcript that groups tool calls with their results and spaces
@@ -92,8 +109,10 @@ export interface ConnectAppProps {
   // stdout's rows/columns.
   paneWidth?: number
   paneHeight?: number
-  // Blank rows above the first line. The solo app keeps TOP_PAD's slack
-  // against terminal row-accounting quirks; a pane host owns its own edges.
+  // Blank rows above the first line, at MOST: the padding is the layout's
+  // give, so a pane too short for it gets fewer (or none). The solo app keeps
+  // TOP_PAD's slack against terminal row-accounting quirks; a pane host owns
+  // its own edges.
   topPad?: number
   // Whether this pane owns the keyboard. The host keeps exactly one input
   // handler active (sidebar or chat); default true for the solo app.
@@ -121,25 +140,36 @@ function isWorkingStatus(status: string): boolean {
   return ['scheduled', 'starting', 'working', 'retrying'].includes(status)
 }
 
-// Blank rows rendered above the app's first line: two of visual breathing
-// room above the ✻ startup header, plus two of sacrificial slack — see the
-// termRows comment in ConnectApp for what the slack absorbs.
-const TOP_PAD = 4
+// Blank rows rendered above the app's first line: one of visual breathing room
+// above the ✦ startup header, plus one of sacrificial slack — see the termRows
+// comment in ConnectApp for what the slack absorbs. Deliberately thin: every
+// row here is a row the conversation doesn't get.
+const TOP_PAD = 2
 
-// Text rows inside the composer panel, before its 1-cell pad. ink's minHeight
-// counts padding, so the panel's own minHeight and the viewport budget both
-// use this plus 2 (the pad above and below).
-const COMPOSER_INTERIOR_ROWS = 3
+// Text rows inside the composer panel, before its 1-cell pad above and below.
+// One row: the input grows as you type past it, and the rows it isn't using
+// belong to the conversation.
+const COMPOSER_INTERIOR_ROWS = 1
 
 // Horizontal breathing room inside the composer panel — wider than the 1-cell
 // vertical pad so the caret and text start well clear of the panel edge.
 const COMPOSER_PAD_X = 2
 
-// The pad inside a chat message's panel, all four sides — the text sits one
-// cell off the tint's edge, like the composer's interior. Counted by the
-// viewport height estimates (two extra rows per message) and subtracted from
-// the wrap width (two columns).
-const MESSAGE_PAD = 1
+// Rows one wheel notch moves. Terminals report a notch per tick, and one row
+// per tick makes a trackpad feel like it's dragging through treacle.
+const WHEEL_ROWS = 3
+
+// Half the period of the live ⏺ pulse: the glyph dims for this long, then
+// brightens for this long. ~1.4s a cycle — slow enough to read as breathing
+// rather than flashing, and it lands off the 1s duration tick so the two
+// don't visibly beat against each other.
+const PULSE_MS = 700
+
+// Columns the composer's text actually gets: the panel's horizontal pad on
+// both sides, then the prompt glyph and its trailing space.
+function composerTextCols(cols: number): number {
+  return Math.max(8, cols - COMPOSER_PAD_X * 2 - 2)
+}
 
 // One local send awaiting server acknowledgement: messageId is null while the
 // POST is in flight, then the created SessionMessage's id (protocol v2 §4.2) —
@@ -231,11 +261,12 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // Lines opened in place with → while highlighted: a grp:* fold expands into
   // its tool calls, a clamped long body un-clamps. ← closes them again.
   const [openedKeys, setOpenedKeys] = useState<ReadonlySet<string>>(new Set())
-  // The transcript viewport: the key of the entry pinned to the top of the
-  // window, or null to follow the bottom (the default — new content stays in
-  // view). The scroll wheel / trackpad moves it; moving the ↑/↓ highlight out
-  // of frame snaps it so the highlighted entry comes back into view.
-  const [scrollKey, setScrollKey] = useState<string | null>(null)
+  // The transcript viewport: the ROW pinned to the top of the window (as an
+  // entry + row offset, so appends and re-wraps can't slide it), or null to
+  // follow the bottom — the default, so streamed content stays in view. The
+  // wheel and ↑/↓ move it a row at a time; the highlight snaps it so the
+  // selected entry comes into frame.
+  const [scrollAnchor, setScrollAnchor] = useState<ScrollAnchor | null>(null)
   // Whether the terminal's mouse reporting is armed (wheel/trackpad scrolls
   // the transcript). Capturing the mouse steals native text selection and
   // clickable links, so it starts off — the terminal keeps the mouse for
@@ -302,28 +333,21 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
 
   // The sandbox startup timeline, derived from the lifecycle records of the
   // latest start (a session_starting wake/retry or sandbox_starting record
-  // resets it, so a wake tells a fresh story): dim session notes, one step
-  // per provisioning phase — opened by its sandbox_phase `started`
-  // transition, closed with its cache-tier/duration note — accumulating the
-  // log lines of its sandbox_output chunks, plus the sandbox_ready summary.
-  // Completed steps STACK as ✓ lines (the design-doc §3 timeline) instead of
-  // rewriting one line in place; the live step ticks under them with its
-  // last RUNNING_TAIL_LINES log lines as a dim tail beneath it. Highlighting the block (↑ from the composer) and
-  // pressing → opens the step list, and arrow keys drill into a step's logs.
-  // The block persists after startup as the durable trace (the sandbox_ready
-  // transcript notice is suppressed below in its favour).
+  // resets it, so a wake tells a fresh story): a headline tracking the
+  // session's state, plus ONE FLAT LOG of every milestone and every line of
+  // build/setup output, newest last. While the session comes up the block
+  // shows the tail of that log; once ready it collapses to the bare headline,
+  // and → while highlighted re-opens the log to re-read it. The block persists
+  // after startup as the durable trace (the sandbox_ready transcript notice is
+  // suppressed below in its favour).
   const sandbox = useMemo(
     () => deriveSandboxState(snapshot.records, props.minRenderFeedSeq),
     [snapshot.records, props.minRenderFeedSeq],
   )
-  const [sandboxOpen, setSandboxOpen] = useState(false)
-  const [stepCursor, setStepCursor] = useState(0)
-  const [stepLogsOpen, setStepLogsOpen] = useState(false)
-  // Once the session settles the block collapses to the bare headline; →
-  // while highlighted re-reveals the config + sandbox child lines (and →
-  // again drills into the phases via sandboxOpen). Live starts always show
-  // the whole hierarchy — there's nothing to collapse until it's done.
-  const [sandboxDetails, setSandboxDetails] = useState(false)
+  // Whether a SETTLED block is showing its log again (→ opens it, ← closes it).
+  // A live start always shows the log — there is nothing to collapse until the
+  // session is up.
+  const [sandboxLogOpen, setSandboxLogOpen] = useState(false)
 
   // Bodies of the server's PENDING inbox messages — the durable queued signal.
   const serverQueued = useMemo(
@@ -460,6 +484,21 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     if (!working) return
     setElapsed(0)
     const t = setInterval(() => setElapsed((e) => e + 1), 1000)
+    return () => clearInterval(t)
+  }, [working])
+
+  // The heartbeat behind every live ⏺ mark: one timer for the whole app, so
+  // each pulsing glyph breathes in step instead of drifting out of phase. It
+  // runs only while something is actually in flight — a still ⏺ on a settled
+  // transcript would be a lie, and an idle interval would wake the render loop
+  // for nothing. Reset on the way in so a new turn starts bright.
+  const [pulseOn, setPulseOn] = useState(true)
+  useEffect(() => {
+    if (!working) {
+      setPulseOn(true)
+      return
+    }
+    const t = setInterval(() => setPulseOn((on) => !on), PULSE_MS)
     return () => clearInterval(t)
   }, [working])
 
@@ -604,12 +643,6 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     return { visible: out, indented: indentedKeys }
   }, [items, expanded, pendingTools, openedKeys])
 
-  // Everything ↑/↓ can highlight, top to bottom: the sandbox startup block
-  // (when it renders), then the transcript lines. Navigation tracks keys, not
-  // indices, so streamed appends don't shift the highlight. Each entry also
-  // carries an estimated on-screen height (rows), which drives the viewport:
-  // only the slice that fits the window renders, scrolled by wheel/trackpad
-  // and snapped to the highlight.
   const infraActivity = statusActivityText(statusWord)
   // The startup story has settled: the headline is final ("Session ready!"),
   // nothing is live. This is when the block collapses to the bare headline.
@@ -617,101 +650,44 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   useEffect(() => {
     // A fresh start (wake/retry) re-opens the live hierarchy and re-arms the
     // collapse for when it settles again.
-    if (!sandboxSettled) setSandboxDetails(false)
+    if (!sandboxSettled) setSandboxLogOpen(false)
   }, [sandboxSettled])
-  const entries = useMemo(() => {
-    const width = Math.max(20, cols - 3)
-    const keys: string[] = []
-    const heights: number[] = []
-    const byKey = new Map<string, TranscriptItem>()
-    if (infraActivity || sandbox) {
-      keys.push('sandbox')
-      heights.push(
-        sandboxBlockRows(sandbox, sandboxSettled, sandboxDetails, sandboxOpen, stepLogsOpen, stepCursor),
-      )
-    }
-    for (const item of visible) {
-      keys.push(item.key)
-      const isMessage = item.kind === 'user' || item.kind === 'assistant'
-      // An opened fold's indented children lose 2 columns to the indent;
-      // a message panel loses its horizontal pad on both sides.
-      const itemWidth = indented.has(item.key)
-        ? Math.max(20, width - 2)
-        : isMessage
-          ? Math.max(20, width - MESSAGE_PAD * 2)
-          : width
-      // Markdown is resolved HERE, once, so the height estimate and the
-      // rendered row measure the exact same (pre-wrapped) text.
-      const shown = withRenderedMarkdown(item, itemWidth)
-      byKey.set(item.key, shown)
-      heights.push(
-        estimateItemRows(shown, itemWidth, !expanded && !openedKeys.has(item.key)) +
-          // The message panel's vertical pad rows (above and below the body).
-          (isMessage ? MESSAGE_PAD * 2 : 0),
-      )
-    }
-    return { keys, heights, byKey }
-  }, [
-    infraActivity,
-    sandbox,
-    visible,
-    indented,
-    sandboxSettled,
-    sandboxDetails,
-    sandboxOpen,
-    stepLogsOpen,
-    stepCursor,
-    expanded,
-    openedKeys,
-    cols,
-  ])
-  // Everything ↑/↓ can actually land on: the entry list minus turn summaries
-  // ("turn complete · 3s · $0.03"), which are informational trailers, not
-  // content — the selection walk skips them (they still render and scroll).
-  const navKeys = useMemo(
-    () =>
-      entries.keys.filter(
-        (k) => k === 'sandbox' || entries.byKey.get(k)?.kind !== 'summary',
-      ),
-    [entries],
-  )
-
-  // Rows available to the transcript viewport: the window minus the shell
-  // row, top padding, the footer (composer + meta + queued + notice), the
-  // live-activity reserve while the agent works, and the two possible
-  // "… N above/below" indicator rows. Heights are estimates, so this leans
-  // conservative rather than overflow the window into scrollback.
-  const viewBudget = useMemo(() => {
-    const width = Math.max(20, cols - 3)
-    // The composer panel: a 3-row minimum interior, growing with a taller
-    // multi-line input, plus the 1-cell pad above and below it. No rules to
-    // account for — the tint is the frame.
-    const composerRows = composerVisible
-      ? Math.max(COMPOSER_INTERIOR_ROWS, composer.text.split('\n').length) + 2
+  // How the pane's rows are divided: the footer (notice + composer + meta
+  // line) is fixed, the chat window takes the rest, and the top padding is the
+  // give — it shrinks, to nothing if it must, so the frame always fits.
+  //
+  // Fitting is not cosmetic: an over-tall frame scrolls ink's render region and
+  // smears stale rows up the terminal. So the window's budget is whatever is
+  // left AFTER the footer, never a floor that could exceed the pane, and the
+  // window itself renders exactly that many rows (see rowViewport).
+  const { viewBudget, padRows, composerRows, noticeRows } = useMemo(() => {
+    // Both wrapping parts of the footer are measured as the rows they will
+    // actually OCCUPY, not as the newlines they contain: a notice ("stream
+    // error: …") and a typed paragraph both wrap, and counting either as one
+    // row means the footer quietly outgrows the space reserved for it.
+    const fixed = (props.hideMetaLine ? 0 : 1) + 1 /* footer margin */
+    // What the wrapping parts share. Each takes what it needs and yields the
+    // rest, in priority order: the chat window always keeps a row, then the
+    // composer, and the notice gives up its extra rows first (it truncates —
+    // the important half of "stream error: …" is the front).
+    let free = rows - bottomSlack - fixed
+    // A pane with no room for chat + composer + notice drops the notice
+    // entirely: overflowing the frame would smear the whole app.
+    const noticeRows = notice
+      ? Math.max(0, Math.min(fitLines(`· ${notice}`, cols).length, free - 2))
       : 0
-    // Live prose wraps inside the same 80% column its committed form uses;
-    // its message panel adds MESSAGE_PAD rows above and below.
-    const liveWidth = Math.max(20, Math.floor(width * 0.8))
-    const liveReserve = working
-      ? 2 +
-        (snapshot.liveText
-          ? Math.ceil(snapshot.liveText.length / liveWidth) + 1 + MESSAGE_PAD * 2
-          : 0)
-      : 0
-    // The in-flight sends render inside the transcript area (below the
-    // slice), so their rows come out of the viewport budget: spacer +
-    // wrapped lines + the message panel's pad rows each.
-    const queuedReserve = inFlightSends.reduce(
-      (acc, q) =>
-        acc +
-        1 +
-        MESSAGE_PAD * 2 +
-        q.text.split('\n').reduce((a, l) => a + Math.max(1, Math.ceil(l.length / width)), 0),
-      0,
-    )
-    const footerRows =
-      (props.hideMetaLine ? 0 : 1) + (notice ? 1 : 0) + composerRows + 1 /* footer margin */
-    return Math.max(3, rows - bottomSlack - topPad - footerRows - liveReserve - queuedReserve - 2)
+    free -= noticeRows
+    // The composer panel: its interior grows with the input, plus the 1-cell
+    // pad above and below. No rules to account for — the tint is the frame. In
+    // a pane too short for all of it the pad goes, then the interior shrinks
+    // toward a single row.
+    const typedRows = fitLines(composer.text, composerTextCols(cols)).length
+    const wanted = Math.max(COMPOSER_INTERIOR_ROWS, typedRows) + 2
+    const composerRows = composerVisible ? Math.max(1, Math.min(wanted, free - 1)) : 0
+    const forContent = Math.max(1, free - composerRows)
+    // At least one row of chat: the top padding yields first.
+    const pad = Math.max(0, Math.min(topPad, forContent - 1))
+    return { viewBudget: forContent - pad, padRows: pad, composerRows, noticeRows }
   }, [
     rows,
     cols,
@@ -719,58 +695,230 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     topPad,
     composerVisible,
     composer.text,
-    working,
-    snapshot.liveText,
     notice,
-    inFlightSends,
     props.hideMetaLine,
   ])
 
-  // The viewport slice for a given scroll anchor (pure math in viewportSlice;
-  // a stale/missing scroll key falls back to following the bottom).
-  const sliceFor = useCallback(
-    (anchorKey: string | null): { start: number; end: number } => {
-      if (anchorKey !== null) {
-        const idx = entries.keys.indexOf(anchorKey)
-        if (idx >= 0) return viewportSlice(entries.heights, viewBudget, { type: 'top', index: idx })
+  // The live tail: the in-progress response and the one activity line under
+  // it. Three distinct, factual signals — never whimsy — each rendered on the
+  // block it describes, not above the composer:
+  // - `generating`: the model is streaming tokens (delta frames flowing) —
+  //   the ✻ line under the streamed prose, with elapsed + token count.
+  // - a running tool: a committed tool call awaits its result — a ✻ line
+  //   attached to the burst it belongs to ("Ran 2 shell commands" then the
+  //   live third), naming the tool and ticking its own timer. `hug` drops the
+  //   spacer so it reads as part of that burst.
+  // - the fallback: a turn is in flight but nothing else says so — the
+  //   harness-boot dead air (~15-20s before Claude Code's first event) and a
+  //   running turn's between-records lull. Without it a send looks like the
+  //   app hung. Gated on the TURN, not the session status: a bare interactive
+  //   session reads 'working' while it waits for your first message, and
+  //   narrating that would claim work that isn't happening.
+  // (`infraActivity` is the fourth signal, and lives in the startup block at
+  // the top, where a startup message belongs.)
+  const liveTail = useMemo(() => {
+    const liveText = snapshot.liveText
+    const liveTokens = snapshot.liveOutputTokens
+    const generating = statusWord === 'working' && (liveText !== '' || liveTokens != null)
+    const runningTool = statusWord === 'working' && !generating && pendingTools.length > 0
+    // Whether the activity line hugs the block above it: in expanded mode the
+    // pending ● call itself is the last line; collapsed, when the trailing
+    // fold ("Ran N …", key grp:*) — or an opened fold's trailing tool line —
+    // is the same burst the pending call belongs to.
+    const last = visible[visible.length - 1]
+    const hug = expanded
+      ? pendingTools.length > 0
+      : last != null &&
+        (last.key.startsWith('grp:') || last.kind === 'tool' || last.kind === 'tool_result')
+    if (generating) {
+      return {
+        text: liveText,
+        label: 'Generating…',
+        tick: 'elapsed' as const,
+        suffix: liveTokens != null ? `· ↓ ${formatTokens(liveTokens)} tokens` : '',
+        // The ⏺ line sits directly under the prose it describes.
+        hug: liveText !== '',
+        nested: false,
       }
-      return viewportSlice(entries.heights, viewBudget, { type: 'bottom' })
-    },
-    [entries, viewBudget],
-  )
+    }
+    if (runningTool) {
+      const label =
+        pendingTools.length === 1
+          ? `Running ${pendingTools[0].text}${pendingTools[0].detail ?? ''}…`
+          : `Running ${pendingTools.length} tool calls (${[...new Set(pendingTools.map((t) => t.text))].join(', ')})…`
+      // A running tool call nests under the message that made it, in the
+      // same place its ⎿ result will land.
+      return { text: '', label, tick: 'tool' as const, suffix: '', hug, nested: true }
+    }
+    if (working && !infraActivity && (awaitingAgent !== null || sendPending)) {
+      return {
+        text: '',
+        label: `${awaitingAgent === 'boot' ? 'Starting the agent' : 'Working'}…`,
+        tick: 'elapsed' as const,
+        suffix: '',
+        hug: false,
+        nested: false,
+      }
+    }
+    return { text: '', label: '', tick: 'elapsed' as const, suffix: '', hug: false, nested: false }
+  }, [
+    snapshot.liveText,
+    snapshot.liveOutputTokens,
+    statusWord,
+    pendingTools,
+    visible,
+    expanded,
+    working,
+    infraActivity,
+    awaitingAgent,
+    sendPending,
+  ])
 
-  // Wheel/trackpad scroll by whole entries; scrolling down to the newest
-  // entry re-pins the viewport to the bottom so new content follows again.
-  const wheelScroll = useCallback(
+  // EVERY row the chat window can show, top to bottom: the startup block, the
+  // committed transcript, then the tail that only exists while a turn is live
+  // (accepted sends, the streaming response, the activity line, queued sends).
+  // The tail rides in the same list rather than rendering below the window, so
+  // it can't overflow the frame — and so scrolling up through it works like
+  // scrolling up through anything else.
+  const allRows = useMemo(() => {
+    const out: TranscriptRow[] = []
+    if (infraActivity || sandbox) {
+      out.push(
+        ...sandboxRows({
+          sandbox,
+          infraActivity,
+          settled: sandboxSettled,
+          expanded: sandboxLogOpen,
+          cols,
+        }),
+      )
+    }
+    // Tool activity is nested under the message that produced it (layOutItems
+    // decides what hangs off what), so a call and its result read as work the
+    // agent did mid-message rather than as turns of their own.
+    for (const placed of layOutItems(visible, { indentedKeys: indented })) {
+      out.push(
+        ...itemRows(placed.item, cols, {
+          indent: placed.indent,
+          nested: placed.nested,
+          attach: placed.attach,
+          clamp: !expanded && !openedKeys.has(placed.item.key),
+        }),
+      )
+    }
+    // Sends the agent has TAKEN (delivered, echo record still in flight):
+    // full-colour ◆ rows ABOVE the live activity — the running turn is the
+    // response to THIS message, so its stream belongs below it.
+    for (const q of inFlightSends.filter((q) => q.state === 'accepted')) {
+      out.push(...pendingMessageRows(q.key, q.text, cols, { gutter: '◆', bold: true }))
+    }
+    if (liveTail.text) {
+      out.push(...pendingMessageRows('live', liveTail.text, cols, { gutter: '' }))
+    }
+    if (liveTail.label) {
+      out.push(
+        ...activityRows(
+          'live:act',
+          liveTail.label,
+          liveTail.tick,
+          liveTail.suffix,
+          cols,
+          liveTail.hug,
+          liveTail.nested,
+        ),
+      )
+    }
+    for (const q of inFlightSends.filter((q) => q.state !== 'accepted')) {
+      out.push(
+        ...pendingMessageRows(q.key, q.text, cols, {
+          gutter: '◆',
+          dim: true,
+          right: q.state === 'sending' ? '(sending…)' : '(queued…)',
+        }),
+      )
+    }
+    return out
+  }, [
+    infraActivity,
+    sandbox,
+    sandboxSettled,
+    sandboxLogOpen,
+    visible,
+    indented,
+    expanded,
+    openedKeys,
+    inFlightSends,
+    liveTail,
+    cols,
+  ])
+
+  // Everything ↑/↓ can land on, top to bottom: the entries with rows on the
+  // list, minus turn summaries ("turn complete · 3s · $0.03") — informational
+  // trailers, not content, so the walk skips them (they still render and
+  // scroll) — and minus the live tail, which moves under you as it streams.
+  const navKeys = useMemo(() => {
+    const skip = new Set(visible.filter((i) => i.kind === 'summary').map((i) => i.key))
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const row of allRows) {
+      if (skip.has(row.entryKey) || row.entryKey.startsWith('live')) continue
+      if (seen.has(row.entryKey)) continue
+      seen.add(row.entryKey)
+      out.push(row.entryKey)
+    }
+    return out
+  }, [allRows, visible])
+
+  // The window on screen this frame. A stale anchor (its entry folded away or
+  // scrolled off the record log) falls back to following the bottom.
+  const view = useMemo(() => {
+    const anchor = scrollAnchor ? anchorIndex(allRows, scrollAnchor) : null
+    return rowViewport(allRows.length, viewBudget, anchor)
+  }, [allRows, viewBudget, scrollAnchor])
+
+  // Move the window by `delta` ROWS. Reaching the last row re-pins it to the
+  // bottom, so streamed content follows again.
+  const scrollByRows = useCallback(
     (delta: number): void => {
-      const cur = sliceFor(scrollKey)
-      const newStart = Math.max(0, Math.min(cur.start + delta, entries.keys.length - 1))
-      const next = viewportSlice(entries.heights, viewBudget, { type: 'top', index: newStart })
-      setScrollKey(next.end >= entries.keys.length ? null : entries.keys[next.start])
+      const next = view.start + delta
+      // Reaching the last screenful re-pins to the bottom, so streamed content
+      // follows again instead of the window sitting one row short of it.
+      if (next >= allRows.length - view.capacity) setScrollAnchor(null)
+      else setScrollAnchor(anchorAt(allRows, Math.max(0, next)))
     },
-    [sliceFor, scrollKey, entries, viewBudget],
+    [allRows, view],
   )
 
-  // Snap the viewport so the given entry is in frame: above the window it
-  // becomes the top edge, below it becomes the bottom edge (bottom-pinned
-  // when it's the newest entry). Keyed, because navigation walks navKeys
-  // (which skips unselectable entries) while the viewport slices entries.
+  // Snap the window so a highlighted entry is readable: entering from above,
+  // its first line goes to the top of the frame; from below, it aligns to the
+  // bottom edge. See snapToEntry.
   const ensureVisible = useCallback(
     (key: string): void => {
-      const idx = entries.keys.indexOf(key)
-      if (idx < 0) return
-      const cur = sliceFor(scrollKey)
-      if (idx < cur.start) {
-        setScrollKey(entries.keys[idx])
-      } else if (idx >= cur.end) {
-        if (idx >= entries.keys.length - 1) setScrollKey(null)
-        else {
-          const snapped = viewportSlice(entries.heights, viewBudget, { type: 'end', index: idx })
-          setScrollKey(entries.keys[snapped.start])
-        }
-      }
+      const target = snapToEntry(allRows, key, view, view.capacity)
+      if (target === null) return
+      const range = entryRange(allRows, key)
+      // Snapping to the newest entry means following the bottom again, so new
+      // content keeps arriving in view.
+      if (range && range.last >= allRows.length - 1) setScrollAnchor(null)
+      else setScrollAnchor(anchorAt(allRows, target))
     },
-    [sliceFor, scrollKey, entries, viewBudget],
+    [allRows, view],
+  )
+
+  // An entry too tall for the window is scrolled THROUGH before the highlight
+  // leaves it: while part of it is still out of frame in the direction you're
+  // heading, ↑/↓ move the window a row instead of jumping to the next entry.
+  // Returns whether it handled the keypress.
+  const revealMore = useCallback(
+    (key: string, delta: number): boolean => {
+      const range = entryRange(allRows, key)
+      if (!range) return false
+      const more = delta < 0 ? range.first < view.start : range.last >= view.end
+      if (!more) return false
+      scrollByRows(delta)
+      return true
+    },
+    [allRows, view, scrollByRows],
   )
 
   const insertAtCursor = useCallback((ch: string): void => {
@@ -789,23 +937,24 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       if (ch && MOUSE_SEQ_RE.test(ch)) {
         let delta = 0
         for (const m of ch.matchAll(/\[<(\d+);\d+;\d+[Mm]/g)) {
-          if (m[1] === '64') delta -= 1
-          else if (m[1] === '65') delta += 1
+          if (m[1] === '64') delta -= WHEEL_ROWS
+          else if (m[1] === '65') delta += WHEEL_ROWS
         }
-        if (delta !== 0) wheelScroll(delta)
+        if (delta !== 0) scrollByRows(delta)
+        return
+      }
+      // Page keys scroll the window a frame at a time, from the composer or
+      // the transcript alike — the fast way through a long conversation.
+      if (key.pageUp || key.pageDown) {
+        scrollByRows(key.pageUp ? -view.capacity : view.capacity)
         return
       }
       if (key.escape) {
-        // Modal-first: an open sandbox panel closes, then transcript
-        // navigation drops back to the composer, then esc leaves the pane.
-        if (sandboxOpen) {
-          setSandboxOpen(false)
-          setStepLogsOpen(false)
-          return
-        }
+        // Modal-first: transcript navigation drops back to the composer, then
+        // esc leaves the pane.
         if (navKey !== null) {
           setNavKey(null)
-          setScrollKey(null)
+          setScrollAnchor(null)
           return
         }
         // Hosted: hand focus to the session nav (stopping is the composer's
@@ -820,8 +969,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       }
       // ctrl+s releases/re-arms the mouse capture: released, the terminal
       // gets the mouse back for normal select/copy; armed, wheel/trackpad
-      // scrolls the transcript. (The sandbox step list is opened by
-      // highlighting the startup block with ↑ and pressing →.)
+      // scrolls the transcript.
       if (key.ctrl && ch === 's') {
         const next = !mouseCapture
         setMouseCapture(next)
@@ -832,32 +980,16 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         )
         return
       }
-      if (sandboxOpen) {
-        if (key.upArrow) {
-          setStepCursor((c) => Math.max(0, c - 1))
-          return
-        }
-        if (key.downArrow) {
-          setStepCursor((c) => Math.min(Math.max(0, (sandbox?.steps.length ?? 0) - 1), c + 1))
-          return
-        }
-        if (key.rightArrow) {
-          setStepLogsOpen(true)
-          return
-        }
-        if (key.leftArrow) {
-          // ← with logs open hides them; with logs hidden it backs out of
-          // the panel (to the nav highlight if that's how it was opened).
-          if (stepLogsOpen) setStepLogsOpen(false)
-          else setSandboxOpen(false)
-          return
-        }
-      } else if (navKey !== null) {
-        // Transcript navigation: ↑/↓ walk the lines (snapping the viewport
-        // so the highlight stays in frame), →/enter opens the highlighted
-        // one, ← closes it, typing drops back to the composer.
+      if (navKey !== null) {
+        // Transcript navigation: ↑/↓ walk the entries, snapping the window so
+        // the highlighted one is readable; →/enter opens the highlighted one,
+        // ← closes it, typing drops back to the composer.
         const idx = navKeys.indexOf(navKey)
         if (key.upArrow) {
+          // A message taller than the window is READ before it is left: ↑
+          // scrolls up inside it while any of it is still below the frame,
+          // and only moves to the previous entry once its top is on screen.
+          if (revealMore(navKey, -1)) return
           const target = idx === -1 ? navKeys.length - 1 : Math.max(0, idx - 1)
           if (navKeys.length > 0) {
             setNavKey(navKeys[target])
@@ -866,9 +998,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           return
         }
         if (key.downArrow) {
+          if (revealMore(navKey, 1)) return
           if (idx === -1 || idx >= navKeys.length - 1) {
             setNavKey(null)
-            setScrollKey(null)
+            setScrollAnchor(null)
           } else {
             setNavKey(navKeys[idx + 1])
             ensureVisible(navKeys[idx + 1])
@@ -877,16 +1010,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         }
         if (key.rightArrow || key.return) {
           if (navKey === 'sandbox') {
-            // Settled, → drills one level at a time: bare headline → the
-            // config + sandbox lines → the phase panel. Live, the hierarchy
-            // is already showing, so → goes straight to the panel.
-            if (sandboxSettled && !sandboxDetails) {
-              setSandboxDetails(true)
-            } else {
-              setSandboxOpen(true)
-              setStepLogsOpen(false)
-              setStepCursor(Math.max(0, (sandbox?.steps.length ?? 0) - 1))
-            }
+            // One level, one keystroke: → shows the startup log again on a
+            // settled block (a live one is already showing it).
+            setSandboxLogOpen(true)
           } else {
             const item = visible.find((i) => i.key === navKey)
             if (item && (navKey.startsWith('grp:') || isCollapsible(item))) {
@@ -899,7 +1025,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           // ← closes the thing opened in place; with nothing open it's inert
           // (the session nav lives BELOW the composer — ↓ walks to it).
           if (navKey === 'sandbox') {
-            setSandboxDetails(false)
+            setSandboxLogOpen(false)
           } else if (openedKeys.has(navKey)) {
             setOpenedKeys((prev) => {
               const next = new Set(prev)
@@ -911,7 +1037,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         }
         if (ch && !key.ctrl && !key.meta && composerVisible) {
           setNavKey(null)
-          setScrollKey(null)
+          setScrollAnchor(null)
           insertAtCursor(ch)
         }
         return
@@ -922,7 +1048,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       if (!composerVisible) {
         if (key.upArrow && navKeys.length > 0) {
           setNavKey(navKeys[navKeys.length - 1])
-          setScrollKey(null)
+          setScrollAnchor(null)
         } else if (key.downArrow && props.onFocusNav) {
           props.onFocusNav()
         }
@@ -946,7 +1072,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         if (up !== null) setComposer((c) => ({ ...c, cursor: up }))
         else if (navKeys.length > 0) {
           setNavKey(navKeys[navKeys.length - 1])
-          setScrollKey(null)
+          setScrollAnchor(null)
         }
         return
       }
@@ -980,32 +1106,6 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     { isActive: inputActive },
   )
 
-  // Render the transcript from state (not <Static>) so ctrl+r can re-expand
-  // committed blocks. Collapsed (the default), runs of consecutive tool
-  // activity fold into one "Ran N shell commands" line, Claude-Code-app-style;
-  // ctrl+r restores the full ● call / ⎿ result blocks (and un-clamps long
-  // bodies). In-flight calls are excluded from the collapsed fold — they render
-  // as the live "Running …" line appended right below (see runningTool), so the
-  // fold only counts what actually ran. The pieces are memoized on
-  // [items, expanded] (pendingTools derives from items), so the elapsed-second
-  // ticks reuse the same elements and don't re-lay-out the transcript.
-  // The viewport slice actually rendered this frame; atBottom means the
-  // newest entry is in frame (live activity lines render only then).
-  const slice = useMemo(() => sliceFor(scrollKey), [sliceFor, scrollKey])
-  const atBottom = slice.end >= entries.keys.length
-  // Whether the live "Running …" line should hug the block above it: in
-  // expanded mode the pending ● call itself is the last line; collapsed,
-  // when the trailing fold ("Ran N …", key grp:*) — or an opened fold's
-  // trailing tool line — is the same burst the pending call belongs to.
-  // Otherwise the line opens its own block.
-  const lastVisible = visible[visible.length - 1]
-  const runningHug = expanded
-    ? pendingTools.length > 0
-    : lastVisible != null &&
-      (lastVisible.key.startsWith('grp:') ||
-        lastVisible.kind === 'tool' ||
-        lastVisible.kind === 'tool_result')
-
   // The persistent footer status line: status · running spend · model ·
   // session id (the dashboard link) · agent config (when the session has
   // one) · CLI version. Per-step costs live on the transcript's metadata
@@ -1034,33 +1134,6 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       : plain.length < cols
         ? plain
         : metaParts(`${sessionId.slice(0, 20)}…`).join(' · ')
-  // Three distinct, factual activity signals — never whimsy. All render IN the
-  // transcript, on the block they describe, not above the composer:
-  // - `infraActivity`: the sandbox is spawning/waking (scheduled/starting/
-  //   retrying). Shown at the TOP, under the banner, where a startup message
-  //   belongs — there's no conversation yet.
-  // - `generating`: the model is streaming tokens (delta frames flowing) —
-  //   the ✻ line under the streamed prose, with elapsed + token count.
-  // - `runningTool`: a committed tool call awaits its result — a ✻ line
-  //   attached to the tool burst it belongs to ("Ran 2 shell commands" then
-  //   the live third), naming the tool and ticking its own timer (generating
-  //   wins if both somehow read true; the model can't stream past an
-  //   unresolved call).
-  const liveText = snapshot.liveText
-  const liveTokens = snapshot.liveOutputTokens
-  const generating = statusWord === 'working' && (liveText !== '' || liveTokens != null)
-  // The live lines' ticking readouts render in the right-hand metadata
-  // column (like every other duration), so the left side is just the label.
-  const generatingBits = [
-    humanDuration(elapsed),
-    ...(liveTokens != null ? [`↓ ${formatTokens(liveTokens)} tokens`] : []),
-  ].join(' · ')
-  const runningTool = statusWord === 'working' && !generating && pendingTools.length > 0
-  const runningToolLabel =
-    pendingTools.length === 1
-      ? `Running ${pendingTools[0].text}${pendingTools[0].detail ?? ''}`
-      : `Running ${pendingTools.length} tool calls (${[...new Set(pendingTools.map((t) => t.text))].join(', ')})`
-
   return (
     // Hosted panes pin BOTH dimensions: without the width the root sizes to
     // its widest child (the unwrapped meta line) and smears rows across the
@@ -1077,349 +1150,77 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       {/* Top padding — see the termRows comment: absorbs terminal row-
           accounting quirks and the post-exit sign-off so the first content
           line never scrolls out of the window. */}
-      {topPad > 0 && <Box height={topPad} flexShrink={0} />}
+      {padRows > 0 && <Box height={padRows} flexShrink={0} />}
       {/* The one-line opener is the whole banner — the rest of the session
           identity (dashboard link, model, version) lives in the footer meta
           line, so nothing is printed to scrollback before the app. */}
-      {/* The startup story, session-first, at most three levels deep:
-              ✻ Session starting…
-                ✻ Sandbox starting…
-                  ✓ Preparing image · incremental build · 3.4s
-                  ✻ Running setup…
-          While in progress the whole hierarchy shows, the live level ticking
-          with its log tail. Once ready it collapses to the bare headline;
-          highlighting it (↑ from the composer) and pressing → reveals the
-          config + sandbox lines, → again opens the phase panel, →/← on a
-          phase shows/hides its logs. It is the viewport's first entry, so
-          it scrolls out of frame like any line. */}
-      {(infraActivity || sandbox) && entries.keys[0] === 'sandbox' && slice.start === 0 && (
-        <Box flexDirection="column">
-          {/* The conversation's opening line: where it lives. Plain text —
-              an OSC 8 hyperlink here gets broken by ink's wrapping and
-              swallows the label; the clickable dashboard link lives in the
-              footer meta line. */}
-          <Box marginBottom={1}>
-            <Text bold>✦ Connected to ellipsis.dev</Text>
-          </Box>
-          {/* The startup story sits on the same lifted panel chat messages
-              use (padded tint, no rule), so it reads as a block in the
-              conversation rather than bare canvas text. Highlighting it
-              lightens the WHOLE panel to the active surface, exactly like a
-              selected transcript line. */}
-          <Box
-            flexDirection="column"
-            padding={MESSAGE_PAD}
-            backgroundColor={navKey === 'sandbox' ? SURFACE_ACTIVE : SURFACE_ELEVATED}
-          >
-          {/* Level 1: the session headline. The selection glyph replaces the
-              mark while highlighted (same 1-char slot), so the header never
-              shifts; the highlight is the panel-wide active surface, never
-              inverse. */}
-          <Text>
-            {navKey === 'sandbox' ? (
-              <Text color={theme.foreground}>{SELECTION_GLYPH}</Text>
-            ) : sandbox?.done && !infraActivity ? (
-              <Text color={theme.success}>✓</Text>
-            ) : (
-              <Text color={theme.foreground}>✻</Text>
-            )}{' '}
-            {/* The settled headline ("Session ready!") reads bold in the
-                default (white) foreground over the dim trace beneath it;
-                while starting it stays dim like the rest of the block. */}
-            <Text
-              color={navKey === 'sandbox' ? theme.foreground : undefined}
-              dimColor={navKey !== 'sandbox' && !(sandbox?.done && !infraActivity)}
-              bold={sandbox?.done && !infraActivity}
-            >
-              {/* A live status word overrides a stale done-headline: on a
-                  wake the status flips before the new session_starting
-                  record lands, and "Session ready!" must not linger. */}
-              {sandbox?.done && !infraActivity
-                ? sandbox.headline
-                : `${(!sandbox || sandbox.done ? (infraActivity ?? 'Session starting') : sandbox.headline).replace(/…$/, '')}… (${humanDuration(elapsed)})`}
-            </Text>
+      {/* The chat window: ONE flat list of rows, sliced to exactly the rows
+          that fit. Everything lives in it — the startup block, the
+          transcript, in-flight sends, the live activity lines — so nothing
+          can render past the frame and every line on screen is scrollable.
+          Dim markers count what is out of frame above/below, and they sit
+          inside the budget so they never push a row out. */}
+      <Box flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden">
+        {view.showAbove && (
+          <Text dimColor wrap="truncate">
+            {`   ↑ ${view.hiddenAbove} more line${view.hiddenAbove === 1 ? '' : 's'} above`}
           </Text>
-          {/* Levels 2+3: the config line, the sandbox line and its phases.
-              While starting the whole live hierarchy shows; once settled the
-              block collapses to the bare headline — → while highlighted
-              reveals level 2 (config + sandbox summary), → again opens the
-              phases. */}
-          {(!sandboxSettled || sandboxDetails) &&
-            sandbox && (sandbox.configName || sandbox.sandboxLine) && (
-            <Box flexDirection="column">
-              {sandbox.configName && (
-                <Text>
-                  {'  '}
-                  <Text color={theme.success}>✓</Text>{' '}
-                  <Text dimColor>
-                    Using {sandbox.configName}
-                    {sandbox.configCommitSha
-                      ? ` @ ${sandbox.configCommitSha.slice(0, 7)}`
-                      : ''}
-                  </Text>
-                </Text>
-              )}
-              {sandbox.sandboxLine && (
-              <Text>
-                {'  '}
-                {sandbox.sandboxDone ? (
-                  <Text color={theme.success}>✓</Text>
-                ) : (
-                  <Text color={theme.foreground}>✻</Text>
-                )}{' '}
-                <Text dimColor>{oneLine(sandbox.sandboxLine, 110)}</Text>
-              </Text>
-              )}
-              {/* Level 3, the phases: live starts show them; a settled block
-                  keeps them behind the second → (the open panel). */}
-              {(!sandboxSettled || sandboxOpen) && sandbox.steps.map((step, i) => {
-                const running = step.status === 'running' && !sandbox.sandboxDone
-                const cursor = Math.min(stepCursor, sandbox.steps.length - 1)
-                const selected = sandboxOpen && i === cursor
-                const logLines = running
-                  ? step.lines.slice(-RUNNING_TAIL_LINES)
-                  : step.lines.slice(-FINISHED_LOG_LINES)
-                const hidden = step.lines.length - logLines.length
-                const showLogs = running || (selected && stepLogsOpen)
-                const logIndent = step.child ? '            ' : '          '
-                const mark =
-                  step.status === 'failed' ? (
-                    <Text color={theme.error}>✗</Text>
-                  ) : running ? (
-                    <Text color={theme.foreground}>✻</Text>
-                  ) : (
-                    <Text color={theme.success}>✓</Text>
-                  )
-                return (
-                  <Box key={step.key} flexDirection="column">
-                    {/* The cursor column is always reserved (a space when
-                        unselected), so opening the panel never shifts the
-                        rows; the selected phase sits on the active surface
-                        like the transcript highlight. Background on the
-                        Box, not the Text — nested Texts inherit theirs from
-                        ink's Box context and would repaint canvas over a
-                        Text-level background. */}
-                    <Box backgroundColor={selected ? SURFACE_ACTIVE : undefined}>
-                    <Text>
-                      {step.child ? '      ' : '    '}
-                      <Text color={theme.foreground}>{selected ? SELECTION_GLYPH : ' '}</Text> {mark}{' '}
-                      <Text
-                        color={selected ? theme.foreground : step.status === 'failed' ? theme.error : undefined}
-                        dimColor={!selected && step.status !== 'failed'}
-                      >
-                        {oneLine(sandboxStepLine(step), 108)}
-                      </Text>
-                      {sandboxOpen && step.lines.length > 0 && (
-                        <Text color={selected ? theme.foreground : undefined} dimColor={!selected}>
-                          {' '}
-                          ({step.lines.length} log line{step.lines.length === 1 ? '' : 's'})
-                        </Text>
-                      )}
-                    </Text>
-                    </Box>
-                    {/* A running step's live tail always shows (the last
-                        RUNNING_TAIL_LINES lines, ticking as chunks land);
-                        a finished step's logs stay behind →. Indented two
-                        columns past the step's label so the lines read as
-                        its children, headed by an elision line when more
-                        scrolled past. */}
-                    {showLogs && hidden > 0 && (
-                      <Text dimColor>
-                        {logIndent}… +{hidden} earlier line{hidden === 1 ? '' : 's'}
-                      </Text>
-                    )}
-                    {(showLogs ? logLines : []).map((l, j) => (
-                      <Text key={`${step.key}:${j}`} dimColor>
-                        {logIndent}
-                        {oneLine(l, 100)}
-                      </Text>
-                    ))}
-                  </Box>
-                )
-              })}
-            </Box>
-          )}
-          </Box>
-        </Box>
-      )}
-      {/* The transcript viewport grows through the middle of the terminal,
-          pinning the composer + meta to the bottom edge (flexGrow fills the
-          slack). Only the slice that fits the window renders; dim markers
-          show what's out of frame above/below. Row heights are estimates, so
-          an overshooting slice clips here (overflow) instead of squashing
-          the footer (the composer's borders collapse onto its prompt row). */}
-      <Box flexDirection="column" flexGrow={1} overflow="hidden">
-        {slice.start > 0 && (
-          <Text dimColor>… {slice.start} earlier (scroll or ↑)</Text>
         )}
-        {entries.keys.slice(slice.start, slice.end).map((k) => {
-          if (k === 'sandbox') return null
-          const item = entries.byKey.get(k)
-          if (!item) return null
-          return (
-            <TranscriptLine
-              key={k}
-              item={item}
-              expanded={expanded}
-              opened={openedKeys.has(k)}
-              selected={navKey === k}
-              indent={indented.has(k)}
-            />
-          )
-        })}
-        {!atBottom && (
-          <Text dimColor>… {entries.keys.length - slice.end} newer (scroll or ↓)</Text>
-        )}
-        {/* Sends the agent has TAKEN (delivered, echo record still in
-            flight): full-colour ◆ rows rendered ABOVE the live activity
-            lines — the running turn is the response to THIS message, so its
-            stream belongs below it. Rendering them after the live lines
-            made the Generating line flash in above the message for the echo
-            gap. */}
-        {atBottom &&
-          inFlightSends
-            .filter((q) => q.state === 'accepted')
-            .map((q) => (
-              <Box
-                key={q.key}
-                marginTop={1}
-                padding={MESSAGE_PAD}
-                backgroundColor={SURFACE_ELEVATED}
-              >
-                <Box width={2} flexShrink={0}>
-                  <Text color={theme.foreground}>◆</Text>
-                </Box>
-                <Box width="80%">
-                  <Text bold>{q.text}</Text>
-                </Box>
-              </Box>
-            ))}
-        {/* The live tool-call status, attached to the burst it belongs to: hugs
-            the collapsed "Ran N …" fold (or the expanded ● call) above it, and
-            disappears into the fold's count once the result lands. Live lines
-            only render while the viewport follows the bottom. */}
-        {atBottom && runningTool && (
-          <Box marginTop={runningHug ? 0 : 1}>
-            <Box width={2} flexShrink={0}>
-              <Text color={theme.foreground}>✻</Text>
-            </Box>
-            <Box width="80%">
-              <Text dimColor>{runningToolLabel}…</Text>
-            </Box>
-            <Box flexGrow={1} justifyContent="flex-end">
-              <Text dimColor>({humanDuration(toolElapsed)})</Text>
-            </Box>
-          </Box>
-        )}
-        {/* The in-progress assistant response, streamed token-by-token from delta
-            frames, with its live status hugging beneath; replaced by the
-            committed step when it lands. */}
-        {/* Indented to the same 2-column gutter and wrapped in the same 80%
-            column as the committed assistant item it becomes, so the text
-            doesn't jump when it lands. */}
-        {atBottom && liveText && (
-          <Box marginTop={1} padding={MESSAGE_PAD} backgroundColor={SURFACE_ELEVATED}>
-            <Box width={2} flexShrink={0} />
-            <Box width="80%">
-              <Text>{liveText}</Text>
-            </Box>
-          </Box>
-        )}
-        {atBottom && generating && (
-          <Box marginTop={liveText ? 0 : 1}>
-            <Box width={2} flexShrink={0}>
-              <Text color={theme.foreground}>✻</Text>
-            </Box>
-            <Box width="80%">
-              <Text dimColor>Generating…</Text>
-            </Box>
-            <Box flexGrow={1} justifyContent="flex-end">
-              <Text dimColor>({generatingBits})</Text>
-            </Box>
-          </Box>
-        )}
-        {/* Your not-yet-taken sends, at the chat's bottom edge the moment
-            you hit enter: dim ◆ rows with their pipeline state in the
-            right-hand metadata column — (sending…) while the POST is in
-            flight, (queued…) once the server accepts. The moment the agent
-            takes the message it turns full colour and moves ABOVE the live
-            lines (the accepted rows before the tool/generating status),
-            holding that spot through the echo gap (which spans a whole
-            sandbox wake) until the agent's own user-echo transcript item
-            replaces it. */}
-        {atBottom &&
-          inFlightSends
-            .filter((q) => q.state !== 'accepted')
-            .map((q) => (
-              <Box
-                key={q.key}
-                marginTop={1}
-                padding={MESSAGE_PAD}
-                backgroundColor={SURFACE_ELEVATED}
-              >
-                <Box width={2} flexShrink={0}>
-                  <Text color={theme.foreground} dimColor>
-                    ◆
-                  </Text>
-                </Box>
-                <Box width="80%">
-                  <Text dimColor>{q.text}</Text>
-                </Box>
-                <Box flexGrow={1} justifyContent="flex-end">
-                  <Text dimColor>{q.state === 'sending' ? '(sending…)' : '(queued…)'}</Text>
-                </Box>
-              </Box>
-            ))}
-        {/* The fallback live line: a turn is actually in flight (or a send
-            is on its way to starting one) but nothing else says so — no
-            tokens streaming, no tool pending, no infra startup block
-            ticking. This is the harness-boot dead air (a fresh execution
-            takes ~15-20s to start Claude Code before its first event) and a
-            running turn's between-records lull; without it a send looks
-            like the app hung. Gated on the turn, not the session status: a
-            bare interactive session reads 'working' while it just sits
-            waiting for your first message, and narrating that would claim
-            work that isn't happening. */}
-        {atBottom &&
-          working &&
-          !generating &&
-          !runningTool &&
-          !infraActivity &&
-          (awaitingAgent !== null || sendPending) && (
-          <Box marginTop={1}>
-            <Box width={2} flexShrink={0}>
-              <Text color={theme.foreground}>✻</Text>
-            </Box>
-            <Box width="80%">
-              <Text dimColor>
-                {awaitingAgent === 'boot' ? 'Starting the agent' : 'Working'}…
-              </Text>
-            </Box>
-            <Box flexGrow={1} justifyContent="flex-end">
-              <Text dimColor>({humanDuration(elapsed)})</Text>
-            </Box>
-          </Box>
+        {allRows.slice(view.start, view.end).map((row) => (
+          <RowLine
+            key={row.id}
+            row={row}
+            cols={cols}
+            selected={navKey !== null && row.entryKey === navKey && !row.spacer}
+            // Both ticking values are passed as constants to rows that don't
+            // use them, so React.memo skips those rows entirely: the
+            // once-a-second clock and the pulse repaint the live lines, not
+            // the whole window.
+            seconds={row.tick ? (row.tick === 'tool' ? toolElapsed : elapsed) : 0}
+            pulseOn={row.pulse ? pulseOn : true}
+          />
+        ))}
+        {view.showBelow && (
+          <Text dimColor wrap="truncate">
+            {`   ↓ ${view.hiddenBelow} more line${view.hiddenBelow === 1 ? '' : 's'} below`}
+          </Text>
         )}
       </Box>
       {/* flexShrink=0: when a mis-estimated transcript slice overflows the
           fixed pane, the squeeze lands on the (overflow-hidden) viewport
           above, never on the composer/meta rows. */}
       <Box flexDirection="column" marginTop={1} flexShrink={0}>
-        {notice && <Text dimColor>· {notice}</Text>}
-        {/* The composer: a 3-row input area on the elevated surface — one
-            step lighter (the active surface) while it's where you are
-            (focused, no transcript highlight), matching the transcript's
-            selection treatment. The tint is the whole frame — no rules — so
-            the panel reads as lifted off the canvas rather than fenced in by
-            lines. A uniform 1-cell pad keeps the text off all four edges,
-            and because it's inside the tinted Box the gutter carries the
-            panel color too (a 5-row panel around a 3-row interior). */}
+        {/* The notice is budgeted at its wrapped height (noticeRows) and
+            pinned to it, so an unbounded one (a stream error, an API error
+            detail) can't grow the frame past the pane. */}
+        {notice && noticeRows > 0 && (
+          <Box height={noticeRows} flexShrink={0} overflow="hidden">
+            <Text dimColor>· {notice}</Text>
+          </Box>
+        )}
+        {/* The composer: the input area on the elevated surface — one step
+            lighter (the active surface) while it's where you are (focused, no
+            transcript highlight), matching the transcript's selection
+            treatment. The tint is the whole frame — no rules — so the panel
+            reads as lifted off the canvas rather than fenced in by lines. A
+            uniform 1-cell pad keeps the text off all four edges, and because
+            it's inside the tinted Box the gutter carries the panel color too.
+            The panel is pinned to the rows budgeted for it, and clips: a pane
+            too short for the whole input scrolls it (below) rather than
+            painting the overflow across the meta line. */}
         {composerVisible && (
           <Box
             backgroundColor={focused && navKey === null ? SURFACE_ACTIVE : SURFACE_ELEVATED}
-            minHeight={COMPOSER_INTERIOR_ROWS + 2}
-            alignItems="flex-start"
-            paddingY={1}
+            height={composerRows}
+            flexShrink={0}
+            overflow="hidden"
+            // Squeezed, the panel shows the END of the input, not the start:
+            // the caret is where you're typing, so that's the part to keep on
+            // screen.
+            alignItems="flex-end"
+            // The vertical pad is the first thing to go in a pane too short
+            // for the whole panel — the input's own row is never negotiable.
+            paddingY={composerRows >= COMPOSER_INTERIOR_ROWS + 2 ? 1 : 0}
             paddingX={COMPOSER_PAD_X}
           >
             {/* One parent Text so a multi-line input flows as a single block
@@ -1498,105 +1299,125 @@ export function cursorLineDown(text: string, cursor: number): number | null {
 // leading escape of the first report is already stripped by ink).
 const MOUSE_SEQ_RE = /^(?:\u001B?\[<\d+;\d+;\d+[Mm])+$/
 
-// The viewport slice over a list of entry heights: which contiguous run of
-// entries fits in `budget` rows, anchored to the bottom (follow newest), to
-// a top entry (scrolled), or with an entry pinned to the bottom edge (the
-// ↓-snap when the highlight walks below the frame). Always includes at least
-// the anchor entry, even when it alone overflows the budget. Pure, for tests.
-export function viewportSlice(
-  heights: readonly number[],
-  budget: number,
-  anchor: { type: 'bottom' } | { type: 'top'; index: number } | { type: 'end'; index: number },
-): { start: number; end: number } {
-  const n = heights.length
-  if (n === 0) return { start: 0, end: 0 }
-  if (anchor.type === 'top') {
-    const start = Math.max(0, Math.min(anchor.index, n - 1))
-    let used = 0
-    let end = start
-    while (end < n) {
-      if (used + heights[end] > budget && end > start) break
-      used += heights[end]
-      end++
-    }
-    return { start, end }
+// The startup block as screen rows: the "Connected" opener, then the
+// session-first hierarchy on its message panel —
+//     ✻ Session starting…
+//       ✻ Sandbox starting…
+//         ✓ Preparing image · incremental build · 3.4s
+//         ✻ Running setup…
+// While in progress the whole hierarchy shows, the live level ticking with its
+// log tail. Once ready it collapses to the bare headline; highlighting it (↑
+// from the composer) and pressing → reveals the config + sandbox lines, →
+// again opens the phase panel, →/← on a phase shows/hides its logs. Its rows
+// sit at the top of the same flat list as everything else, so it scrolls out
+// of frame like any other content.
+function sandboxRows(o: {
+  sandbox: SandboxState | null
+  infraActivity: string | null
+  settled: boolean
+  expanded: boolean
+  cols: number
+}): TranscriptRow[] {
+  const { sandbox, infraActivity, settled, cols } = o
+  const key = 'sandbox'
+  const rows: TranscriptRow[] = []
+  const width = contentWidth(cols, { panel: true })
+  // Every row of the block sits on the panel and reserves the standard gutter,
+  // so the ▶ marker lands in the headline's mark slot when the block is
+  // highlighted — the same treatment every other entry gets.
+  const line = (spans: RowSpan[], extra: Partial<TranscriptRow> = {}): void => {
+    rows.push({ id: `${key}:r${rows.length}`, entryKey: key, panel: true, spans, ...extra })
   }
-  const endIdx = anchor.type === 'bottom' ? n - 1 : Math.max(0, Math.min(anchor.index, n - 1))
-  let used = 0
-  let start = endIdx + 1
-  while (start > 0) {
-    if (used + heights[start - 1] > budget && start <= endIdx) break
-    used += heights[start - 1]
-    start--
+  // The conversation's opening line: where it lives. Plain text — an OSC 8
+  // hyperlink here gets broken by ink's wrapping and swallows the label; the
+  // clickable dashboard link lives in the footer meta line. It introduces the
+  // block rather than being part of the startup story, so it keeps its own ✦
+  // and never takes the selection marker — the headline below does.
+  rows.push({
+    id: `${key}:hdr`,
+    entryKey: key,
+    spans: [{ text: '✦ Connected to ellipsis.dev', bold: true }],
+  })
+  const ready = (sandbox?.done ?? false) && !infraActivity
+  // A live status word overrides a stale done-headline: on a wake the status
+  // flips before the new session_starting record lands, and "Session ready!"
+  // must not linger.
+  const headline = ready
+    ? (sandbox?.headline ?? '')
+    : `${(!sandbox || sandbox.done ? (infraActivity ?? 'Session starting') : sandbox.headline).replace(/…$/, '')}…`
+  line(
+    [
+      // The settled headline ("Session ready!") reads bold in the default
+      // foreground over the dim trace beneath it; while starting it stays dim
+      // like the rest of the block.
+      { text: fit(headline, width - 18), dim: !ready, bold: ready },
+    ],
+    {
+      gutter: {
+        text: ready ? '✓' : LIVE_GLYPH,
+        color: ready ? theme.success : theme.foreground,
+      },
+      // While starting, the headline pulses and carries the elapsed clock.
+      ...(ready ? {} : { tick: 'elapsed' as const, pulse: true }),
+    },
+  )
+
+  // The log, ONE level under the headline: no phase tree, no per-phase tails,
+  // no drilling. While the session is coming up you see the last
+  // SANDBOX_LOG_ROWS lines of everything that has happened — including build
+  // and setup output, which is the whole point of showing it — headed by a
+  // count of what scrolled past. Once it settles the block collapses to the
+  // bare headline, and → re-opens the same log to re-read it.
+  if (!sandbox) return rows
+  const show = settled && !o.expanded ? [] : lastLines(sandbox.log, SANDBOX_LOG_ROWS)
+  const hidden = sandbox.log.length - show.length
+  if (show.length > 0 && hidden > 0) {
+    line([
+      { text: '  ' },
+      { text: `… +${hidden} earlier line${hidden === 1 ? '' : 's'}`, dim: true },
+    ])
   }
-  return { start, end: endIdx + 1 }
+  for (const entry of show) {
+    // A milestone still open pulses; output lines and closed milestones are
+    // plain dim trace. Marks stay in one column, so the log reads as a list.
+    const live = entry.kind === 'step' && !sandbox.sandboxDone
+    const mark: RowSpan =
+      entry.kind === 'failed'
+        ? { text: '✗', color: theme.error }
+        : entry.kind === 'output'
+          ? { text: ' ' }
+          : live
+            ? { text: LIVE_GLYPH, color: theme.foreground, pulse: true }
+            : { text: '✓', color: theme.success };
+    line(
+      [
+        { text: '  ' },
+        mark,
+        { text: ' ' },
+        {
+          text: fit(entry.text, width - 5),
+          color: entry.kind === 'failed' ? theme.error : undefined,
+          dim: entry.kind !== 'failed',
+        },
+      ],
+      live ? { pulse: true } : {},
+    )
+  }
+  return rows
 }
 
-// Agent and user prose rendered as markdown (bold, headings, bullets, tables,
-// fenced code), pre-wrapped to the column it will occupy. Only these two kinds
-// go through it: tool lines and system notices are the SDK's own formatting,
-// where a stray asterisk or pipe is literal text. Items without markdown come
-// back untouched, so the common case allocates nothing. Pure, for tests.
-export function withRenderedMarkdown(item: TranscriptItem, width: number): TranscriptItem {
-  if (item.kind !== 'assistant' && item.kind !== 'user') return item
-  if (!hasMarkdown(item.text)) return item
-  const rendered = renderMarkdown(item.text, width)
-  return rendered === item.text ? item : { ...item, text: rendered }
-}
-
-// Estimated rows a transcript item occupies on screen: its (possibly
-// clamped) body lines, wrapped at the given width, plus the "+N lines"
-// marker and the blank spacer row. Widths are VISIBLE columns — markdown
-// rendering leaves ANSI escapes in the text, which occupy none. Pure, for
+// The tail of the startup log: the last `max` lines, which is what you want
+// while a session comes up — the newest output, not the oldest. Pure, for
 // tests.
-export function estimateItemRows(item: TranscriptItem, width: number, clamp: boolean): number {
-  const clamped =
-    clamp && isCollapsible(item)
-      ? clampLines(item.text, COLLAPSE_LINES)
-      : { body: item.text, more: 0 }
-  let rows = (item.spaceBefore ? 1 : 0) + (clamped.more > 0 ? 1 : 0)
-  for (const line of clamped.body.split('\n')) {
-    rows += Math.max(1, Math.ceil(visibleWidth(line) / width))
-  }
-  return rows
+export function lastLines(log: readonly SandboxLogLine[], max: number): SandboxLogLine[] {
+  return log.length <= max ? [...log] : log.slice(log.length - max)
 }
 
-// Estimated rows of the startup block in its current shape: the headline,
-// plus — while starting or drilled into — the config line, the sandbox line,
-// one row per phase, and the selected phase's open log lines. Settled and
-// not drilled into, the block is just the bare headline.
-function sandboxBlockRows(
-  sandbox: SandboxState | null,
-  settled: boolean,
-  details: boolean,
-  open: boolean,
-  logsOpen: boolean,
-  stepCursor: number,
-): number {
-  // The "Connected to ellipsis.dev" opener + its blank row, then the headline
-  // inside its message panel (MESSAGE_PAD rows above and below the content).
-  let rows = 3 + MESSAGE_PAD * 2
-  const expanded =
-    sandbox != null &&
-    (sandbox.configName != null || sandbox.sandboxLine != null) &&
-    (!settled || details)
-  if (!expanded) return rows
-  if (sandbox.configName != null) rows += 1
-  if (sandbox.sandboxLine != null) rows += 1
-  const steps = !settled || open ? sandbox.steps : []
-  rows += steps.length
-  const cursor = Math.min(stepCursor, Math.max(0, steps.length - 1))
-  for (const [i, step] of steps.entries()) {
-    const running = step.status === 'running' && !sandbox.sandboxDone
-    // A running step always shows its live tail; a finished step's logs
-    // show only while selected in the open panel with logs toggled on.
-    // Shown lines plus the "+N earlier lines" heading when some are elided.
-    if (running || (open && logsOpen && i === cursor)) {
-      const shown = Math.min(step.lines.length, running ? RUNNING_TAIL_LINES : FINISHED_LOG_LINES)
-      rows += shown + (step.lines.length > shown ? 1 : 0)
-    }
-  }
-  return rows
+// A single line, truncated to `width` visible columns — the startup block's
+// lines are structural (indent + mark + label), so an over-long one is cut
+// rather than reflowed onto a row the layout didn't account for.
+function fit(text: string, width: number): string {
+  return fitLines(text, Math.max(4, width))[0] ?? ''
 }
 
 // The run of tool/tool_result items a collapsed fold stands for. A fold's key
@@ -1636,54 +1457,48 @@ export function hookPhrase(step: string): string {
   }
 }
 
-// A running step's live log tail height, and how much of a finished step's
-// log the panel shows before eliding the head with a "+N earlier lines" row.
-const RUNNING_TAIL_LINES = 5
-const FINISHED_LOG_LINES = 100
+// Lines of the startup log the block shows: the last ten, which is enough to
+// watch an image build or a setup hook make progress without the block taking
+// over the chat window. Anything older is counted in the "… +N earlier lines"
+// head above them.
+const SANDBOX_LOG_ROWS = 10
 
-export type SandboxStepStatus = 'running' | 'done' | 'failed'
-export type SandboxStep = {
+// One line of the startup log: a milestone (a phase opening or closing, the
+// config resolving, the box coming up) or a line of output from whatever the
+// sandbox was running. They all live in ONE flat list in feed order, because
+// that is how they happened and how you read them.
+export type SandboxLogKind = 'step' | 'output' | 'done' | 'failed'
+export type SandboxLogLine = {
   key: string
-  label: string
-  status: SandboxStepStatus
-  // "cached image · 1.2s" — the completed/failed transition's cache-tier
-  // detail and duration, for the step's closing summary.
-  note: string | null
-  lines: string[]
-  // Created from output chunks alone (a feed recorded before sandbox_phase
-  // transitions existed) — such steps close on the next step, not on a
-  // transition.
-  inferred: boolean
-  // Rendered one level under its bare-phase sibling: the key is phase:step
-  // AND an entry keyed exactly `phase` exists (the image phase's build/
-  // container/smoke children under "Preparing image"). Hook steps have no
-  // bare-phase sibling and stay flat.
-  child: boolean
+  kind: SandboxLogKind
+  text: string
 }
-// The startup story as a THREE-LEVEL hierarchy, session-first: the headline
-// is the SESSION's state ("Session scheduled…" → "Session starting…" →
-// "Session ready!"), the sandbox is one child line under it, and the
-// provisioning phases are children of the sandbox. `done` stops the
-// headline's ticking timer; the hierarchy stays on screen as the all-✓
-// trace, its logs hidden behind → in the panel.
+
+// The startup story as a HEADLINE plus a FLAT LOG.
+//
+// It used to be a three-level tree (session → sandbox → phases → each phase's
+// own log tail), drilled into with →. That shape hid the thing you actually
+// want when a session is slow to come up — the build output — three keystrokes
+// deep, and it split one chronological story across separate per-phase tails.
+// Now every milestone and every line of build/setup output goes into one
+// ordered list, and the block shows the LAST few (SANDBOX_LOG_ROWS) of it.
 export type SandboxState = {
   // The current top-level line ("Session scheduled…", "Session starting…",
   // "Waking the session…", "Retrying…", "Session ready!").
   headline: string
   done: boolean
-  // The agent config resolved at scheduling, shown as its own child line
-  // under the headline (NOT in the headline, which the next lifecycle
-  // record replaces — a config baked in there flashes and vanishes).
+  // Whether the sandbox itself has finished provisioning, so the log's live
+  // lines stop pulsing.
+  sandboxDone: boolean
+  // The agent config resolved at scheduling, held apart from the log because it
+  // outlives a restart: the log drops on a retry/wake, but which config the
+  // session runs is still true. Rendered as the log's first line.
   configName: string | null
   // The commit of the config file in the repo it's owned at (the sync
   // provenance), when the backend sends it. Shortened for display.
   configCommitSha: string | null
-  // Level 2: the sandbox child line ("Sandbox starting…" or the
-  // "Sandbox ready · cached image · 29s" summary), null before provisioning.
-  sandboxLine: string | null
-  sandboxDone: boolean
-  // Level 3: the provisioning phases under the sandbox line.
-  steps: SandboxStep[]
+  // Everything that happened during this start, oldest first.
+  log: SandboxLogLine[]
 }
 
 // The structural slice of a session record the derivations need (the SDK's
@@ -1697,19 +1512,36 @@ type LifecycleRecordLike = {
   session_message_id?: string | null
 }
 
-// The committed transcript items, with each turn's closing `result` summary
-// dropped: its duration and cost are session bookkeeping, not conversation —
-// the footer's running spend is where that story lives. An error summary
-// survives as its own (red) line under a plain label: a failed turn is
-// content. Pure, for tests.
+// The chat is a LOG of the session: what was said, and what happened to the
+// session while it was being said. So the milestones — it went to sleep, it is
+// waking again, it was cancelled — land in the transcript, in feed order,
+// alongside the conversation (see SESSION_LOG_RECORDS). Without them a session
+// that naps between turns leaves an unexplained gap, and the only account of
+// the wake is the startup block up top silently rewriting itself.
+//
+// Each turn's closing `result` summary is dropped: its duration and cost are
+// bookkeeping, not conversation — the footer's running spend is where that
+// story lives. An error summary survives as its own (red) line under a plain
+// label: a failed turn is content. Pure, for tests.
 export function reshapeTranscript(
   records: readonly LifecycleRecordLike[],
   minRenderFeedSeq: number,
 ): { items: TranscriptItem[] } {
   const items: TranscriptItem[] = []
   for (const r of records) {
-    if (r.source === 'lifecycle') continue
     if (r.feed_seq <= minRenderFeedSeq) continue
+    if (r.source === 'lifecycle') {
+      const text = sessionLogText(r)
+      if (text) {
+        items.push({
+          key: `s${r.feed_seq}`,
+          kind: 'notice',
+          text,
+          spaceBefore: true,
+        })
+      }
+      continue
+    }
     const isResult = r.source === 'claude_code' && r.payload.type === 'result'
     // recordToItems reads only the structural slice (source, record_type,
     // payload); its SessionRecordWire param type isn't exported from the
@@ -1726,6 +1558,47 @@ export function reshapeTranscript(
     }
   }
   return { items }
+}
+
+// The session milestones worth a line in the chat log, and how each reads.
+// Deliberately a SHORT list of state changes a reader would otherwise be left
+// guessing about:
+//   - the session parked between turns, and what wakes it
+//   - it is coming back up (a wake, or an infra retry after a wobble)
+//   - it came back and the conversation continues
+//   - it was stopped or cancelled
+// Everything else the lifecycle feed carries is startup detail (sandbox phases,
+// setup log chunks, per-phase timings) and belongs to the startup block up top,
+// not the conversation — logging it would bury the chat in provisioning noise.
+//
+// `session_ready`-style milestones are deliberately absent for a FIRST start:
+// the startup block already tells that story in place. A wake is different —
+// it happens long after the block settled, mid-conversation. Pure, for tests.
+export function sessionLogText(record: LifecycleRecordLike): string | null {
+  const p = record.payload
+  switch (record.record_type) {
+    case 'session_idle':
+      return 'Session asleep — your next message wakes it'
+    case 'session_starting': {
+      // Only a WAKE is logged: the first start is the startup block's story.
+      const wake = typeof p.wake_index === 'number' ? p.wake_index : 0
+      const attempt = typeof p.attempt === 'number' ? p.attempt : 0
+      if (attempt > 0) return 'Restarting the sandbox after a transient error…'
+      return wake > 0 ? 'Waking the session…' : null
+    }
+    case 'session_retrying':
+      return typeof p.reason === 'string' && p.reason
+        ? `Retrying · ${p.reason}`
+        : 'Retrying after a transient error…'
+    case 'session_resumed':
+      return 'Session awake — picking up where it left off'
+    case 'session_cancelled': {
+      const reason = typeof p.reason === 'string' && p.reason ? ` · ${p.reason}` : ''
+      return `Session cancelled${reason}`
+    }
+    default:
+      return null
+  }
 }
 
 // Whether a turn is IN FLIGHT (a turn_started record without its
@@ -1856,17 +1729,17 @@ function stepLabel(phase: string, step: string | null): string {
   return sandboxPhaseLabel(phase)
 }
 
-// The startup story from the lifecycle records of the LATEST start, as the
-// session-first hierarchy: the headline tracks the session-subject records
-// ("Session scheduled…" → "Session starting…"/"Waking…"/"Retrying…" →
-// "Session ready!" when the sandbox comes up), the sandbox is one child line,
-// and the provisioning phases are its children — opened by their
-// sandbox_phase `started` transition, closed (with cache-tier/duration note)
-// by `completed`/`failed` — with sandbox_output chunks attaching their lines
-// to the matching step (exact phase:step, then the bare phase, then an
-// inferred step for feeds that predate phase transitions). session_starting
-// begins a fresh story (a wake or infra retry drops the previous one).
-// null when no lifecycle record has been seen. Pure, for tests.
+// The startup story from the lifecycle records of the LATEST start: a headline
+// tracking the session's own state ("Session scheduled…" → "Session starting…"
+// / "Waking…" / "Retrying…" → "Session ready!"), plus ONE FLAT LOG of
+// everything that happened on the way up, in feed order — the config
+// resolving, each provisioning phase opening and closing (with its cache tier
+// and duration), and every line of output those phases produced (image builds,
+// clones, setup hooks).
+//
+// session_starting begins a fresh story: a wake or an infra retry drops the
+// previous start's log rather than appending to it. null when no lifecycle
+// record has been seen. Pure, for tests.
 export function deriveSandboxState(
   records: readonly LifecycleRecordLike[],
   minFeedSeq: number,
@@ -1874,302 +1747,251 @@ export function deriveSandboxState(
   let seen = false
   let headline = 'Session starting…'
   let done = false
+  let sandboxDone = false
   let configName: string | null = null
   let configCommitSha: string | null = null
-  let sandboxLine: string | null = null
-  let sandboxDone = false
-  let steps: SandboxStep[] = []
+  let log: SandboxLogLine[] = []
+  // Phases still open, so a `completed`/`failed` transition can close the line
+  // it opened rather than adding a second one.
+  let open = new Map<string, SandboxLogLine>()
+  const push = (record: LifecycleRecordLike, kind: SandboxLogKind, text: string): SandboxLogLine => {
+    const entry = { key: `${record.feed_seq}:${log.length}`, kind, text }
+    log.push(entry)
+    return entry
+  }
+  const reset = (): void => {
+    log = []
+    open = new Map()
+    sandboxDone = false
+  }
+
   for (const record of records) {
     if (record.feed_seq <= minFeedSeq || record.source !== 'lifecycle') continue
     const p = record.payload
-    if (record.record_type === 'session_scheduled') {
-      seen = true
-      headline = 'Session scheduled…'
-      configName = typeof p.config_name === 'string' && p.config_name ? p.config_name : null
-      configCommitSha =
-        typeof p.config_commit_sha === 'string' && p.config_commit_sha
-          ? p.config_commit_sha
-          : null
-      done = false
-    } else if (
-      record.record_type === 'session_starting' ||
-      record.record_type === 'session_retrying'
-    ) {
-      seen = true
-      // Every claim starts a fresh story: the headline takes over ("Session
-      // starting…", "Waking the session…", "Retrying…") and the previous
-      // start's sandbox children drop.
-      headline = lifecycleText(record.record_type, p) ?? 'Session starting…'
-      done = false
-      sandboxLine = null
-      sandboxDone = false
-      steps = []
-    } else if (record.record_type === 'session_resumed') {
-      seen = true
-      // The wake mounted its snapshots and the conversation continues — the
-      // session-level outcome, same beat as ready on a fresh start.
-      headline = 'Session ready!'
-      done = true
-    } else if (record.record_type === 'session_idle') {
-      seen = true
-      headline = 'Session idle — your next message wakes it'
-      done = true
-    } else if (record.record_type === 'sandbox_starting') {
-      seen = true
-      sandboxLine = 'Sandbox starting…'
-      sandboxDone = false
-      steps = []
-    } else if (record.record_type === 'sandbox_phase') {
-      seen = true
-      const phase = typeof p.phase === 'string' && p.phase ? p.phase : 'setup'
-      const step = typeof p.step === 'string' && p.step ? p.step : null
-      const key = step ? `${phase}:${step}` : phase
-      let entry = steps.find((s) => s.key === key)
-      if (!entry) {
-        entry = {
-          key,
-          label: stepLabel(phase, step),
-          status: 'running',
-          note: null,
-          lines: [],
-          inferred: false,
-          child: false,
+    switch (record.record_type) {
+      case 'session_scheduled': {
+        seen = true
+        headline = 'Session scheduled…'
+        done = false
+        configName = typeof p.config_name === 'string' && p.config_name ? p.config_name : null
+        configCommitSha =
+          typeof p.config_commit_sha === 'string' && p.config_commit_sha
+            ? p.config_commit_sha
+            : null
+        break
+      }
+      case 'session_starting':
+      case 'session_retrying': {
+        seen = true
+        // Every claim starts a fresh story: the headline takes over and the
+        // previous start's log drops.
+        headline = lifecycleText(record.record_type, p) ?? 'Session starting…'
+        done = false
+        reset()
+        break
+      }
+      case 'session_resumed': {
+        seen = true
+        // The wake mounted its snapshots and the conversation continues — the
+        // session-level outcome, same beat as ready on a fresh start.
+        headline = 'Session ready!'
+        done = true
+        break
+      }
+      case 'session_idle': {
+        seen = true
+        headline = 'Session idle — your next message wakes it'
+        done = true
+        break
+      }
+      case 'sandbox_starting': {
+        seen = true
+        reset()
+        push(record, 'step', 'Starting sandbox…')
+        break
+      }
+      case 'sandbox_phase': {
+        seen = true
+        const phase = typeof p.phase === 'string' && p.phase ? p.phase : 'setup'
+        const step = typeof p.step === 'string' && p.step ? p.step : null
+        const key = step ? `${phase}:${step}` : phase
+        const label = stepLabel(phase, step)
+        if (p.status === 'completed' || p.status === 'failed') {
+          const detail =
+            p.detail && typeof p.detail === 'object' ? (p.detail as Record<string, unknown>) : {}
+          // "full build (2s)", "(42s)", or a bare tier — the duration always
+          // parenthesized (the app-wide duration format).
+          const tier = cacheTierLabel(detail.cache_tier)
+          const dur = msLabel(p.duration_ms)
+          const note = [...(tier ? [tier] : []), ...(dur ? [`(${dur})`] : [])].join(' ')
+          const failed = p.status === 'failed'
+          const base = failed ? `${label} failed` : label
+          const text = note ? (note.startsWith('(') ? `${base} ${note}` : `${base} · ${note}`) : base
+          const line = open.get(key)
+          if (line) {
+            // Close the line this phase opened, in place: one line per phase,
+            // not an opening line and a closing one.
+            line.kind = failed ? 'failed' : 'done'
+            line.text = text
+            open.delete(key)
+          } else {
+            push(record, failed ? 'failed' : 'done', text)
+          }
+        } else if (!open.has(key)) {
+          open.set(key, push(record, 'step', `${label}…`))
         }
-        steps.push(entry)
+        break
       }
-      entry.inferred = false
-      if (p.status === 'completed' || p.status === 'failed') {
-        entry.status = p.status === 'completed' ? 'done' : 'failed'
-        const detail =
-          p.detail && typeof p.detail === 'object'
-            ? (p.detail as Record<string, unknown>)
-            : {}
-        // "full build (2s)", "(42s)", or a bare tier — the duration always
-        // parenthesized (the app-wide duration format).
-        const tier = cacheTierLabel(detail.cache_tier)
-        const dur = msLabel(p.duration_ms)
-        const bits = [...(tier ? [tier] : []), ...(dur ? [`(${dur})`] : [])]
-        entry.note = bits.length ? bits.join(' ') : null
+      case 'sandbox_output': {
+        seen = true
+        for (const l of sandboxOutputLines(p)) push(record, 'output', l)
+        break
       }
-    } else if (record.record_type === 'sandbox_output') {
-      seen = true
-      const phase = typeof p.phase === 'string' && p.phase ? p.phase : 'setup'
-      const step = typeof p.step === 'string' && p.step ? p.step : null
-      const outputKey = sandboxOutputStep(p)
-      let entry =
-        (step ? steps.find((s) => s.key === `${phase}:${step}`) : undefined) ??
-        steps.find((s) => s.key === phase) ??
-        steps.find((s) => s.key === outputKey)
-      if (!entry) {
-        // No transition opened a home for this output: an inferred step (old
-        // feeds). A new inferred step means the previous inferred one ended.
-        for (const s of steps) if (s.inferred && s.status === 'running') s.status = 'done'
-        entry = {
-          key: outputKey,
-          label: hookPhrase(outputKey),
-          status: 'running',
-          note: null,
-          lines: [],
-          inferred: true,
-          child: false,
-        }
-        steps.push(entry)
+      case 'sandbox_ready': {
+        seen = true
+        // Anything still open finished when the box came up.
+        for (const [, line] of open) line.kind = 'done'
+        open = new Map()
+        const timings =
+          p.phase_timings && typeof p.phase_timings === 'object'
+            ? Object.values(p.phase_timings as Record<string, unknown>)
+            : []
+        const totalSeconds = timings.reduce<number>(
+          (acc, v) => (typeof v === 'number' && isFinite(v) ? acc + v : acc),
+          0,
+        )
+        const tier = cacheTierLabel(p.cache_tier)
+        push(
+          record,
+          'done',
+          ['Sandbox ready', ...(tier ? [tier] : [])].join(' · ') +
+            (totalSeconds > 0 ? ` (${humanDuration(totalSeconds)})` : ''),
+        )
+        sandboxDone = true
+        // The box coming up is the session-level outcome too.
+        headline = 'Session ready!'
+        done = true
+        break
       }
-      entry.lines.push(...sandboxOutputLines(p))
-    } else if (record.record_type === 'sandbox_ready') {
-      seen = true
-      for (const s of steps) if (s.status === 'running') s.status = 'done'
-      const timings =
-        p.phase_timings && typeof p.phase_timings === 'object'
-          ? Object.values(p.phase_timings as Record<string, unknown>)
-          : []
-      const totalSeconds = timings.reduce<number>(
-        (acc, v) => (typeof v === 'number' && isFinite(v) ? acc + v : acc),
-        0,
-      )
-      const tier = cacheTierLabel(p.cache_tier)
-      sandboxLine =
-        ['Sandbox ready', ...(tier ? [tier] : [])].join(' · ') +
-        (totalSeconds > 0 ? ` (${humanDuration(totalSeconds)})` : '')
-      sandboxDone = true
-      // The box coming up is the session-level outcome too: the headline
-      // settles on ✓ over the all-done step trace.
-      headline = 'Session ready!'
-      done = true
+      default:
+        break
     }
   }
-  // Nest a phase:step entry one level under its bare-phase sibling, when
-  // one exists (the image phase opens "Preparing image" then its build/
-  // container/smoke steps). Keyed generically on the phase prefix, so any
-  // phase that gains steps nests the same way.
-  for (const s of steps) {
-    const colon = s.key.indexOf(':')
-    s.child = colon > 0 && steps.some((o) => o.key === s.key.slice(0, colon))
-  }
-  return seen
-    ? { headline, done, configName, configCommitSha, sandboxLine, sandboxDone, steps }
-    : null
+  // The config line heads the log: it is the first thing that was decided, and
+  // it survives the restarts that clear everything below it.
+  const full: SandboxLogLine[] = configName
+    ? [
+        {
+          key: 'config',
+          kind: 'done',
+          text: `Using ${configName}${configCommitSha ? ` @ ${configCommitSha.slice(0, 7)}` : ''}`,
+        },
+        ...log,
+      ]
+    : log
+  return seen ? { headline, done, sandboxDone, configName, configCommitSha, log: full } : null
 }
 
-// One timeline step as its collapsed display line: a running step shows its
-// label (its live log tail renders as dim lines BENEATH it, not inline), a
-// finished one its closing note (cache tier, parenthesized duration), a
-// failed one says so. A note that leads with its "(duration)" attaches with
-// a space ("Building image (42s)"); a tier-led note takes the dot separator
-// ("Preparing image · full build (2s)"). Pure, for tests.
-export function sandboxStepLine(step: SandboxStep): string {
-  if (step.status === 'running') {
-    return `${step.label}…`
-  }
-  const base = step.status === 'failed' ? `${step.label} failed` : step.label
-  if (!step.note) return base
-  return step.note.startsWith('(') ? `${base} ${step.note}` : `${base} · ${step.note}`
-}
-
-// Long bodies collapse to this many lines until ctrl+r expands them.
-const COLLAPSE_LINES = 6
-
-// Which items collapse when long: tool results and user turns (the latter carry
-// the re-injected run context, which is bulky). Assistant prose stays full.
-function isCollapsible(item: TranscriptItem): boolean {
-  return (
-    (item.kind === 'tool_result' || item.kind === 'user') &&
-    item.text.split('\n').length > COLLAPSE_LINES
-  )
-}
-
-// The sender icon in the 2-column gutter: ◆ (cyan) marks a message you sent
-// (the --prompt initial message included — it's a user message), ● marks the
-// assistant's prose (default foreground; the tool-call ● is green + bold, so
-// the two never read the same), ✦ (dim) marks system/notice lines — the
-// infrastructure speaking. Everything else keeps the SDK's glyph (⎿ results,
-// ✻ thinking) or none. The › selection highlight replaces the icon in the
-// same slot, so a selected line always reads differently from its resting
-// state. Pure, for tests.
-export function gutterFor(item: TranscriptItem): string {
-  if (item.kind === 'user') return '◆'
-  if (item.kind === 'assistant') return '●'
-  if (item.kind === 'system' || item.kind === 'notice') return '✦'
-  return item.gutter ?? ''
-}
-
-// Colour + weight for each transcript item kind, matched loosely to Claude Code.
-function styleFor(item: TranscriptItem): {
-  gutterColor?: string
-  textColor?: string
-  dim: boolean
-  bold: boolean
-} {
-  const kind: ItemKind = item.kind
-  switch (kind) {
-    case 'tool':
-      return { gutterColor: theme.success, bold: true, dim: false }
-    case 'tool_result':
-      return {
-        textColor: item.isError ? theme.error : undefined,
-        dim: !item.isError,
-        bold: false,
-      }
-    // User copy stays white like the assistant's (the ◆ icon marks the
-    // sender); cyan text always and only means "the selection is here".
-    case 'user':
-      return { gutterColor: theme.foreground, bold: true, dim: false }
-    case 'error':
-      return { gutterColor: theme.error, textColor: theme.error, dim: false, bold: false }
-    case 'summary':
-      return {
-        textColor: item.isError ? theme.error : undefined,
-        dim: true,
-        bold: false,
-      }
-    case 'thinking':
-    case 'system':
-    case 'notice':
-      return { dim: true, bold: false }
-    case 'assistant':
-    default:
-      return { dim: false, bold: false }
-  }
-}
-
-const TranscriptLine = React.memo(function TranscriptLine({
-  item,
-  expanded,
-  opened,
+// One screen row. Exactly one terminal line by construction: the text was
+// pre-fitted to the pane (see transcriptRows), and wrap="truncate" is the
+// belt-and-braces guarantee — a row that wrapped would push every row below it
+// down and slide the window out of sync with the scroll position.
+//
+// The selected row steps onto the lighter active surface, the app-wide "you are
+// here" treatment (the focused composer, sidebar rows, dropdown options all
+// match). Never inverse: a bone-white bar is far too loud on the charcoal
+// canvas.
+const RowLine = React.memo(function RowLine({
+  row,
+  cols,
   selected,
-  indent = false,
+  seconds,
+  pulseOn,
 }: {
-  item: TranscriptItem
-  expanded: boolean
-  // This line was opened in place with → while highlighted (un-clamps it).
-  opened: boolean
-  // This line is the transcript-navigation highlight: cyan selection glyph
-  // in the gutter, cyan text.
+  row: TranscriptRow
+  cols: number
   selected: boolean
-  // This line is an opened fold's child ("Ran 2 …" → its tool calls): the
-  // whole row shifts one level (2 columns) right, so the expansion reads as
-  // the fold's children in the chat hierarchy.
-  indent?: boolean
+  // The row's ticking duration, resolved here so the once-a-second tick
+  // repaints this line instead of rebuilding the transcript's rows.
+  seconds: number
+  // The shared pulse phase (see PULSE_MS). Only a pulsing row reads it, so
+  // the blink repaints the live lines and leaves the rest of the window alone.
+  pulseOn: boolean
 }): React.ReactElement {
-  const mt = item.spaceBefore ? 1 : 0
-  const { gutterColor, textColor, dim, bold } = styleFor(item)
-
-  // Every line (assistant prose included) reserves the same 2-column gutter,
-  // so the › highlight fills the slot IN PLACE of whatever glyph lives there
-  // and the text never shifts when the selection lands on it.
-
-  // Long tool results and user turns collapse to a compact body with a
-  // "+N lines" marker unless ctrl+r has expanded the transcript or → opened
-  // this line.
-  const clamped =
-    !expanded && !opened && isCollapsible(item)
-      ? clampLines(item.text, COLLAPSE_LINES)
-      : { body: item.text, more: 0 }
-
-  // Messages (user + assistant prose) sit on the same lifted panel the
-  // composer uses, full width like the input box, with a 1-cell pad inside
-  // the tint on all four sides (MESSAGE_PAD — the viewport height estimates
-  // count the two pad rows); tool chatter and notices stay on the canvas.
-  // The selected line — any kind — steps onto the lighter active surface,
-  // the app-wide "you are here" treatment (the focused composer, sidebar
-  // rows, dropdown options all match). Never inverse: a bone-white bar is
-  // far too loud on the charcoal canvas.
-  const isMessage = item.kind === 'user' || item.kind === 'assistant'
+  const background = selected || row.activeRow
+    ? SURFACE_ACTIVE
+    : row.panel
+      ? SURFACE_ELEVATED
+      : undefined
+  // The "+N lines" marker's hint names the key that actually opens it: → when
+  // the line is highlighted, ctrl+r otherwise.
+  const spans: RowSpan[] = row.clampedLines
+    ? [
+        {
+          text: `… +${row.clampedLines} lines (${selected ? '→' : 'ctrl+r'} to expand)`,
+          dim: true,
+        },
+      ]
+    : row.spans
+  // A pulsing mark's off beat SWAPS ITS COLOUR rather than setting ink's
+  // dimColor: dim is \x1b[2m, which a fair number of terminals drop entirely
+  // when a 24-bit foreground is also set — the blink would silently do nothing
+  // there. Bone → grey is a real colour change, so it reads everywhere.
+  const markColor = (span: RowSpan): string | undefined =>
+    span.pulse && !pulseOn ? theme.muted : span.color
+  // Durations always render parenthesized, in the right-hand metadata column.
+  const right = row.tick
+    ? { text: `(${[humanDuration(seconds), row.right?.text].filter(Boolean).join(' ')})`, dim: true }
+    : row.right
+  // height=1 is load-bearing: a blank row (a spacer, or a message panel's pad)
+  // has no text, and ink collapses an empty Box to zero height — the row would
+  // silently vanish, leaving the window short of the rows the scroll math
+  // counted. A tinted row also paints its background across the FULL pane
+  // width, so the panel reads as a block, not a ragged strip behind the text.
   return (
-    <Box
-      marginTop={mt}
-      paddingLeft={isMessage ? MESSAGE_PAD : indent ? 2 : 0}
-      paddingRight={isMessage ? MESSAGE_PAD : 0}
-      paddingY={isMessage ? MESSAGE_PAD : 0}
-      backgroundColor={selected ? SURFACE_ACTIVE : isMessage ? SURFACE_ELEVATED : undefined}
-    >
-      <Box width={2}>
+    <Box width={cols} height={1} flexShrink={0} backgroundColor={background}>
+      {row.panel && <Box width={MESSAGE_PAD} flexShrink={0} />}
+      {row.indent ? <Box width={row.indent} flexShrink={0} /> : null}
+      <Box width={GUTTER_COLS} flexShrink={0}>
+        {/* The gutter glyph, or the selection marker in its place — same
+            1-char slot, so the text never shifts when the highlight lands.
+            A live row's mark pulses by DIMMING on the off beat: the glyph
+            itself never changes, so the column holds still and the eye reads
+            a heartbeat rather than a character swapping in and out. */}
         <Text
-          color={selected ? theme.foreground : gutterColor}
-          dimColor={!selected && dim && !item.isError}
+          color={selected || !row.gutter ? theme.foreground : markColor(row.gutter)}
+          dimColor={!selected && !row.gutter?.pulse && (row.gutter?.dim ?? false)}
+          wrap="truncate"
         >
-          {selected ? SELECTION_GLYPH : gutterFor(item)}
+          {selected && row.gutter ? SELECTION_GLYPH : (row.gutter?.text ?? '')}
         </Text>
       </Box>
-      <Box flexDirection="column" flexGrow={1}>
-        <Text
-          color={selected ? theme.foreground : textColor}
-          dimColor={!selected && dim}
-          bold={bold}
-        >
-          {clamped.body}
-          {item.detail ? (
-            <Text color={selected ? theme.foreground : undefined} dimColor={!selected}>
-              {item.detail}
+      <Box flexGrow={1} flexShrink={1} overflow="hidden">
+        <Text wrap="truncate">
+          {spans.map((span, i) => (
+            <Text
+              key={i}
+              color={selected ? theme.foreground : markColor(span)}
+              dimColor={!selected && !span.pulse && span.dim}
+              bold={span.bold}
+            >
+              {span.text}
             </Text>
-          ) : null}
+          ))}
         </Text>
-        {clamped.more > 0 && (
-          <Text dimColor>
-            … +{clamped.more} lines ({selected ? '→' : 'ctrl+r'} to expand)
-          </Text>
-        )}
       </Box>
+      {right && (
+        <Box flexShrink={0} paddingLeft={1}>
+          <Text
+            color={selected ? theme.foreground : right.color}
+            dimColor={!selected && right.dim}
+            wrap="truncate"
+          >
+            {right.text}
+          </Text>
+        </Box>
+      )}
+      {row.panel && <Box width={MESSAGE_PAD} flexShrink={0} />}
     </Box>
   )
 })

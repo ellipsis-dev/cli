@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import stripAnsi from 'strip-ansi'
-import { hasMarkdown, renderMarkdown, visibleWidth } from '../src/lib/markdown'
+import { fitLines, hasMarkdown, renderMarkdown, visibleWidth } from '../src/lib/markdown'
 
 const lines = (text: string): string[] => text.split('\n')
 const plain = (text: string): string => stripAnsi(text)
@@ -104,5 +104,31 @@ describe('visibleWidth', () => {
   it('ignores escape sequences', () => {
     expect(visibleWidth('[1mbold[22m')).toBe(4)
     expect(visibleWidth('plain')).toBe(5)
+  })
+})
+
+describe('fitLines', () => {
+  it('returns the exact lines the text occupies, none wider than the width', () => {
+    const out = fitLines('word '.repeat(30).trim(), 20)
+    expect(out.length).toBeGreaterThan(1)
+    for (const line of out) expect(visibleWidth(line)).toBeLessThanOrEqual(20)
+  })
+
+  it('keeps a short line as one line, and splits on existing newlines', () => {
+    expect(fitLines('hi', 20)).toEqual(['hi'])
+    expect(fitLines('a\nb\nc', 20)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('measures visible columns, so escapes cost no width', () => {
+    // 30 visible chars in a 40-column pane: one line, despite the escapes.
+    expect(fitLines(`\u001b[1m${'x'.repeat(30)}\u001b[22m`, 40)).toHaveLength(1)
+  })
+
+  it('truncates a table row instead of reflowing it', () => {
+    // Box-drawing rows can't move their columns, so they're cut to fit.
+    const row = `│ ${'a'.repeat(40)} │`
+    const out = fitLines(row, 20)
+    expect(out).toHaveLength(1)
+    expect(visibleWidth(out[0])).toBeLessThanOrEqual(20)
   })
 })
