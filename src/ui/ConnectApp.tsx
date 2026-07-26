@@ -35,7 +35,9 @@ import { ApiClient, ApiError } from '../lib/api'
 import { hyperlink } from '../lib/urls'
 import { usdNumberFromMillicents } from '../lib/output'
 import { applyEditShortcut } from '../lib/editing'
+import { hasMarkdown, renderMarkdown, visibleWidth } from '../lib/markdown'
 import { SELECTION_GLYPH } from '../lib/sessions'
+import { SURFACE_ACTIVE, SURFACE_ELEVATED, theme } from '../lib/theme'
 import { VERSION } from '../lib/constants'
 
 // The interactive `agent session connect` UI, modelled on Claude Code: a
@@ -123,6 +125,21 @@ function isWorkingStatus(status: string): boolean {
 // room above the ✻ startup header, plus two of sacrificial slack — see the
 // termRows comment in ConnectApp for what the slack absorbs.
 const TOP_PAD = 4
+
+// Text rows inside the composer panel, before its 1-cell pad. ink's minHeight
+// counts padding, so the panel's own minHeight and the viewport budget both
+// use this plus 2 (the pad above and below).
+const COMPOSER_INTERIOR_ROWS = 3
+
+// Horizontal breathing room inside the composer panel — wider than the 1-cell
+// vertical pad so the caret and text start well clear of the panel edge.
+const COMPOSER_PAD_X = 2
+
+// The pad inside a chat message's panel, all four sides — the text sits one
+// cell off the tint's edge, like the composer's interior. Counted by the
+// viewport height estimates (two extra rows per message) and subtracted from
+// the wrap width (two columns).
+const MESSAGE_PAD = 1
 
 // One local send awaiting server acknowledgement: messageId is null while the
 // POST is in flight, then the created SessionMessage's id (protocol v2 §4.2) —
@@ -254,10 +271,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // re-derivations.
   // Lifecycle records are excluded entirely: the sandbox story renders as the
   // one-line progress block up top (sandboxProgress), not as transcript rows.
-  // Each turn's closing summary is reshaped into stepMeta — the right-hand
-  // metadata column on the turn's final assistant message (see
-  // reshapeTranscript).
-  const { items, stepMeta } = useMemo(
+  // Each turn's closing duration/cost summary is dropped too (see
+  // reshapeTranscript) — the footer carries the session's spend.
+  const { items } = useMemo(
     () => reshapeTranscript(snapshot.records, props.minRenderFeedSeq),
     [snapshot.records, props.minRenderFeedSeq],
   )
@@ -303,6 +319,11 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const [sandboxOpen, setSandboxOpen] = useState(false)
   const [stepCursor, setStepCursor] = useState(0)
   const [stepLogsOpen, setStepLogsOpen] = useState(false)
+  // Once the session settles the block collapses to the bare headline; →
+  // while highlighted re-reveals the config + sandbox child lines (and →
+  // again drills into the phases via sandboxOpen). Live starts always show
+  // the whole hierarchy — there's nothing to collapse until it's done.
+  const [sandboxDetails, setSandboxDetails] = useState(false)
 
   // Bodies of the server's PENDING inbox messages — the durable queued signal.
   const serverQueued = useMemo(
@@ -590,6 +611,14 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // only the slice that fits the window renders, scrolled by wheel/trackpad
   // and snapped to the highlight.
   const infraActivity = statusActivityText(statusWord)
+  // The startup story has settled: the headline is final ("Session ready!"),
+  // nothing is live. This is when the block collapses to the bare headline.
+  const sandboxSettled = (sandbox?.done ?? false) && !infraActivity
+  useEffect(() => {
+    // A fresh start (wake/retry) re-opens the live hierarchy and re-arms the
+    // collapse for when it settles again.
+    if (!sandboxSettled) setSandboxDetails(false)
+  }, [sandboxSettled])
   const entries = useMemo(() => {
     const width = Math.max(20, cols - 3)
     const keys: string[] = []
@@ -597,21 +626,28 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     const byKey = new Map<string, TranscriptItem>()
     if (infraActivity || sandbox) {
       keys.push('sandbox')
-      heights.push(sandboxBlockRows(sandbox, sandboxOpen, stepLogsOpen, stepCursor))
+      heights.push(
+        sandboxBlockRows(sandbox, sandboxSettled, sandboxDetails, sandboxOpen, stepLogsOpen, stepCursor),
+      )
     }
     for (const item of visible) {
       keys.push(item.key)
-      byKey.set(item.key, item)
-      // Assistant messages wrap inside their 80% column (the right 20% is
-      // the metadata gutter), so their height estimate uses that width; an
-      // opened fold's indented children lose 2 columns to the indent.
-      const itemWidth = item.kind === 'assistant'
-        ? Math.max(20, Math.floor(width * 0.8))
-        : indented.has(item.key)
-          ? Math.max(20, width - 2)
+      const isMessage = item.kind === 'user' || item.kind === 'assistant'
+      // An opened fold's indented children lose 2 columns to the indent;
+      // a message panel loses its horizontal pad on both sides.
+      const itemWidth = indented.has(item.key)
+        ? Math.max(20, width - 2)
+        : isMessage
+          ? Math.max(20, width - MESSAGE_PAD * 2)
           : width
+      // Markdown is resolved HERE, once, so the height estimate and the
+      // rendered row measure the exact same (pre-wrapped) text.
+      const shown = withRenderedMarkdown(item, itemWidth)
+      byKey.set(item.key, shown)
       heights.push(
-        estimateItemRows(item, itemWidth, !expanded && !openedKeys.has(item.key)),
+        estimateItemRows(shown, itemWidth, !expanded && !openedKeys.has(item.key)) +
+          // The message panel's vertical pad rows (above and below the body).
+          (isMessage ? MESSAGE_PAD * 2 : 0),
       )
     }
     return { keys, heights, byKey }
@@ -620,6 +656,8 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     sandbox,
     visible,
     indented,
+    sandboxSettled,
+    sandboxDetails,
     sandboxOpen,
     stepLogsOpen,
     stepCursor,
@@ -645,24 +683,29 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // conservative rather than overflow the window into scrollback.
   const viewBudget = useMemo(() => {
     const width = Math.max(20, cols - 3)
-    // The composer box: its rules (2, or 1 when the host's nav rule serves
-    // as the bottom) plus a 3-row minimum interior (grows with a taller
-    // multi-line input).
+    // The composer panel: a 3-row minimum interior, growing with a taller
+    // multi-line input, plus the 1-cell pad above and below it. No rules to
+    // account for — the tint is the frame.
     const composerRows = composerVisible
-      ? (props.hideMetaLine ? 1 : 2) + Math.max(3, composer.text.split('\n').length)
+      ? Math.max(COMPOSER_INTERIOR_ROWS, composer.text.split('\n').length) + 2
       : 0
-    // Live prose wraps inside the same 80% column its committed form uses.
+    // Live prose wraps inside the same 80% column its committed form uses;
+    // its message panel adds MESSAGE_PAD rows above and below.
     const liveWidth = Math.max(20, Math.floor(width * 0.8))
     const liveReserve = working
-      ? 2 + (snapshot.liveText ? Math.ceil(snapshot.liveText.length / liveWidth) + 1 : 0)
+      ? 2 +
+        (snapshot.liveText
+          ? Math.ceil(snapshot.liveText.length / liveWidth) + 1 + MESSAGE_PAD * 2
+          : 0)
       : 0
     // The in-flight sends render inside the transcript area (below the
     // slice), so their rows come out of the viewport budget: spacer +
-    // wrapped lines each.
+    // wrapped lines + the message panel's pad rows each.
     const queuedReserve = inFlightSends.reduce(
       (acc, q) =>
         acc +
         1 +
+        MESSAGE_PAD * 2 +
         q.text.split('\n').reduce((a, l) => a + Math.max(1, Math.ceil(l.length / width)), 0),
       0,
     )
@@ -834,9 +877,16 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         }
         if (key.rightArrow || key.return) {
           if (navKey === 'sandbox') {
-            setSandboxOpen(true)
-            setStepLogsOpen(false)
-            setStepCursor(Math.max(0, (sandbox?.steps.length ?? 0) - 1))
+            // Settled, → drills one level at a time: bare headline → the
+            // config + sandbox lines → the phase panel. Live, the hierarchy
+            // is already showing, so → goes straight to the panel.
+            if (sandboxSettled && !sandboxDetails) {
+              setSandboxDetails(true)
+            } else {
+              setSandboxOpen(true)
+              setStepLogsOpen(false)
+              setStepCursor(Math.max(0, (sandbox?.steps.length ?? 0) - 1))
+            }
           } else {
             const item = visible.find((i) => i.key === navKey)
             if (item && (navKey.startsWith('grp:') || isCollapsible(item))) {
@@ -848,7 +898,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         if (key.leftArrow) {
           // ← closes the thing opened in place; with nothing open it's inert
           // (the session nav lives BELOW the composer — ↓ walks to it).
-          if (openedKeys.has(navKey)) {
+          if (navKey === 'sandbox') {
+            setSandboxDetails(false)
+          } else if (openedKeys.has(navKey)) {
             setOpenedKeys((prev) => {
               const next = new Set(prev)
               next.delete(navKey)
@@ -1020,6 +1072,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       width={hosted ? cols : undefined}
       height={hosted ? rows : undefined}
       minHeight={hosted ? undefined : Math.max(0, rows - bottomSlack)}
+      backgroundColor={theme.canvas}
     >
       {/* Top padding — see the termRows comment: absorbs terminal row-
           accounting quirks and the post-exit sign-off so the first content
@@ -1034,11 +1087,11 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                   ✓ Preparing image · incremental build · 3.4s
                   ✻ Running setup…
           While in progress the whole hierarchy shows, the live level ticking
-          with its log tail. Once ready the hierarchy STAYS, all ✓ with the
-          logs hidden — the durable trace of how the session came up.
-          Highlighting it (↑ from the composer) and pressing → opens the
-          panel, →/← on a phase shows/hides its logs. It is the viewport's
-          first entry, so it scrolls out of frame like any line. */}
+          with its log tail. Once ready it collapses to the bare headline;
+          highlighting it (↑ from the composer) and pressing → reveals the
+          config + sandbox lines, → again opens the phase panel, →/← on a
+          phase shows/hides its logs. It is the viewport's first entry, so
+          it scrolls out of frame like any line. */}
       {(infraActivity || sandbox) && entries.keys[0] === 'sandbox' && slice.start === 0 && (
         <Box flexDirection="column">
           {/* The conversation's opening line: where it lives. Plain text —
@@ -1048,23 +1101,33 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           <Box marginBottom={1}>
             <Text bold>✦ Connected to ellipsis.dev</Text>
           </Box>
+          {/* The startup story sits on the same lifted panel chat messages
+              use (padded tint, no rule), so it reads as a block in the
+              conversation rather than bare canvas text. Highlighting it
+              lightens the WHOLE panel to the active surface, exactly like a
+              selected transcript line. */}
+          <Box
+            flexDirection="column"
+            padding={MESSAGE_PAD}
+            backgroundColor={navKey === 'sandbox' ? SURFACE_ACTIVE : SURFACE_ELEVATED}
+          >
           {/* Level 1: the session headline. The selection glyph replaces the
               mark while highlighted (same 1-char slot), so the header never
-              shifts. */}
+              shifts; the highlight is the panel-wide active surface, never
+              inverse. */}
           <Text>
             {navKey === 'sandbox' ? (
-              <Text color="cyan">{SELECTION_GLYPH}</Text>
+              <Text color={theme.foreground}>{SELECTION_GLYPH}</Text>
             ) : sandbox?.done && !infraActivity ? (
-              <Text color="green">✓</Text>
+              <Text color={theme.success}>✓</Text>
             ) : (
-              <Text color="cyan">✻</Text>
+              <Text color={theme.foreground}>✻</Text>
             )}{' '}
             {/* The settled headline ("Session ready!") reads bold in the
                 default (white) foreground over the dim trace beneath it;
                 while starting it stays dim like the rest of the block. */}
             <Text
-              color={navKey === 'sandbox' ? 'cyan' : undefined}
-              inverse={navKey === 'sandbox'}
+              color={navKey === 'sandbox' ? theme.foreground : undefined}
               dimColor={navKey !== 'sandbox' && !(sandbox?.done && !infraActivity)}
               bold={sandbox?.done && !infraActivity}
             >
@@ -1074,20 +1137,20 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
               {sandbox?.done && !infraActivity
                 ? sandbox.headline
                 : `${(!sandbox || sandbox.done ? (infraActivity ?? 'Session starting') : sandbox.headline).replace(/…$/, '')}… (${humanDuration(elapsed)})`}
-              {inputActive && navKey === 'sandbox' && !sandboxOpen && sandbox?.sandboxLine
-                ? ' (→: details)'
-                : ''}
             </Text>
           </Text>
-          {/* Levels 2+3: the config line, the sandbox line and its phases —
-              always visible, live while starting and as the all-✓ trace once
-              the session is ready (logs behind →). */}
-          {sandbox && (sandbox.configName || sandbox.sandboxLine) && (
+          {/* Levels 2+3: the config line, the sandbox line and its phases.
+              While starting the whole live hierarchy shows; once settled the
+              block collapses to the bare headline — → while highlighted
+              reveals level 2 (config + sandbox summary), → again opens the
+              phases. */}
+          {(!sandboxSettled || sandboxDetails) &&
+            sandbox && (sandbox.configName || sandbox.sandboxLine) && (
             <Box flexDirection="column">
               {sandbox.configName && (
                 <Text>
                   {'  '}
-                  <Text color="green">✓</Text>{' '}
+                  <Text color={theme.success}>✓</Text>{' '}
                   <Text dimColor>
                     Using {sandbox.configName}
                     {sandbox.configCommitSha
@@ -1100,14 +1163,16 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
               <Text>
                 {'  '}
                 {sandbox.sandboxDone ? (
-                  <Text color="green">✓</Text>
+                  <Text color={theme.success}>✓</Text>
                 ) : (
-                  <Text color="cyan">✻</Text>
+                  <Text color={theme.foreground}>✻</Text>
                 )}{' '}
                 <Text dimColor>{oneLine(sandbox.sandboxLine, 110)}</Text>
               </Text>
               )}
-              {sandbox.steps.map((step, i) => {
+              {/* Level 3, the phases: live starts show them; a settled block
+                  keeps them behind the second → (the open panel). */}
+              {(!sandboxSettled || sandboxOpen) && sandbox.steps.map((step, i) => {
                 const running = step.status === 'running' && !sandbox.sandboxDone
                 const cursor = Math.min(stepCursor, sandbox.steps.length - 1)
                 const selected = sandboxOpen && i === cursor
@@ -1119,37 +1184,39 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                 const logIndent = step.child ? '            ' : '          '
                 const mark =
                   step.status === 'failed' ? (
-                    <Text color="red">✗</Text>
+                    <Text color={theme.error}>✗</Text>
                   ) : running ? (
-                    <Text color="cyan">✻</Text>
+                    <Text color={theme.foreground}>✻</Text>
                   ) : (
-                    <Text color="green">✓</Text>
+                    <Text color={theme.success}>✓</Text>
                   )
                 return (
                   <Box key={step.key} flexDirection="column">
                     {/* The cursor column is always reserved (a space when
                         unselected), so opening the panel never shifts the
-                        rows; the selected phase reads cyan like the
-                        transcript highlight. */}
+                        rows; the selected phase sits on the active surface
+                        like the transcript highlight. Background on the
+                        Box, not the Text — nested Texts inherit theirs from
+                        ink's Box context and would repaint canvas over a
+                        Text-level background. */}
+                    <Box backgroundColor={selected ? SURFACE_ACTIVE : undefined}>
                     <Text>
                       {step.child ? '      ' : '    '}
-                      <Text color="cyan">{selected ? SELECTION_GLYPH : ' '}</Text> {mark}{' '}
+                      <Text color={theme.foreground}>{selected ? SELECTION_GLYPH : ' '}</Text> {mark}{' '}
                       <Text
-                        color={selected ? 'cyan' : step.status === 'failed' ? 'red' : undefined}
-                        inverse={selected}
+                        color={selected ? theme.foreground : step.status === 'failed' ? theme.error : undefined}
                         dimColor={!selected && step.status !== 'failed'}
                       >
-                        {selected
-                          ? ` ${oneLine(sandboxStepLine(step), 106)} `
-                          : oneLine(sandboxStepLine(step), 108)}
+                        {oneLine(sandboxStepLine(step), 108)}
                       </Text>
                       {sandboxOpen && step.lines.length > 0 && (
-                        <Text color={selected ? 'cyan' : undefined} dimColor={!selected}>
+                        <Text color={selected ? theme.foreground : undefined} dimColor={!selected}>
                           {' '}
                           ({step.lines.length} log line{step.lines.length === 1 ? '' : 's'})
                         </Text>
                       )}
                     </Text>
+                    </Box>
                     {/* A running step's live tail always shows (the last
                         RUNNING_TAIL_LINES lines, ticking as chunks land);
                         a finished step's logs stay behind →. Indented two
@@ -1170,11 +1237,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                   </Box>
                 )
               })}
-              {sandboxOpen && (
-                <Text dimColor>{'    '}↑/↓ phase · → logs · ← back · esc close</Text>
-              )}
             </Box>
           )}
+          </Box>
         </Box>
       )}
       {/* The transcript viewport grows through the middle of the terminal,
@@ -1195,7 +1260,6 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             <TranscriptLine
               key={k}
               item={item}
-              meta={stepMeta.get(k)}
               expanded={expanded}
               opened={openedKeys.has(k)}
               selected={navKey === k}
@@ -1216,9 +1280,14 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           inFlightSends
             .filter((q) => q.state === 'accepted')
             .map((q) => (
-              <Box key={q.key} marginTop={1}>
+              <Box
+                key={q.key}
+                marginTop={1}
+                padding={MESSAGE_PAD}
+                backgroundColor={SURFACE_ELEVATED}
+              >
                 <Box width={2} flexShrink={0}>
-                  <Text color="cyan">◆</Text>
+                  <Text color={theme.foreground}>◆</Text>
                 </Box>
                 <Box width="80%">
                   <Text bold>{q.text}</Text>
@@ -1232,7 +1301,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         {atBottom && runningTool && (
           <Box marginTop={runningHug ? 0 : 1}>
             <Box width={2} flexShrink={0}>
-              <Text color="cyan">✻</Text>
+              <Text color={theme.foreground}>✻</Text>
             </Box>
             <Box width="80%">
               <Text dimColor>{runningToolLabel}…</Text>
@@ -1249,7 +1318,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             column as the committed assistant item it becomes, so the text
             doesn't jump when it lands. */}
         {atBottom && liveText && (
-          <Box marginTop={1}>
+          <Box marginTop={1} padding={MESSAGE_PAD} backgroundColor={SURFACE_ELEVATED}>
             <Box width={2} flexShrink={0} />
             <Box width="80%">
               <Text>{liveText}</Text>
@@ -1259,7 +1328,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         {atBottom && generating && (
           <Box marginTop={liveText ? 0 : 1}>
             <Box width={2} flexShrink={0}>
-              <Text color="cyan">✻</Text>
+              <Text color={theme.foreground}>✻</Text>
             </Box>
             <Box width="80%">
               <Text dimColor>Generating…</Text>
@@ -1282,9 +1351,14 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           inFlightSends
             .filter((q) => q.state !== 'accepted')
             .map((q) => (
-              <Box key={q.key} marginTop={1}>
+              <Box
+                key={q.key}
+                marginTop={1}
+                padding={MESSAGE_PAD}
+                backgroundColor={SURFACE_ELEVATED}
+              >
                 <Box width={2} flexShrink={0}>
-                  <Text color="cyan" dimColor>
+                  <Text color={theme.foreground} dimColor>
                     ◆
                   </Text>
                 </Box>
@@ -1314,7 +1388,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           (awaitingAgent !== null || sendPending) && (
           <Box marginTop={1}>
             <Box width={2} flexShrink={0}>
-              <Text color="cyan">✻</Text>
+              <Text color={theme.foreground}>✻</Text>
             </Box>
             <Box width="80%">
               <Text dimColor>
@@ -1332,24 +1406,21 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           above, never on the composer/meta rows. */}
       <Box flexDirection="column" marginTop={1} flexShrink={0}>
         {notice && <Text dimColor>· {notice}</Text>}
-        {/* The composer, framed by a full-width rule above and below (Claude
-            Code-style): the › prompt sits between the two lines. Only the top and
-            bottom borders are drawn, so the rules span the terminal width. */}
-        {/* The composer: a 3-row input area framed by full-width top and
-            bottom rules only (no side borders). With hideMetaLine the host
-            draws its own full-width rule directly beneath (the nav band),
-            which serves as the bottom bounding line — skip ours so the two
-            don't stack. */}
+        {/* The composer: a 3-row input area on the elevated surface — one
+            step lighter (the active surface) while it's where you are
+            (focused, no transcript highlight), matching the transcript's
+            selection treatment. The tint is the whole frame — no rules — so
+            the panel reads as lifted off the canvas rather than fenced in by
+            lines. A uniform 1-cell pad keeps the text off all four edges,
+            and because it's inside the tinted Box the gutter carries the
+            panel color too (a 5-row panel around a 3-row interior). */}
         {composerVisible && (
           <Box
-            borderStyle="single"
-            borderLeft={false}
-            borderRight={false}
-            borderBottom={!props.hideMetaLine}
-            borderDimColor
-            minHeight={props.hideMetaLine ? 4 : 5}
+            backgroundColor={focused && navKey === null ? SURFACE_ACTIVE : SURFACE_ELEVATED}
+            minHeight={COMPOSER_INTERIOR_ROWS + 2}
             alignItems="flex-start"
-            paddingLeft={1}
+            paddingY={1}
+            paddingX={COMPOSER_PAD_X}
           >
             {/* One parent Text so a multi-line input flows as a single block
                 (sibling Texts in a row Box would render as columns). The
@@ -1365,7 +1436,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
                 you are (focused, no transcript highlight) — the same cyan
                 marker as everywhere else — and dim when it isn't. */}
             <Text key={`${composer.text}:${composer.cursor}:${focused && navKey === null}`}>
-              <Text color="cyan" dimColor={!(focused && navKey === null)}>
+              <Text color={theme.foreground} dimColor={!(focused && navKey === null)}>
                 {SELECTION_GLYPH}{' '}
               </Text>
               {composer.text.slice(0, composer.cursor)}
@@ -1461,10 +1532,23 @@ export function viewportSlice(
   return { start, end: endIdx + 1 }
 }
 
+// Agent and user prose rendered as markdown (bold, headings, bullets, tables,
+// fenced code), pre-wrapped to the column it will occupy. Only these two kinds
+// go through it: tool lines and system notices are the SDK's own formatting,
+// where a stray asterisk or pipe is literal text. Items without markdown come
+// back untouched, so the common case allocates nothing. Pure, for tests.
+export function withRenderedMarkdown(item: TranscriptItem, width: number): TranscriptItem {
+  if (item.kind !== 'assistant' && item.kind !== 'user') return item
+  if (!hasMarkdown(item.text)) return item
+  const rendered = renderMarkdown(item.text, width)
+  return rendered === item.text ? item : { ...item, text: rendered }
+}
+
 // Estimated rows a transcript item occupies on screen: its (possibly
 // clamped) body lines, wrapped at the given width, plus the "+N lines"
-// marker and the blank spacer row. An estimate is enough — the viewport
-// budget leans conservative. Pure, for tests.
+// marker and the blank spacer row. Widths are VISIBLE columns — markdown
+// rendering leaves ANSI escapes in the text, which occupy none. Pure, for
+// tests.
 export function estimateItemRows(item: TranscriptItem, width: number, clamp: boolean): number {
   const clamped =
     clamp && isCollapsible(item)
@@ -1472,29 +1556,35 @@ export function estimateItemRows(item: TranscriptItem, width: number, clamp: boo
       : { body: item.text, more: 0 }
   let rows = (item.spaceBefore ? 1 : 0) + (clamped.more > 0 ? 1 : 0)
   for (const line of clamped.body.split('\n')) {
-    rows += Math.max(1, Math.ceil(line.length / width))
+    rows += Math.max(1, Math.ceil(visibleWidth(line) / width))
   }
   return rows
 }
 
 // Estimated rows of the startup block in its current shape: the headline,
 // plus — while starting or drilled into — the config line, the sandbox line,
-// one row per phase, the selected phase's open log lines, and the key hint.
+// one row per phase, and the selected phase's open log lines. Settled and
+// not drilled into, the block is just the bare headline.
 function sandboxBlockRows(
   sandbox: SandboxState | null,
+  settled: boolean,
+  details: boolean,
   open: boolean,
   logsOpen: boolean,
   stepCursor: number,
 ): number {
-  // The "Connected to ellipsis.dev" opener + its blank row, then the headline.
-  let rows = 3
+  // The "Connected to ellipsis.dev" opener + its blank row, then the headline
+  // inside its message panel (MESSAGE_PAD rows above and below the content).
+  let rows = 3 + MESSAGE_PAD * 2
   const expanded =
-    sandbox != null && (sandbox.configName != null || sandbox.sandboxLine != null)
+    sandbox != null &&
+    (sandbox.configName != null || sandbox.sandboxLine != null) &&
+    (!settled || details)
   if (!expanded) return rows
   if (sandbox.configName != null) rows += 1
-  const steps = sandbox.steps
-  if (sandbox.sandboxLine != null) rows += 1 + steps.length
-  if (open) rows += 1 // the key hint
+  if (sandbox.sandboxLine != null) rows += 1
+  const steps = !settled || open ? sandbox.steps : []
+  rows += steps.length
   const cursor = Math.min(stepCursor, Math.max(0, steps.length - 1))
   for (const [i, step] of steps.entries()) {
     const running = step.status === 'running' && !sandbox.sandboxDone
@@ -1608,41 +1698,19 @@ type LifecycleRecordLike = {
 }
 
 // The committed transcript items, with each turn's closing `result` summary
-// reshaped: the "turn complete" label drops, the cost becomes the STEP's own
-// (result events carry Claude Code's cumulative session total, tracked
-// across the WHOLE feed so a --no-records first turn still subtracts the
-// hidden history; a total below the previous one is a fresh process after a
-// wake, whose step cost is the new total itself), and a summary directly
-// following an assistant message moves into stepMeta — rendered as the
-// right-hand metadata column on that message instead of its own line. An
-// error summary keeps its label and its own (red) line: an error is content,
-// not metadata. A summary with no assistant line to hang on stays a line
-// too. Pure, for tests.
+// dropped: its duration and cost are session bookkeeping, not conversation —
+// the footer's running spend is where that story lives. An error summary
+// survives as its own (red) line under a plain label: a failed turn is
+// content. Pure, for tests.
 export function reshapeTranscript(
   records: readonly LifecycleRecordLike[],
   minRenderFeedSeq: number,
-): { items: TranscriptItem[]; stepMeta: ReadonlyMap<string, string> } {
+): { items: TranscriptItem[] } {
   const items: TranscriptItem[] = []
-  const stepMeta = new Map<string, string>()
-  let prevTotalUsd = 0
   for (const r of records) {
     if (r.source === 'lifecycle') continue
-    const p = r.payload
-    const isResult = r.source === 'claude_code' && p.type === 'result'
-    let stepBits: string[] | null = null
-    if (isResult) {
-      stepBits = []
-      if (typeof p.duration_ms === 'number') {
-        stepBits.push(`(${humanDuration(p.duration_ms / 1000)})`)
-      }
-      if (typeof p.total_cost_usd === 'number') {
-        const step =
-          p.total_cost_usd >= prevTotalUsd ? p.total_cost_usd - prevTotalUsd : p.total_cost_usd
-        prevTotalUsd = p.total_cost_usd
-        stepBits.push(`$${step.toFixed(2)}`)
-      }
-    }
     if (r.feed_seq <= minRenderFeedSeq) continue
+    const isResult = r.source === 'claude_code' && r.payload.type === 'result'
     // recordToItems reads only the structural slice (source, record_type,
     // payload); its SessionRecordWire param type isn't exported from the
     // SDK's store entry, hence the cast.
@@ -1650,26 +1718,14 @@ export function reshapeTranscript(
       r as Parameters<typeof recordToItems>[0],
       `s${r.feed_seq}`,
     )) {
-      if (item.kind === 'summary' && stepBits !== null) {
-        if (item.isError) {
-          items.push({
-            ...item,
-            text: ['turn ended with an error', stepBits.join(' · ')]
-              .filter(Boolean)
-              .join(' '),
-          })
-          continue
-        }
-        if (stepBits.length === 0) continue
-        const prev = items[items.length - 1]
-        if (prev?.kind === 'assistant') stepMeta.set(prev.key, stepBits.join(' · '))
-        else items.push({ ...item, text: stepBits.join(' · ') })
+      if (item.kind === 'summary' && isResult) {
+        if (item.isError) items.push({ ...item, text: 'turn ended with an error' })
         continue
       }
       items.push(item)
     }
   }
-  return { items, stepMeta }
+  return { items }
 }
 
 // Whether a turn is IN FLIGHT (a turn_started record without its
@@ -2007,22 +2063,22 @@ function styleFor(item: TranscriptItem): {
   const kind: ItemKind = item.kind
   switch (kind) {
     case 'tool':
-      return { gutterColor: 'green', bold: true, dim: false }
+      return { gutterColor: theme.success, bold: true, dim: false }
     case 'tool_result':
       return {
-        textColor: item.isError ? 'red' : undefined,
+        textColor: item.isError ? theme.error : undefined,
         dim: !item.isError,
         bold: false,
       }
     // User copy stays white like the assistant's (the ◆ icon marks the
     // sender); cyan text always and only means "the selection is here".
     case 'user':
-      return { gutterColor: 'cyan', bold: true, dim: false }
+      return { gutterColor: theme.foreground, bold: true, dim: false }
     case 'error':
-      return { gutterColor: 'red', textColor: 'red', dim: false, bold: false }
+      return { gutterColor: theme.error, textColor: theme.error, dim: false, bold: false }
     case 'summary':
       return {
-        textColor: item.isError ? 'red' : undefined,
+        textColor: item.isError ? theme.error : undefined,
         dim: true,
         bold: false,
       }
@@ -2038,16 +2094,12 @@ function styleFor(item: TranscriptItem): {
 
 const TranscriptLine = React.memo(function TranscriptLine({
   item,
-  meta,
   expanded,
   opened,
   selected,
   indent = false,
 }: {
   item: TranscriptItem
-  // The step's metadata ("4s · $0.10"), attached to a turn's closing
-  // assistant message and rendered right-aligned in the right-hand column.
-  meta?: string
   expanded: boolean
   // This line was opened in place with → while highlighted (un-clamps it).
   opened: boolean
@@ -2074,37 +2126,40 @@ const TranscriptLine = React.memo(function TranscriptLine({
       ? clampLines(item.text, COLLAPSE_LINES)
       : { body: item.text, more: 0 }
 
-  // Assistant messages keep to the left 80% of the row, leaving the right
-  // 20% as the metadata column (the turn's duration + step cost when this
-  // message closed one). Other kinds span the full width as before.
-  const isAssistant = item.kind === 'assistant'
+  // Messages (user + assistant prose) sit on the same lifted panel the
+  // composer uses, full width like the input box, with a 1-cell pad inside
+  // the tint on all four sides (MESSAGE_PAD — the viewport height estimates
+  // count the two pad rows); tool chatter and notices stay on the canvas.
+  // The selected line — any kind — steps onto the lighter active surface,
+  // the app-wide "you are here" treatment (the focused composer, sidebar
+  // rows, dropdown options all match). Never inverse: a bone-white bar is
+  // far too loud on the charcoal canvas.
+  const isMessage = item.kind === 'user' || item.kind === 'assistant'
   return (
-    <Box marginTop={mt} paddingLeft={indent ? 2 : 0}>
+    <Box
+      marginTop={mt}
+      paddingLeft={isMessage ? MESSAGE_PAD : indent ? 2 : 0}
+      paddingRight={isMessage ? MESSAGE_PAD : 0}
+      paddingY={isMessage ? MESSAGE_PAD : 0}
+      backgroundColor={selected ? SURFACE_ACTIVE : isMessage ? SURFACE_ELEVATED : undefined}
+    >
       <Box width={2}>
         <Text
-          color={selected ? 'cyan' : gutterColor}
+          color={selected ? theme.foreground : gutterColor}
           dimColor={!selected && dim && !item.isError}
         >
           {selected ? SELECTION_GLYPH : gutterFor(item)}
         </Text>
       </Box>
-      <Box
-        flexDirection="column"
-        width={isAssistant ? '80%' : undefined}
-        flexGrow={isAssistant ? undefined : 1}
-      >
-        {/* The selected line renders as an inverse cyan bar — the app-wide
-            "you are here" treatment (sidebar rows, buttons, dropdown
-            options all match). */}
+      <Box flexDirection="column" flexGrow={1}>
         <Text
-          color={selected ? 'cyan' : textColor}
-          inverse={selected}
+          color={selected ? theme.foreground : textColor}
           dimColor={!selected && dim}
           bold={bold}
         >
           {clamped.body}
           {item.detail ? (
-            <Text color={selected ? 'cyan' : undefined} inverse={selected} dimColor={!selected}>
+            <Text color={selected ? theme.foreground : undefined} dimColor={!selected}>
               {item.detail}
             </Text>
           ) : null}
@@ -2115,11 +2170,6 @@ const TranscriptLine = React.memo(function TranscriptLine({
           </Text>
         )}
       </Box>
-      {meta != null && (
-        <Box flexGrow={1} justifyContent="flex-end">
-          <Text dimColor>{meta}</Text>
-        </Box>
-      )}
     </Box>
   )
 })

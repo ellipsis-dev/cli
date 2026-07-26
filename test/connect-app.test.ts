@@ -13,8 +13,10 @@ import {
   reshapeTranscript,
   sandboxStepLine,
   viewportSlice,
+  withRenderedMarkdown,
   type SandboxStep,
 } from '../src/ui/ConnectApp'
+import stripAnsi from 'strip-ansi'
 import type { TranscriptItem } from '@ellipsis-dev/sdk/store'
 
 let seq = 0
@@ -518,14 +520,13 @@ describe('reshapeTranscript', () => {
       'claude_code',
     )
 
-  it('attaches the step meta to the closing assistant message and drops the summary row', () => {
-    const { items, stepMeta } = reshapeTranscript([assistant('done!'), result()], 0)
+  it('drops a turn-closing summary entirely — duration and cost are not conversation', () => {
+    const { items } = reshapeTranscript([assistant('done!'), result()], 0)
     expect(items.map((i) => i.kind)).toEqual(['assistant'])
-    expect(stepMeta.get(items[0].key)).toBe('(4s) · $0.10')
   })
 
-  it('shows each step its own incremental cost, not the cumulative total', () => {
-    const { items, stepMeta } = reshapeTranscript(
+  it('drops every turn summary across a multi-turn transcript', () => {
+    const { items } = reshapeTranscript(
       [
         assistant('one'),
         result({ total_cost_usd: 0.1 }),
@@ -534,50 +535,28 @@ describe('reshapeTranscript', () => {
       ],
       0,
     )
-    expect(stepMeta.get(items[0].key)).toBe('(4s) · $0.10')
-    expect(stepMeta.get(items[1].key)).toBe('(2s) · $0.15')
+    expect(items.map((i) => i.text)).toEqual(['one', 'two'])
   })
 
-  it('treats a lower total as a fresh process (wake reset): the step cost is the new total', () => {
-    const { items, stepMeta } = reshapeTranscript(
-      [
-        assistant('before the wake'),
-        result({ total_cost_usd: 0.25 }),
-        assistant('after the wake'),
-        result({ total_cost_usd: 0.05 }),
-      ],
-      0,
-    )
-    expect(stepMeta.get(items[1].key)).toBe('(4s) · $0.05')
+  it('drops a summary with no assistant message before it', () => {
+    expect(reshapeTranscript([result()], 0).items).toEqual([])
   })
 
-  it('subtracts history hidden below the render cursor (--no-records)', () => {
+  it('skips records at or below the render cursor (--no-records)', () => {
     const hidden = [assistant('old'), result({ total_cost_usd: 0.1 })]
     const cursor = hidden[hidden.length - 1].feed_seq
-    const { items, stepMeta } = reshapeTranscript(
-      [...hidden, assistant('new'), result({ total_cost_usd: 0.18, duration_ms: 3000 })],
+    const { items } = reshapeTranscript(
+      [...hidden, assistant('new'), result({ total_cost_usd: 0.18 })],
       cursor,
     )
-    expect(items.map((i) => i.kind)).toEqual(['assistant'])
-    expect(stepMeta.get(items[0].key)).toBe('(3s) · $0.08')
+    expect(items.map((i) => i.text)).toEqual(['new'])
   })
 
-  it('keeps an error summary as its own line, label intact', () => {
-    const { items, stepMeta } = reshapeTranscript(
-      [assistant('oops'), result({ is_error: true })],
-      0,
-    )
+  it('keeps an error summary as its own line under a plain label', () => {
+    const { items } = reshapeTranscript([assistant('oops'), result({ is_error: true })], 0)
     expect(items.map((i) => i.kind)).toEqual(['assistant', 'summary'])
-    expect(items[1].text).toBe('turn ended with an error (4s) · $0.10')
+    expect(items[1].text).toBe('turn ended with an error')
     expect(items[1].isError).toBe(true)
-    expect(stepMeta.size).toBe(0)
-  })
-
-  it('keeps the summary as its own line when no assistant message precedes it', () => {
-    const { items, stepMeta } = reshapeTranscript([result()], 0)
-    expect(items.map((i) => i.kind)).toEqual(['summary'])
-    expect(items[0].text).toBe('(4s) · $0.10')
-    expect(stepMeta.size).toBe(0)
   })
 })
 
@@ -727,6 +706,42 @@ describe('estimateItemRows', () => {
     }
     expect(estimateItemRows(item, 80, true)).toBe(7) // 6 clamped lines + marker
     expect(estimateItemRows(item, 80, false)).toBe(10)
+  })
+
+  it('measures visible columns, not escape sequences', () => {
+    // A markdown-rendered line carries ANSI codes that occupy no columns.
+    // Counting them would over-estimate the height and desync the viewport.
+    const styled = `[1m${'x'.repeat(30)}[22m`
+    expect(estimateItemRows({ key: 'a', kind: 'assistant', text: styled }, 40, false)).toBe(1)
+  })
+})
+
+describe('withRenderedMarkdown', () => {
+  it('styles assistant and user prose that contains markdown', () => {
+    const item = { key: 'a', kind: 'assistant' as const, text: 'a **bold** word' }
+    const out = withRenderedMarkdown(item, 60)
+    expect(out.text).not.toBe(item.text)
+    expect(stripAnsi(out.text)).toBe('a bold word')
+  })
+
+  it('leaves plain prose untouched, object identity included', () => {
+    const item = { key: 'a', kind: 'assistant' as const, text: 'just plain prose' }
+    expect(withRenderedMarkdown(item, 60)).toBe(item)
+  })
+
+  it('leaves tool and system lines alone — their asterisks and pipes are literal', () => {
+    const tool = { key: 't', kind: 'tool' as const, text: 'Bash(ls *.ts | head)' }
+    expect(withRenderedMarkdown(tool, 60)).toBe(tool)
+    const system = { key: 's', kind: 'system' as const, text: '**not markdown**' }
+    expect(withRenderedMarkdown(system, 60)).toBe(system)
+  })
+
+  it('pre-wraps to the given width so the height estimate is exact', () => {
+    const long = `- ${'word '.repeat(40)}`
+    const out = withRenderedMarkdown({ key: 'a', kind: 'assistant', text: long }, 40)
+    for (const line of out.text.split('\n')) {
+      expect(stripAnsi(line).length).toBeLessThanOrEqual(40)
+    }
   })
 })
 

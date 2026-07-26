@@ -159,6 +159,11 @@ export async function runConnect(
       configName: config,
       exitState,
     }),
+    // Render every frame as it happens even without a TTY. Ink's default is to
+    // buffer and emit only the final frame off-TTY, which would silence the
+    // documented headless path (`--no-input` piped into a script or an agent)
+    // for the entire life of the session.
+    { interactive: true },
   )
   // Guard against the revoked-TTY spin. When the controlling terminal is torn
   // down abruptly (terminal app force-quit/crash, SSH drop, login-session

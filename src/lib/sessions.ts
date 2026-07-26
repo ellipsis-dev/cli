@@ -1,15 +1,16 @@
 import { sessionStatusWord } from '@ellipsis-dev/sdk/stream'
 import type { AgentSessionWire } from '@ellipsis-dev/sdk'
+import { theme } from './theme'
 import type { AgentSession, SupportedModel } from './types'
 
 // Pure session-model helpers shared by the connect command and the
 // multi-session UI (SessionsApp). No I/O here — everything is testable.
 
-// THE selection marker, everywhere: the one cyan character that says "you
-// are here" — it replaces a sidebar row's status dot, a transcript line's
-// gutter icon, and the focused composer's prompt. One char, always cyan, so
-// the eye finds the cursor instantly anywhere in the console. The thick
-// right-arrow is reserved for selection alone; statuses are colored dots.
+// THE selection marker, everywhere: the one bone-bright character that says
+// "you are here" — it replaces a sidebar row's status dot, a transcript
+// line's gutter icon, and the focused composer's prompt. One char, always the
+// accent, so the eye finds the cursor instantly anywhere in the console. The
+// thick right-arrow is reserved for selection alone; statuses are colored dots.
 export const SELECTION_GLYPH = '▶'
 
 // Whether the composer can send to this session, and — when it can't — why.
@@ -71,16 +72,17 @@ export function isActiveStatusWord(word: string): boolean {
 
 // The sidebar row's status marker: one dot, status told by color alone (the
 // arrow shape belongs to the selection cursor):
-//   ● yellow: in flight  · ● cyan: your move (waiting)  · ● dim: sleeping
-//   ● green: done/closed · ● red: failed  · ● dim red: stopped/cancelled
+//   ● amber: in flight   · ● bone: your move (waiting) · ● dim: sleeping
+//   ● green: done/closed · ● red: failed · ● dim red: stopped/cancelled
 export function rowGlyph(word: string): { glyph: string; color?: string; dim: boolean } {
-  if (isActiveStatusWord(word)) return { glyph: '●', color: 'yellow', dim: false }
-  if (word === 'waiting') return { glyph: '●', color: 'cyan', dim: false }
+  if (isActiveStatusWord(word)) return { glyph: '●', color: theme.active, dim: false }
+  if (word === 'waiting') return { glyph: '●', color: theme.foreground, dim: false }
   if (word === 'sleeping' || word === 'idle') return { glyph: '●', dim: true }
-  if (word === 'error' || word === 'failed') return { glyph: '●', color: 'red', dim: false }
-  if (word === 'stopped' || word === 'cancelled') return { glyph: '●', color: 'red', dim: true }
+  if (word === 'error' || word === 'failed') return { glyph: '●', color: theme.error, dim: false }
+  if (word === 'stopped' || word === 'cancelled')
+    return { glyph: '●', color: theme.error, dim: true }
   // closed / completed and anything unrecognized settles as done.
-  return { glyph: '●', color: 'green', dim: true }
+  return { glyph: '●', color: theme.success, dim: true }
 }
 
 // The row's one-line description: what the session is doing right now
@@ -121,6 +123,60 @@ export function shortAge(iso: string, now: Date = new Date()): string {
   return `${Math.floor(hours / 24)}d ago`
 }
 
+// A token count in the tightest readable form: 840 -> "840", 84_200 -> "84.2k",
+// 512_000 -> "512k", 1_240_000 -> "1.24M". One decimal only while it buys
+// precision, so the column stays narrow.
+export function compactTokens(n: number): string {
+  if (!isFinite(n) || n < 0) return '0'
+  if (n < 1000) return String(Math.round(n))
+  if (n < 1_000_000) {
+    const k = n / 1000
+    return k < 100 ? `${trimZero(k.toFixed(1))}k` : `${Math.round(k)}k`
+  }
+  return `${trimZero((n / 1_000_000).toFixed(2))}M`
+}
+
+function trimZero(s: string): string {
+  return s.replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1')
+}
+
+// The nav row's right-hand metadata: how much work the agent did (turns,
+// tokens, spend) and when it last moved. Turns come from tokens_info.num_turns
+// — the list row's own counter — and spend is the sum of the four millicent
+// cost columns, the same total the chat footer shows. A just-started session
+// drops the empty bits rather than showing "0 turns · 0 · $0.00". No source tag:
+// the nav lists cloud sessions only, so it would read the same on every row.
+export function rowMeta(session: AgentSession, now: Date = new Date()): string {
+  const bits: string[] = []
+  const turns = numberField(session.tokens_info, 'num_turns')
+  if (turns > 0) bits.push(`${turns} ${turns === 1 ? 'turn' : 'turns'}`)
+  if (session.tokens_total > 0) bits.push(compactTokens(session.tokens_total))
+  const millicents =
+    session.cost_tokens + session.cost_sandbox_cpu + session.cost_sandbox_memory + session.cost_fee
+  if (millicents > 0) bits.push(`$${(millicents / 100_000).toFixed(2)}`)
+  bits.push(shortAge(lastEventAt(session), now))
+  return bits.join(' · ')
+}
+
+// Where the session runs. The list row has no top-level `source` (that's the
+// stream's wire shape); it rides `input.source` instead, with laptop syncs the
+// only non-cloud kind the nav distinguishes.
+export function sessionSource(session: AgentSession): string {
+  if (session.source === 'laptop') return 'laptop'
+  const input = session.input
+  if (input && typeof input === 'object') {
+    const source = (input as Record<string, unknown>).source
+    if (source === 'laptop') return 'laptop'
+  }
+  return 'cloud'
+}
+
+function numberField(container: unknown, key: string): number {
+  if (!container || typeof container !== 'object') return 0
+  const value = (container as Record<string, unknown>)[key]
+  return typeof value === 'number' && isFinite(value) ? value : 0
+}
+
 // Whether the conversation is still open (alive/idle) — the sidebar's top
 // group. Terminal-status single-shot sessions and closed conversations sink
 // to the bottom group.
@@ -144,6 +200,19 @@ export function sortSidebarSessions(sessions: readonly AgentSession[]): AgentSes
   })
 }
 
+// The sidebar list: the polled snapshot plus composer-spawned sessions the
+// poll has not returned yet. A session can sit in both for one poll cycle
+// (a list read that lands mid-create, then the create response), so it is
+// deduped by id with the polled copy winning — that one is fresher.
+export function mergeSidebarSessions(
+  polled: readonly AgentSession[],
+  local: readonly AgentSession[],
+): AgentSession[] {
+  const byId = new Map<string, AgentSession>()
+  for (const s of [...polled, ...local]) if (!byId.has(s.id)) byId.set(s.id, s)
+  return sortSidebarSessions([...byId.values()])
+}
+
 // Attention transitions: a session that WAS in flight and now waits for a
 // human (waiting/sleeping/idle) deserves the sidebar dot. Pure step function
 // over consecutive poll snapshots.
@@ -159,24 +228,30 @@ export type ComposerModel = { id: string | null; label: string }
 
 // The composer's model list when GET /v1/models is unavailable (an older
 // server): the agent-selectable set as of this build, most expensive first.
-// `null` id = let the server pick (DEFAULT_AGENT_MODEL).
+// `null` id = let the server pick (DEFAULT_AGENT_MODEL). Labels are the raw
+// model ids — the CLI speaks the API's vocabulary, not marketing names.
 export const COMPOSER_MODELS: ReadonlyArray<ComposerModel> = [
   { id: null, label: 'Default' },
-  { id: 'claude-fable-5', label: 'Claude Fable 5' },
-  { id: 'claude-opus-5', label: 'Claude Opus 5' },
-  { id: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
-  { id: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
-  { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
+  { id: 'claude-fable-5', label: 'claude-fable-5' },
+  { id: 'claude-opus-5', label: 'claude-opus-5' },
+  { id: 'claude-opus-4-8', label: 'claude-opus-4-8' },
+  { id: 'claude-sonnet-5', label: 'claude-sonnet-5' },
+  { id: 'claude-haiku-4-5-20251001', label: 'claude-haiku-4-5-20251001' },
 ]
 
-// The composer's model options from the server's list, keeping its order and
-// naming the model "Default" resolves to.
+// The composer's model options from the server's list, keeping its order.
+// Labels are raw model ids; the null "let the server pick" entry IS the
+// default model's row — labelled with the id it resolves to
+// (DEFAULT_AGENT_MODEL), replacing that model's own entry so the id appears
+// once in the list.
 export function composerModelOptions(models: readonly SupportedModel[]): ComposerModel[] {
   if (models.length === 0) return [...COMPOSER_MODELS]
   const fallback = models.find((m) => m.is_default_agent_model)
   return [
-    { id: null, label: fallback ? `Default (${fallback.display_name})` : 'Default' },
-    ...models.map((m) => ({ id: m.id as string | null, label: m.display_name })),
+    { id: null, label: fallback ? fallback.id : 'Default' },
+    ...models
+      .filter((m) => !m.is_default_agent_model)
+      .map((m) => ({ id: m.id as string | null, label: m.id })),
   ]
 }
 
@@ -215,5 +290,20 @@ export function sidebarSlice(
   const cap = Math.max(1, capacity)
   let start = Math.min(Math.max(0, selected - Math.floor(cap / 2)), count - cap)
   if (selected < start) start = selected
+  return { start, end: start + cap }
+}
+
+// Which slice of the session list the vertical nav shows: the highlight walks
+// down to the second-to-last visible row and parks there while the list
+// scrolls under it, so there is always one row of lookahead. Only the true
+// end of the list lets the highlight sit on the last row.
+export function navSlice(
+  count: number,
+  capacity: number,
+  selected: number,
+): { start: number; end: number } {
+  if (count <= capacity) return { start: 0, end: count }
+  const cap = Math.max(2, capacity)
+  const start = Math.min(Math.max(0, selected - (cap - 2)), count - cap)
   return { start, end: start + cap }
 }

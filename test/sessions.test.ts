@@ -1,19 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import {
   attentionFlip,
+  compactTokens,
   COMPOSER_MODELS,
   composerModelOptions,
   connectability,
   isActiveStatusWord,
   isOpenConversation,
   lastEventAt,
+  navSlice,
   rowDescription,
   rowGlyph,
+  rowMeta,
   rowStatusWord,
+  sessionSource,
   shortAge,
   sidebarSlice,
   sortSidebarSessions,
+  mergeSidebarSessions,
 } from '../src/lib/sessions'
+import { theme } from '../src/lib/theme'
 import type { AgentSession } from '../src/lib/types'
 
 function session(overrides: Partial<AgentSession>): AgentSession {
@@ -133,19 +139,19 @@ describe('rowStatusWord / rowGlyph', () => {
     }
   })
 
-  it('colors in-flight yellow, waiting cyan, sleeping dim', () => {
-    expect(rowGlyph('working')).toEqual({ glyph: '●', color: 'yellow', dim: false })
+  it('colors in-flight amber, waiting with the accent, sleeping dim', () => {
+    expect(rowGlyph('working')).toEqual({ glyph: '●', color: theme.active, dim: false })
     expect(isActiveStatusWord('working')).toBe(true)
-    expect(rowGlyph('waiting').color).toBe('cyan')
+    expect(rowGlyph('waiting').color).toBe(theme.foreground)
     expect(rowGlyph('sleeping')).toEqual({ glyph: '●', dim: true })
   })
 
-  it('colors failures red and settles the rest as done green', () => {
-    expect(rowGlyph('failed').color).toBe('red')
-    expect(rowGlyph('error')).toEqual({ glyph: '●', color: 'red', dim: false })
-    expect(rowGlyph('stopped')).toEqual({ glyph: '●', color: 'red', dim: true })
-    expect(rowGlyph('completed').color).toBe('green')
-    expect(rowGlyph('closed').color).toBe('green')
+  it('colors failures with the error token and settles the rest as done', () => {
+    expect(rowGlyph('failed').color).toBe(theme.error)
+    expect(rowGlyph('error')).toEqual({ glyph: '●', color: theme.error, dim: false })
+    expect(rowGlyph('stopped')).toEqual({ glyph: '●', color: theme.error, dim: true })
+    expect(rowGlyph('completed').color).toBe(theme.success)
+    expect(rowGlyph('closed').color).toBe(theme.success)
   })
 })
 
@@ -187,6 +193,58 @@ describe('lastEventAt / shortAge', () => {
   })
 })
 
+describe('compactTokens', () => {
+  it('scales the unit and drops noise decimals', () => {
+    expect(compactTokens(0)).toBe('0')
+    expect(compactTokens(840)).toBe('840')
+    expect(compactTokens(4800)).toBe('4.8k')
+    expect(compactTokens(84_200)).toBe('84.2k')
+    expect(compactTokens(12_000)).toBe('12k')
+    expect(compactTokens(512_000)).toBe('512k')
+    expect(compactTokens(1_240_000)).toBe('1.24M')
+    expect(compactTokens(2_000_000)).toBe('2M')
+  })
+})
+
+describe('rowMeta', () => {
+  const now = new Date('2026-07-23T12:00:00Z')
+
+  it('reads turns, tokens, spend, and age', () => {
+    const s = session({
+      tokens_info: { num_turns: 12 },
+      tokens_total: 84_200,
+      cost_tokens: 30_000,
+      cost_sandbox_cpu: 10_000,
+      cost_sandbox_memory: 2_000,
+      cost_fee: 0,
+      updated_at: '2026-07-23T11:58:00Z',
+    } as never)
+    expect(rowMeta(s, now)).toBe('12 turns · 84.2k · $0.42 · 2m ago')
+  })
+
+  it('says "1 turn", not "1 turns"', () => {
+    const s = session({
+      tokens_info: { num_turns: 1 },
+      updated_at: '2026-07-23T11:58:00Z',
+    } as never)
+    expect(rowMeta(s, now)).toBe('1 turn · 2m ago')
+  })
+
+  it('drops the work bits a fresh session has none of', () => {
+    const s = session({ updated_at: '2026-07-23T11:59:48Z' })
+    expect(rowMeta(s, now)).toBe('12s ago')
+  })
+})
+
+describe('sessionSource', () => {
+  it('reads laptop off the input blob, which is where the list row carries it', () => {
+    expect(sessionSource(session({ input: { source: 'laptop' } } as never))).toBe('laptop')
+    expect(sessionSource(session({ source: 'laptop' }))).toBe('laptop')
+    expect(sessionSource(session({ input: { source: 'react' } } as never))).toBe('cloud')
+    expect(sessionSource(session({}))).toBe('cloud')
+  })
+})
+
 describe('sortSidebarSessions', () => {
   it('puts open conversations first, each group newest-event first', () => {
     const open1 = session({ id: 'open1', session_state: 'idle', updated_at: '2026-07-23T10:00:00Z' })
@@ -212,6 +270,22 @@ describe('sortSidebarSessions', () => {
   it('treats non-terminal stateless sessions as open', () => {
     expect(isOpenConversation(session({ status: 'running' }))).toBe(true)
     expect(isOpenConversation(session({ status: 'completed' }))).toBe(false)
+  })
+})
+
+describe('mergeSidebarSessions', () => {
+  it('keeps local sessions the poll has not returned yet', () => {
+    const polled = session({ id: 'a', updated_at: '2026-07-23T10:00:00Z' })
+    const local = session({ id: 'b', updated_at: '2026-07-23T11:00:00Z' })
+    expect(mergeSidebarSessions([polled], [local]).map((s) => s.id)).toEqual(['b', 'a'])
+  })
+
+  it('emits one row when a session is in both lists, preferring the polled copy', () => {
+    const polled = session({ id: 'a', status: 'completed', session_state: 'closed' })
+    const local = session({ id: 'a', status: 'running' })
+    const merged = mergeSidebarSessions([polled], [local])
+    expect(merged.map((s) => s.id)).toEqual(['a'])
+    expect(merged[0]?.status).toBe('completed')
   })
 })
 
@@ -241,14 +315,37 @@ describe('sidebarSlice', () => {
   })
 })
 
+describe('navSlice', () => {
+  it('shows everything when it fits', () => {
+    expect(navSlice(3, 5, 0)).toEqual({ start: 0, end: 3 })
+  })
+
+  it('holds still until the highlight reaches the second-to-last row', () => {
+    expect(navSlice(10, 5, 0)).toEqual({ start: 0, end: 5 })
+    expect(navSlice(10, 5, 3)).toEqual({ start: 0, end: 5 })
+  })
+
+  it('scrolls with the highlight parked on the second-to-last row', () => {
+    expect(navSlice(10, 5, 4)).toEqual({ start: 1, end: 6 })
+    expect(navSlice(10, 5, 5)).toEqual({ start: 2, end: 7 })
+    expect(navSlice(10, 5, 7)).toEqual({ start: 4, end: 9 })
+  })
+
+  it('lets the last row hold the highlight at the end of the list', () => {
+    expect(navSlice(10, 5, 8)).toEqual({ start: 5, end: 10 })
+    expect(navSlice(10, 5, 9)).toEqual({ start: 5, end: 10 })
+  })
+})
+
 describe('composerModelOptions', () => {
-  it('keeps the server order and names the default model', () => {
+  it('labels rows with raw model ids and folds the default model into the null entry', () => {
     const options = composerModelOptions([
       { id: 'claude-fable-5', display_name: 'Claude Fable 5', is_default_agent_model: false },
       { id: 'claude-opus-5', display_name: 'Claude Opus 5', is_default_agent_model: true },
     ])
-    expect(options.map((o) => o.id)).toEqual([null, 'claude-fable-5', 'claude-opus-5'])
-    expect(options[0].label).toBe('Default (Claude Opus 5)')
+    expect(options.map((o) => o.id)).toEqual([null, 'claude-fable-5'])
+    expect(options[0].label).toBe('claude-opus-5')
+    expect(options[1].label).toBe('claude-fable-5')
   })
 
   it('falls back to the built-in list when the server returns none', () => {
@@ -260,5 +357,6 @@ describe('composerModelOptions', () => {
       { id: 'claude-opus-5', display_name: 'Claude Opus 5', is_default_agent_model: false },
     ])
     expect(options[0].label).toBe('Default')
+    expect(options[1].label).toBe('claude-opus-5')
   })
 })
