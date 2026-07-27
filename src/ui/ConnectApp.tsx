@@ -44,10 +44,13 @@ import {
   entryRange,
   GUTTER_COLS,
   isCollapsible,
+  isToolActivity,
   itemRows,
   layOutItems,
   LIVE_GLYPH,
   MESSAGE_PAD,
+  navKeyOf,
+  padPanelBlocks,
   pendingMessageRows,
   rowViewport,
   snapToEntry,
@@ -618,29 +621,33 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   }, [inputActive, mouseCapture, stdout])
 
   // The rendered transcript lines, in order: collapsed (the default) folds
-  // consecutive tool activity into "Ran N …" notices, except folds opened in
-  // place with → (openedKeys), which render their tool calls right below the
-  // fold line — indented one level (2 columns), so the expansion reads as
-  // the fold's children — and ← closes them again. Expanded (ctrl+r) shows
-  // everything, flat. `indented` carries the keys of fold-child lines.
-  const { visible, indented } = useMemo(() => {
+  // consecutive tool activity into "Ran N …" notices, except the runs under a
+  // MESSAGE opened in place with → (openedKeys), which render their tool calls
+  // right below the fold line — indented one level (2 columns), so the
+  // expansion reads as the fold's children — and ← closes them again. The
+  // message is what opens, not the fold: a run of tool calls is work that
+  // message did, so it is reached by opening the message (see layOutItems).
+  // Expanded (ctrl+r) shows everything, flat.
+  const visible = useMemo(() => {
     const pendingKeys = new Set(pendingTools.map((t) => t.key))
     const base = pendingKeys.size ? items.filter((i) => !pendingKeys.has(i.key)) : items
-    if (expanded) return { visible: items, indented: new Set<string>() }
+    if (expanded) return items
     const folded = collapseToolRuns(base)
-    if (openedKeys.size === 0) return { visible: folded, indented: new Set<string>() }
+    if (openedKeys.size === 0) return folded
     const out: TranscriptItem[] = []
-    const indentedKeys = new Set<string>()
+    // The message a fold hangs off: opening THAT is what reveals the run.
+    let parent: string | null = null
     for (const item of folded) {
       out.push(item)
-      if (item.key.startsWith('grp:') && openedKeys.has(item.key)) {
-        for (const child of foldRun(item.key, base)) {
-          out.push(child)
-          indentedKeys.add(child.key)
-        }
+      if (!isToolActivity(item)) {
+        parent = item.key
+        continue
+      }
+      if (item.key.startsWith('grp:') && parent !== null && openedKeys.has(parent)) {
+        out.push(...foldRun(item.key, base))
       }
     }
-    return { visible: out, indented: indentedKeys }
+    return out
   }, [items, expanded, pendingTools, openedKeys])
 
   const infraActivity = statusActivityText(statusWord)
@@ -794,16 +801,28 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       )
     }
     // Tool activity is nested under the message that produced it (layOutItems
-    // decides what hangs off what), so a call and its result read as work the
-    // agent did mid-message rather than as turns of their own.
-    for (const placed of layOutItems(visible, { indentedKeys: indented })) {
+    // decides what hangs off what, and what ↑/↓ can land on), so a call and its
+    // result read as work the agent did mid-message rather than as turns of
+    // their own.
+    for (const placed of layOutItems(visible, { openedKeys, revealAll: expanded })) {
+      const rows = itemRows(placed.item, cols, {
+        indent: placed.indent,
+        nested: placed.nested,
+        attach: placed.attach,
+        // Opening a block un-clamps what it owns as well as itself: → on a
+        // revealed tool call shows the full output of the ⎿ result under it,
+        // which is the line that actually carries the body.
+        clamp:
+          !expanded &&
+          !openedKeys.has(placed.item.key) &&
+          !(placed.navKey !== undefined && openedKeys.has(placed.navKey)),
+      })
+      // A line inside another's block carries that block's nav key, so ↑/↓
+      // land on the block and this line travels with it.
       out.push(
-        ...itemRows(placed.item, cols, {
-          indent: placed.indent,
-          nested: placed.nested,
-          attach: placed.attach,
-          clamp: !expanded && !openedKeys.has(placed.item.key),
-        }),
+        ...(placed.navKey || placed.parentKey
+          ? rows.map((r) => ({ ...r, navKey: placed.navKey, parentKey: placed.parentKey }))
+          : rows),
       )
     }
     // Sends the agent has TAKEN (delivered, echo record still in flight):
@@ -837,14 +856,15 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         }),
       )
     }
-    return out
+    // Every lifted block gets its blank tinted row above and below, here so a
+    // message and the tool run attached under it share one pad.
+    return padPanelBlocks(out)
   }, [
     infraActivity,
     sandbox,
     sandboxSettled,
     sandboxLogOpen,
     visible,
-    indented,
     expanded,
     openedKeys,
     inFlightSends,
@@ -852,19 +872,22 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     cols,
   ])
 
-  // Everything ↑/↓ can land on, top to bottom: the entries with rows on the
-  // list, minus turn summaries ("turn complete · 3s · $0.03") — informational
-  // trailers, not content, so the walk skips them (they still render and
-  // scroll) — and minus the live tail, which moves under you as it streams.
+  // Everything ↑/↓ can land on, top to bottom: the BLOCKS with rows on the list
+  // (a nested tool line is part of its message's block, not a stop of its own —
+  // see layOutItems), minus turn summaries ("turn complete · 3s · $0.03") —
+  // informational trailers, not content, so the walk skips them (they still
+  // render and scroll) — and minus the live tail, which moves under you as it
+  // streams.
   const navKeys = useMemo(() => {
     const skip = new Set(visible.filter((i) => i.kind === 'summary').map((i) => i.key))
     const seen = new Set<string>()
     const out: string[] = []
     for (const row of allRows) {
-      if (skip.has(row.entryKey) || row.entryKey.startsWith('live')) continue
-      if (seen.has(row.entryKey)) continue
-      seen.add(row.entryKey)
-      out.push(row.entryKey)
+      const key = navKeyOf(row)
+      if (skip.has(key) || key.startsWith('live')) continue
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(key)
     }
     return out
   }, [allRows, visible])
@@ -919,6 +942,21 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       return true
     },
     [allRows, view, scrollByRows],
+  )
+
+  // Whether a block has tool activity nested under it that → can reveal: rows
+  // that name it as their block but aren't its own (see layOutItems).
+  const hasToolRun = useCallback(
+    (key: string): boolean => allRows.some((r) => r.navKey === key),
+    [allRows],
+  )
+
+  // The block a stop sits inside, for ← to step out to: a tool call revealed
+  // under an opened message names that message.
+  const parentOf = useCallback(
+    (key: string): string | null =>
+      allRows.find((r) => navKeyOf(r) === key && r.parentKey)?.parentKey ?? null,
+    [allRows],
   )
 
   const insertAtCursor = useCallback((ch: string): void => {
@@ -1014,16 +1052,22 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             // settled block (a live one is already showing it).
             setSandboxLogOpen(true)
           } else {
+            // → opens the highlighted block one level: a message reveals the
+            // tool calls it made (which ↑/↓ then step through one at a time), a
+            // call reveals its full output, a clamped body un-clamps.
             const item = visible.find((i) => i.key === navKey)
-            if (item && (navKey.startsWith('grp:') || isCollapsible(item))) {
+            if (item && (hasToolRun(navKey) || isCollapsible(item))) {
               setOpenedKeys((prev) => new Set(prev).add(navKey))
             }
           }
           return
         }
         if (key.leftArrow) {
-          // ← closes the thing opened in place; with nothing open it's inert
-          // (the session nav lives BELOW the composer — ↓ walks to it).
+          // ← closes the highlighted block, or — with nothing of its own open —
+          // steps back OUT to the block it sits inside, closing that (a
+          // revealed tool call returns the highlight to its message). Inert at
+          // the top level with nothing open; the session nav lives BELOW the
+          // composer, so ↓ is what walks to it.
           if (navKey === 'sandbox') {
             setSandboxLogOpen(false)
           } else if (openedKeys.has(navKey)) {
@@ -1032,6 +1076,17 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
               next.delete(navKey)
               return next
             })
+          } else {
+            const parent = parentOf(navKey)
+            if (parent) {
+              setOpenedKeys((prev) => {
+                const next = new Set(prev)
+                next.delete(parent)
+                return next
+              })
+              setNavKey(parent)
+              ensureVisible(parent)
+            }
           }
           return
         }
@@ -1171,7 +1226,13 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             key={row.id}
             row={row}
             cols={cols}
-            selected={navKey !== null && row.entryKey === navKey && !row.spacer}
+            // The whole block lifts, tool rows included — the highlight is what
+            // says "this message and the work it did". A panel's pad rows
+            // (spacer + panel) lift with it; canvas spacers between blocks
+            // never highlight.
+            selected={
+              navKey !== null && navKeyOf(row) === navKey && (!row.spacer || row.panel === true)
+            }
             // Both ticking values are passed as constants to rows that don't
             // use them, so React.memo skips those rows entirely: the
             // once-a-second clock and the pulse repaint the live lines, not
@@ -1338,6 +1399,7 @@ function sandboxRows(o: {
     entryKey: key,
     spans: [{ text: '✦ Connected to ellipsis.dev', bold: true }],
   })
+  rows.push(spacerRow(key, `${key}:hdr-sp`))
   const ready = (sandbox?.done ?? false) && !infraActivity
   // A live status word overrides a stale done-headline: on a wake the status
   // flips before the new session_starting record lands, and "Session ready!"

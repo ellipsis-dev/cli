@@ -541,11 +541,50 @@ describe('layOutItems', () => {
     expect(out.map((p) => p.nested)).toEqual([false, false, false])
   })
 
-  it('indents an opened fold\'s children one level FURTHER than the fold', () => {
+  it("indents an opened message's revealed calls one level FURTHER than the fold", () => {
     const out = layOutItems([prose('a'), fold('t1'), call('t1'), res('r1')], {
-      indentedKeys: new Set(['t1', 'r1']),
+      openedKeys: new Set(['a']),
     })
     expect(out.map((p) => p.indent)).toEqual([0, 2, 4, 4])
+  })
+
+  it('makes a tool call part of its message block, not a stop of its own', () => {
+    // ↑ lands on the message; the call and its result travel with it.
+    const out = layOutItems([prose('a'), call('t1'), res('r1')])
+    expect(out.map((p) => p.navKey)).toEqual([undefined, 'a', 'a'])
+  })
+
+  it('makes a collapsed fold part of the message block too', () => {
+    const out = layOutItems([prose('a'), fold('t1')])
+    expect(out[1].navKey).toBe('a')
+  })
+
+  it('promotes revealed calls to stops of their own, results still travelling with them', () => {
+    const out = layOutItems([prose('a'), fold('t1'), call('t1'), res('r1')], {
+      openedKeys: new Set(['a']),
+    })
+    // The fold stays part of the message; the call becomes its own stop and
+    // owns its result.
+    expect(out.map((p) => p.navKey)).toEqual([undefined, 'a', undefined, 't1'])
+  })
+
+  it('points a revealed call back at its message, so ← steps out', () => {
+    const out = layOutItems([prose('a'), fold('t1'), call('t1'), res('r1')], {
+      openedKeys: new Set(['a']),
+    })
+    expect(out[2].parentKey).toBe('a')
+  })
+
+  it('promotes every call when ctrl+r reveals the whole transcript', () => {
+    const out = layOutItems([prose('a'), call('t1'), res('r1')], { revealAll: true })
+    expect(out.map((p) => p.navKey)).toEqual([undefined, undefined, 't1'])
+  })
+
+  it('leaves an unopened message closed, so its calls stay off the walk', () => {
+    const out = layOutItems([prose('a'), fold('t1'), prose('b'), fold('t2')], {
+      openedKeys: new Set(['b']),
+    })
+    expect(out.map((p) => p.navKey)).toEqual([undefined, 'a', undefined, 'b'])
   })
 
   it('keeps prose, user messages and notices flat', () => {
