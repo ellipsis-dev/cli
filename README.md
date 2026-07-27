@@ -89,9 +89,9 @@ agent asset list                  # list stored assets (--session <id> scopes to
 agent asset get <asset-id> -o shot.png   # show one asset, or download its bytes with -o
 agent asset delete <asset-id>     # delete an asset (it disappears from list/get and its link stops resolving)
 
-agent sandbox variable list       # list sandbox env variable names (values are write-only)
-agent sandbox variable set A=1 B=2     # create/update variables (or --from-file .env/.json)
-agent sandbox variable delete K   # delete a variable
+agent variable list               # list sandbox env variable names (values are write-only)
+agent variable set A=1 B=2        # create/update variables (or --from-file .env/.json)
+agent variable delete K           # delete a variable
 
 agent budget                      # current budget summary
 agent usage                       # usage dashboard for the period

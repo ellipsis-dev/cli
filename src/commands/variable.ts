@@ -5,13 +5,9 @@ import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { formatTs, printJson, printTable, runAction } from '../lib/output'
 import type { SandboxVariableInput, SandboxVariableSummary } from '../lib/types'
 
-export function registerSandbox(program: Command): void {
-  const sandbox = program
-    .command('sandbox')
-    .description('Manage what every sandbox this account runs gets')
-
+export function registerVariable(program: Command): void {
   const variable = alsoKnownAs(
-    sandbox
+    program
       .command('variable')
       .description('Manage the env variables injected into every sandbox (values are write-only)'),
     'variables',

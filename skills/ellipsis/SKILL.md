@@ -78,8 +78,8 @@ sandbox image actually builds, then deploy. The steps below are that flow.
    write-only store; a config receives only the variables it names.
 
    ```sh
-   agent sandbox variable set LINEAR_API_KEY=lin_api_...
-   agent sandbox variable set --from-file .env
+   agent variable set LINEAR_API_KEY=lin_api_...
+   agent variable set --from-file .env
    ```
 
 5. Draft a config and run it from the local file before anything deploys.
@@ -208,7 +208,7 @@ agent config default set <config-id>         # the config a bare start runs (--r
 agent template list                          # browse maintained templates
 agent model list                             # the model ids valid under `claude:`
 agent integration                            # connected GitHub/Slack/Linear/Sentry
-agent sandbox variable set LINEAR_API_KEY=...
+agent variable set LINEAR_API_KEY=...
 agent session start --config-file agents/my_agent.yaml --watch
                                              # prove a config before deploying
 ```
