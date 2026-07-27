@@ -160,7 +160,7 @@ describe('ApiClient sandbox variables', () => {
 
     const out = await new ApiClient('http://api.test', 't').listSandboxVariables()
     expect(out).toEqual([{ name: 'A', created_at: '', updated_at: '' }])
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/sandboxes/variables')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/variables')
     expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
   })
 
@@ -172,7 +172,7 @@ describe('ApiClient sandbox variables', () => {
 
     await new ApiClient('http://api.test', 't').putSandboxVariables([{ name: 'TOKEN', value: 'x' }])
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/v1/sandboxes/variables')
+    expect(url).toBe('http://api.test/v1/variables')
     expect((init as RequestInit).method).toBe('PUT')
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({
       variables: [{ name: 'TOKEN', value: 'x' }],
@@ -187,7 +187,7 @@ describe('ApiClient sandbox variables', () => {
 
     await new ApiClient('http://api.test', 't').deleteSandboxVariable('MY/VAR')
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/v1/sandboxes/variables/MY%2FVAR')
+    expect(url).toBe('http://api.test/v1/variables/MY%2FVAR')
     expect((init as RequestInit).method).toBe('DELETE')
   })
 })

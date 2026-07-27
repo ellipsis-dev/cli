@@ -400,33 +400,28 @@ export class ApiClient {
     return this.request('DELETE', '/v1/defaults', undefined, { repository })
   }
 
-  // -------------------------- sandbox variables ---------------------------
+  // ------------------------------- variables --------------------------------
   // All three return the full current list (the backend echoes it after every
   // mutation), so callers can render the resulting state.
 
   async listSandboxVariables(): Promise<SandboxVariableSummary[]> {
-    const res = await this.request<GetSandboxVariablesResponse>(
-      'GET',
-      '/v1/sandboxes/variables',
-    )
+    const res = await this.request<GetSandboxVariablesResponse>('GET', '/v1/variables')
     return res.variables
   }
 
   async putSandboxVariables(
     variables: SandboxVariableInput[],
   ): Promise<SandboxVariableSummary[]> {
-    const res = await this.request<GetSandboxVariablesResponse>(
-      'PUT',
-      '/v1/sandboxes/variables',
-      { variables },
-    )
+    const res = await this.request<GetSandboxVariablesResponse>('PUT', '/v1/variables', {
+      variables,
+    })
     return res.variables
   }
 
   async deleteSandboxVariable(name: string): Promise<SandboxVariableSummary[]> {
     const res = await this.request<GetSandboxVariablesResponse>(
       'DELETE',
-      `/v1/sandboxes/variables/${encodeURIComponent(name)}`,
+      `/v1/variables/${encodeURIComponent(name)}`,
     )
     return res.variables
   }
