@@ -4,7 +4,7 @@ import {
   parseAssignment,
   parseEnvFile,
   parseJsonVars,
-} from '../src/commands/sandbox'
+} from '../src/commands/variable'
 
 describe('parseJsonVars', () => {
   it('parses a flat object of name → value', () => {
