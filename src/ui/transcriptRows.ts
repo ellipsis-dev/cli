@@ -25,11 +25,10 @@ import { theme } from '../lib/theme'
 export const GUTTER_COLS = 2
 
 // Horizontal pad inside a chat message's panel — the text sits one cell off
-// the tint's edge, like the composer's interior. There is deliberately no
-// VERTICAL pad: a blank tinted row above and below every message costs two
-// rows of the window each time, and the tint alone already separates the
-// message from the canvas around it. The blank separator between blocks
-// (spacerRow) is the breathing room.
+// the tint's edge, like the composer's interior. The VERTICAL pad is a blank
+// tinted row above and below each panel block, added in one place
+// (padPanelBlocks) after the rows are assembled, so a message and the tool
+// run nested under it share one pad rather than getting one each.
 export const MESSAGE_PAD = 1
 
 // Long bodies collapse to this many lines until ctrl+r (or → on the line)
@@ -53,9 +52,17 @@ export type TranscriptRow = {
   // Unique per row, for React keys.
   id: string
   // The entry (a transcript item's key, or 'sandbox') this row belongs to:
-  // what ↑/↓ highlights, and what the scroll anchor holds onto so streamed
-  // appends and re-wraps can't slide the window.
+  // what the scroll anchor holds onto so streamed appends and re-wraps can't
+  // slide the window.
   entryKey: string
+  // The entry ↑/↓ selects when this row is highlighted, when that is not the
+  // row's own entry: a tool call nested under a message is part of THAT
+  // message's block, so the walk lands on the message and the call comes with
+  // it. Absent means the row is its own nav stop.
+  navKey?: string
+  // For a row that IS a stop nested inside another (a tool call revealed under
+  // an opened message): the stop ← steps out to.
+  parentKey?: string
   // The gutter glyph, set on an entry's FIRST row only — a multi-row item
   // shows one sender icon, and its continuation rows align under it.
   gutter?: RowSpan
@@ -71,8 +78,10 @@ export type TranscriptRow = {
   // On the active surface regardless of the transcript selection — the
   // startup block's selected phase, which has its own cursor.
   activeRow?: boolean
-  // A blank separator row: never tinted, never highlighted, so the gap
-  // between blocks stays canvas even when the block below it is selected.
+  // A blank separator row. Off-panel it is never tinted or highlighted, so
+  // the gap between blocks stays canvas even when the block below it is
+  // selected. On a panel (panel + spacer) it is the block's vertical pad: it
+  // carries the tint, and the selection treatment when its block is selected.
   spacer?: boolean
   // The "+N lines" marker under a clamped body. The key that opens it depends
   // on whether the line is highlighted (→) or not (ctrl+r), which the renderer
@@ -119,6 +128,42 @@ export function spacerRow(entryKey: string, id: string): TranscriptRow {
   return { id, entryKey, spans: [], spacer: true }
 }
 
+// The entry ↑/↓ lands on for a row: the block it belongs to, which for a
+// nested tool line is the message (or the call) it hangs off rather than its
+// own entry.
+export function navKeyOf(row: TranscriptRow): string {
+  return row.navKey ?? row.entryKey
+}
+
+// One blank tinted row above and below every maximal run of consecutive panel
+// rows — the vertical pad around each lifted block, matching the composer's
+// interior pad. Applied to the ASSEMBLED list rather than inside itemRows so a
+// message and the tool run attached under it read as one padded block instead
+// of each bringing its own pad. Pure, for tests.
+export function padPanelBlocks(rows: readonly TranscriptRow[]): TranscriptRow[] {
+  const out: TranscriptRow[] = []
+  // A pad row inherits the edge row's BLOCK, not just its entry: a pad added
+  // below a message's nested tool line belongs to that message, and leaving
+  // navKey off would make the tool line a ↑/↓ stop of its own again.
+  const pad = (edge: TranscriptRow, side: string): TranscriptRow => ({
+    id: `${edge.id}:${side}`,
+    entryKey: edge.entryKey,
+    navKey: edge.navKey,
+    spans: [],
+    panel: true,
+    spacer: true,
+  })
+  for (const row of rows) {
+    const prev = out[out.length - 1]
+    if (row.panel && !prev?.panel) out.push(pad(row, 'padT'))
+    if (!row.panel && prev?.panel) out.push(pad(prev, 'padB'))
+    out.push(row)
+  }
+  const last = out[out.length - 1]
+  if (last?.panel) out.push(pad(last, 'padB'))
+  return out
+}
+
 // One transcript item as its screen rows: the separator above it, its body
 // pre-wrapped to the column it occupies, and the "+N lines" marker when a long
 // body is clamped.
@@ -127,7 +172,10 @@ export function itemRows(
   cols: number,
   opts: { indent?: number; clamp: boolean; nested?: boolean; attach?: boolean },
 ): TranscriptRow[] {
-  const panel = isMessage(item)
+  // Nested tool activity sits ON the parent message's panel: the call and its
+  // result are work done while writing that message, so they live inside the
+  // same lifted, padded block rather than on the canvas beside it.
+  const panel = isMessage(item) || opts.nested === true
   const indent = opts.indent ?? 0
   const width = contentWidth(cols, { panel, indent })
   const shown = withRenderedMarkdown(item, width)
@@ -193,32 +241,78 @@ export function itemRows(
 // A run with no assistant message before it (the agent opened the turn with a
 // tool call) still nests — under the user message that prompted it — because
 // the indent is what says "this is work, not talk". Only a run at the very top
-// of the transcript, with no parent at all, stays flat. Pure, for tests.
+// of the transcript, with no parent at all, stays flat.
+//
+// Nesting also decides what ↑/↓ can LAND on, because a tool call is not a stop
+// of its own — it belongs to the message that made it. Three levels, each
+// opened by → on the level above:
+//
+//   ● the message            a stop; ↑/↓ walk these
+//     ⎿ Ran 3 tool calls     part of the message's block (navKey → the message)
+//       ● Bash(pytest)       a stop once the message is opened
+//         ⎿ output           part of that call's block (navKey → the call)
+//
+// So ↑ lands on the message with its tool chatter in tow; → reveals the calls
+// and ↑/↓ then step through them one at a time; → on a call opens its output;
+// ← walks back out (parentKey). Pure, for tests.
+export type PlacedItem = {
+  item: TranscriptItem
+  indent: number
+  nested: boolean
+  attach: boolean
+  // The block this line belongs to, when that is not the line itself. Absent
+  // means the line is its own ↑/↓ stop.
+  navKey?: string
+  // The stop ← steps out to, for a line that IS a stop nested inside another.
+  parentKey?: string
+}
 export function layOutItems(
   items: readonly TranscriptItem[],
-  opts: { indentedKeys?: ReadonlySet<string> } = {},
-): { item: TranscriptItem; indent: number; nested: boolean; attach: boolean }[] {
-  const out: { item: TranscriptItem; indent: number; nested: boolean; attach: boolean }[] = []
-  // Whether anything at all precedes the current run — a run at the head of
-  // the transcript has nothing to hang off.
-  let hasParent = false
+  // `openedKeys` are the lines opened with →: an opened MESSAGE reveals its
+  // calls as stops. `revealAll` is ctrl+r, which reveals every one of them.
+  opts: { openedKeys?: ReadonlySet<string>; revealAll?: boolean } = {},
+): PlacedItem[] {
+  const out: PlacedItem[] = []
+  // The message the current run hangs off — null at the head of the transcript,
+  // where a run has nothing to hang off and stays flat.
+  let parent: string | null = null
+  // The call a ⎿ result belongs to, so a result travels with its own call.
+  let call: string | null = null
   for (const item of items) {
-    if (isToolActivity(item)) {
-      const nested = hasParent
-      out.push({
-        item,
-        // A fold opened with → indents its children one level FURTHER, so the
-        // expansion still reads as the fold's own children.
-        indent: (nested ? NEST_INDENT : 0) + (opts.indentedKeys?.has(item.key) ? NEST_INDENT : 0),
-        nested,
-        // Attach every line of the run: the first to its parent message, the
-        // rest to the line above.
-        attach: nested,
-      })
+    if (!isToolActivity(item)) {
+      out.push({ item, indent: 0, nested: false, attach: false })
+      parent = item.key
+      call = null
       continue
     }
-    out.push({ item, indent: 0, nested: false, attach: false })
-    hasParent = true
+    const nested = parent !== null
+    const revealed =
+      opts.revealAll === true || (parent !== null && opts.openedKeys?.has(parent) === true)
+    if (item.kind === 'tool') call = item.key
+    // Who owns this line — the stop it travels with, or null when it IS one.
+    // Collapsed, everything belongs to the message. Revealed, each ● call
+    // becomes a stop and its ⎿ result travels with it. A fold ("Ran N …") is
+    // never a stop either way: it stands in for the run, so it reads as part of
+    // the message, and → on the message is what opens it.
+    let owner = parent
+    if (revealed && item.kind === 'tool') owner = null
+    else if (revealed && item.kind === 'tool_result') owner = call
+    // A revealed call sits one level further in than the fold it came out of,
+    // so the expansion still reads as that fold's children, and its result
+    // indents with it. The fold line itself doesn't move — it is the header the
+    // children hang under. ctrl+r has no fold to nest below, so nothing shifts.
+    const deeper = revealed && !opts.revealAll && item.kind !== 'notice'
+    out.push({
+      item,
+      indent: (nested ? NEST_INDENT : 0) + (deeper ? NEST_INDENT : 0),
+      nested,
+      // Attach every line of the run: the first to its parent message, the
+      // rest to the line above.
+      attach: nested,
+      navKey: owner ?? undefined,
+      // ← on a revealed call steps back out to the message it hangs off.
+      parentKey: owner === null ? (parent ?? undefined) : undefined,
+    })
   }
   return out
 }
@@ -243,14 +337,15 @@ export function activityRows(
   cols: number,
   hug: boolean,
   // The line describes a TOOL CALL in flight, so it nests under the message
-  // that made the call, exactly where its ⎿ result will land a moment later.
-  // A "Generating…"/"Working…" line describes the message itself and stays flat.
+  // that made the call, exactly where its ⎿ result will land a moment later —
+  // on that message's panel, inside its pad. A "Generating…"/"Working…" line
+  // describes the message itself and stays flat.
   nested = false,
 ): TranscriptRow[] {
   const indent = nested ? NEST_INDENT : 0
   // Reserve the widest the readout gets ("(1h 3m 30s · ↓ 12.3k tokens)") so
   // the label doesn't reflow as the clock ticks.
-  const width = Math.max(8, contentWidth(cols, { indent }) - visibleWidth(suffix) - 16)
+  const width = Math.max(8, contentWidth(cols, { indent, panel: nested }) - visibleWidth(suffix) - 16)
   const rows: TranscriptRow[] = hug || nested ? [] : [spacerRow(key, `${key}:sp`)]
   rows.push({
     id: `${key}:r`,
@@ -259,6 +354,7 @@ export function activityRows(
     indent,
     spans: [{ text: fitLines(label, width)[0] ?? '', dim: true }],
     right: { text: suffix, dim: true },
+    panel: nested,
     tick,
     pulse: true,
   })
@@ -394,9 +490,11 @@ export function anchorAt(rows: readonly TranscriptRow[], index: number): ScrollA
   return { entryKey: row.entryKey, rowOffset: Math.max(0, index - first) }
 }
 
-// The row range an entry occupies, skipping its leading spacer — that blank
-// row is a separator, so bringing an entry to the top of the window should
-// land on its first line of content, not on the gap above it. Pure, for tests.
+// The row range a nav BLOCK occupies — the entry's own rows plus any nested
+// under it (a message's tool calls travel with it, so the snap brings the whole
+// block into frame) — skipping its leading spacer: that blank row is a
+// separator, so bringing a block to the top of the window should land on its
+// first line of content, not on the gap above it. Pure, for tests.
 export function entryRange(
   rows: readonly TranscriptRow[],
   entryKey: string,
@@ -404,7 +502,7 @@ export function entryRange(
   let first = -1
   let last = -1
   for (const [i, row] of rows.entries()) {
-    if (row.entryKey !== entryKey) continue
+    if (navKeyOf(row) !== entryKey) continue
     if (first < 0 && row.spacer) continue
     if (first < 0) first = i
     last = i
