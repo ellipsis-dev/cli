@@ -261,6 +261,11 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // past the newest line (or esc) returns to the composer. The highlighted
   // line renders the cyan selection glyph in its gutter.
   const [navKey, setNavKey] = useState<string | null>(null)
+  // Local ✦ lines in the transcript, for things the CLIENT did that the record
+  // log will never carry: so far, /stop. It belongs in the conversation because
+  // it is an event in the conversation — the notice bar above the composer is
+  // for transient status, and scrolls away with nothing to show you asked.
+  const [chatNotes, setChatNotes] = useState<readonly { key: string; text: string }[]>([])
   // Lines opened in place with → while highlighted: a grp:* fold expands into
   // its tool calls, a clamped long body un-clamps. ← closes them again.
   const [openedKeys, setOpenedKeys] = useState<ReadonlySet<string>>(new Set())
@@ -307,10 +312,15 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // one-line progress block up top (sandboxProgress), not as transcript rows.
   // Each turn's closing duration/cost summary is dropped too (see
   // reshapeTranscript) — the footer carries the session's spend.
-  const { items } = useMemo(
-    () => reshapeTranscript(snapshot.records, props.minRenderFeedSeq),
-    [snapshot.records, props.minRenderFeedSeq],
-  )
+  const { items } = useMemo(() => {
+    const shaped = reshapeTranscript(snapshot.records, props.minRenderFeedSeq)
+    // Client-side notes land at the end: they describe what you just did, so
+    // they belong under everything the server has sent so far.
+    for (const note of chatNotes) {
+      shaped.items.push({ key: note.key, kind: 'notice', text: note.text, spaceBefore: true })
+    }
+    return shaped
+  }, [snapshot.records, props.minRenderFeedSeq, chatNotes])
 
   // Footer spend: the server's ledger total (the session frame's four cost
   // columns — the billing authority, resent on every cost tick) with the
@@ -564,7 +574,14 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         try {
           if (text === '/stop') {
             const s = await api.stopAgentSession(sessionId)
-            setNotice(`stop requested (${s.status}) — the conversation survives`)
+            setNotice(null)
+            setChatNotes((prev) => [
+              ...prev,
+              {
+                key: `note${prev.length}`,
+                text: `Stopped the agent (${s.status}). The conversation is saved. Send a message to pick it back up.`,
+              },
+            ])
             return
           }
           // Show the message as queued, then post it. The POST returns the
@@ -898,6 +915,15 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     const anchor = scrollAnchor ? anchorIndex(allRows, scrollAnchor) : null
     return rowViewport(allRows.length, viewBudget, anchor)
   }, [allRows, viewBudget, scrollAnchor])
+
+  // The one row that wears the ▶ marker: the highlighted block's FIRST row with
+  // a gutter glyph. The whole block tints, but the marker points at a single
+  // line — a block with nested tool activity has a glyph on the call and on its
+  // ⎿ result, and marking both reads as two separate selections.
+  const markerRowId = useMemo(() => {
+    if (navKey === null) return null
+    return allRows.find((r) => navKeyOf(r) === navKey && r.gutter)?.id ?? null
+  }, [allRows, navKey])
 
   // Move the window by `delta` ROWS. Reaching the last row re-pins it to the
   // bottom, so streamed content follows again.
@@ -1233,6 +1259,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             selected={
               navKey !== null && navKeyOf(row) === navKey && (!row.spacer || row.panel === true)
             }
+            marker={row.id === markerRowId}
             // Both ticking values are passed as constants to rows that don't
             // use them, so React.memo skips those rows entirely: the
             // once-a-second clock and the pulse repaint the live lines, not
@@ -1967,12 +1994,17 @@ const RowLine = React.memo(function RowLine({
   row,
   cols,
   selected,
+  marker,
   seconds,
   pulseOn,
 }: {
   row: TranscriptRow
   cols: number
   selected: boolean
+  // Whether THIS row carries the ▶ selection marker in its gutter. Every row of
+  // the highlighted block is `selected` (they all tint), but only one is the
+  // marker row — see markerRowId.
+  marker: boolean
   // The row's ticking duration, resolved here so the once-a-second tick
   // repaints this line instead of rebuilding the transcript's rows.
   seconds: number
@@ -2015,8 +2047,9 @@ const RowLine = React.memo(function RowLine({
       {row.panel && <Box width={MESSAGE_PAD} flexShrink={0} />}
       {row.indent ? <Box width={row.indent} flexShrink={0} /> : null}
       <Box width={GUTTER_COLS} flexShrink={0}>
-        {/* The gutter glyph, or the selection marker in its place — same
-            1-char slot, so the text never shifts when the highlight lands.
+        {/* The gutter glyph, or the selection marker in its place on the one
+            marker row — same 1-char slot, so text never shifts when the
+            highlight lands.
             A live row's mark pulses by DIMMING on the off beat: the glyph
             itself never changes, so the column holds still and the eye reads
             a heartbeat rather than a character swapping in and out. */}
@@ -2025,7 +2058,7 @@ const RowLine = React.memo(function RowLine({
           dimColor={!selected && !row.gutter?.pulse && (row.gutter?.dim ?? false)}
           wrap="truncate"
         >
-          {selected && row.gutter ? SELECTION_GLYPH : (row.gutter?.text ?? '')}
+          {marker ? SELECTION_GLYPH : (row.gutter?.text ?? '')}
         </Text>
       </Box>
       <Box flexGrow={1} flexShrink={1} overflow="hidden">

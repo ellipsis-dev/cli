@@ -174,8 +174,10 @@ export function itemRows(
 ): TranscriptRow[] {
   // Nested tool activity sits ON the parent message's panel: the call and its
   // result are work done while writing that message, so they live inside the
-  // same lifted, padded block rather than on the canvas beside it.
-  const panel = isMessage(item) || opts.nested === true
+  // same lifted, padded block rather than on the canvas beside it. A ✦ notice
+  // ("Session asleep", "Stopped the agent") is an event in the conversation, so
+  // it takes a panel of its own rather than sitting bare on the canvas.
+  const panel = isMessage(item) || opts.nested === true || item.kind === 'notice'
   const indent = opts.indent ?? 0
   const width = contentWidth(cols, { panel, indent })
   const shown = withRenderedMarkdown(item, width)
@@ -325,10 +327,12 @@ export function isToolActivity(item: TranscriptItem): boolean {
 }
 
 // A live status line — "Generating…", "Running Bash(pytest…)…" — with its
-// ticking readout in the right-hand metadata column. `hug` drops the spacer
-// above so the line reads as part of the tool burst it belongs to. The
-// duration is a `tick` marker rather than text: it changes every second, and
-// baking it in here would re-wrap the transcript once a second.
+// ticking readout in the right-hand metadata column. It sits on a panel like
+// any other block, so a turn in flight is as legible as the messages around
+// it. `hug` drops the spacer above so the line reads as part of the tool burst
+// it belongs to. The duration is a `tick` marker rather than text: it changes
+// every second, and baking it in here would re-wrap the transcript once a
+// second.
 export function activityRows(
   key: string,
   label: string,
@@ -345,7 +349,7 @@ export function activityRows(
   const indent = nested ? NEST_INDENT : 0
   // Reserve the widest the readout gets ("(1h 3m 30s · ↓ 12.3k tokens)") so
   // the label doesn't reflow as the clock ticks.
-  const width = Math.max(8, contentWidth(cols, { indent, panel: nested }) - visibleWidth(suffix) - 16)
+  const width = Math.max(8, contentWidth(cols, { indent, panel: true }) - visibleWidth(suffix) - 16)
   const rows: TranscriptRow[] = hug || nested ? [] : [spacerRow(key, `${key}:sp`)]
   rows.push({
     id: `${key}:r`,
@@ -354,7 +358,7 @@ export function activityRows(
     indent,
     spans: [{ text: fitLines(label, width)[0] ?? '', dim: true }],
     right: { text: suffix, dim: true },
-    panel: nested,
+    panel: true,
     tick,
     pulse: true,
   })
