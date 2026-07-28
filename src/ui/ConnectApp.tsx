@@ -500,21 +500,6 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     return () => clearInterval(t)
   }, [working])
 
-  // The heartbeat behind every live ⏺ mark: one timer for the whole app, so
-  // each pulsing glyph breathes in step instead of drifting out of phase. It
-  // runs only while something is actually in flight — a still ⏺ on a settled
-  // transcript would be a lie, and an idle interval would wake the render loop
-  // for nothing. Reset on the way in so a new turn starts bright.
-  const [pulseOn, setPulseOn] = useState(true)
-  useEffect(() => {
-    if (!working) {
-      setPulseOn(true)
-      return
-    }
-    const t = setInterval(() => setPulseOn((on) => !on), PULSE_MS)
-    return () => clearInterval(t)
-  }, [working])
-
   // The tool calls executing right now (an unmatched tool_use in the committed
   // transcript — see pendingToolCalls), with a per-burst seconds ticker so a
   // long Bash call reads "Running Bash(pytest…)… (34s)" instead of dead air.
@@ -535,8 +520,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // Every in-flight send, oldest pipeline stage last, at the transcript's
   // bottom edge: 'accepted' (delivered, awaiting its echo record — full
   // colour), 'queued' (the server's pending inbox — dim), 'sending' (the
-  // POST is in flight — dim). Local chips are multiset-subtracted by text so
-  // a send never renders twice during the received-record handoff window.
+  // POST is in flight — dim), 'cancelled' (taken by a turn that died without
+  // answering it — see deliveredUnechoedSends). Local chips are multiset-
+  // subtracted by text so a send never renders twice during the
+  // received-record handoff window.
   const inFlightSends = useMemo(() => {
     const counts = new Map<string, number>()
     for (const m of serverQueued) counts.set(m, (counts.get(m) ?? 0) + 1)
@@ -547,11 +534,55 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       else extras.push(q.text)
     }
     return [
-      ...acceptedSends.map((m) => ({ key: m.id, text: m.body, state: 'accepted' as const })),
+      ...acceptedSends.map((m) => ({
+        key: m.id,
+        text: m.body,
+        state: m.cancelled ? ('cancelled' as const) : ('accepted' as const),
+      })),
       ...serverQueued.map((text, i) => ({ key: `sq${i}`, text, state: 'queued' as const })),
       ...extras.map((text, i) => ({ key: `lq${i}`, text, state: 'sending' as const })),
     ]
   }, [acceptedSends, serverQueued, queued])
+
+  // The session's opening prompt, shown as a queued row while the sandbox comes
+  // up. A prompt given at creation is NOT an inbox message yet — the worker
+  // inserts it as turn 0's message once Claude Code is running in the sandbox,
+  // which can be minutes later — so without this the chat sits empty and the
+  // message you just sent is nowhere on screen.
+  //
+  // It retires on the first message_received record: from there the inbox rows
+  // (queued → delivered → the echo) are the truth for the same text, so the two
+  // never both render. That record is also what keeps an OLD session's original
+  // prompt out of the chat — its turn-0 message_received is in the feed, even
+  // when --no-records hides the transcript itself.
+  const pendingPrompt = useMemo(() => {
+    if (items.length > 0) return null
+    if (snapshot.records.some((r) => r.record_type === 'message_received')) return null
+    const prompt = snapshot.session?.prompt
+    return typeof prompt === 'string' && prompt.trim() ? prompt : null
+  }, [items.length, snapshot.records, snapshot.session?.prompt])
+
+  // Whether a send is waiting on the agent — a queued row breathes while it
+  // waits, like a running tool does.
+  const sendsWaiting =
+    pendingPrompt !== null ||
+    inFlightSends.some((q) => q.state === 'queued' || q.state === 'sending')
+
+  // The heartbeat behind every live ⏺ mark: one timer for the whole app, so
+  // each pulsing glyph breathes in step instead of drifting out of phase. It
+  // runs only while something is actually in flight — a still ⏺ on a settled
+  // transcript would be a lie, and an idle interval would wake the render loop
+  // for nothing. Reset on the way in so a new turn starts bright.
+  const [pulseOn, setPulseOn] = useState(true)
+  const pulsing = working || sendsWaiting
+  useEffect(() => {
+    if (!pulsing) {
+      setPulseOn(true)
+      return
+    }
+    const t = setInterval(() => setPulseOn((on) => !on), PULSE_MS)
+    return () => clearInterval(t)
+  }, [pulsing])
   const [toolElapsed, setToolElapsed] = useState(0)
   const pendingToolKey = pendingTools.length > 0 ? pendingTools[0].key : null
   useEffect(() => {
@@ -864,12 +895,30 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         ),
       )
     }
+    // The session's opening prompt while it is still only a start request: the
+    // same queued row a mid-session send gets, so the message you sent is on
+    // screen from the first frame.
+    if (pendingPrompt) {
+      out.push(
+        ...pendingMessageRows('prompt', pendingPrompt, cols, {
+          gutter: LIVE_GLYPH,
+          dim: true,
+          right: 'queued',
+          pulse: true,
+        }),
+      )
+    }
     for (const q of inFlightSends.filter((q) => q.state !== 'accepted')) {
+      const waiting = q.state !== 'cancelled'
       out.push(
         ...pendingMessageRows(q.key, q.text, cols, {
-          gutter: '◆',
+          // A waiting send wears the breathing ⏺, the app's one "in flight"
+          // mark; a cancelled one keeps the ◆ sender glyph — it was a real
+          // message, it just never got answered.
+          gutter: waiting ? LIVE_GLYPH : '◆',
           dim: true,
-          right: q.state === 'sending' ? '(sending…)' : '(queued…)',
+          right: q.state === 'sending' ? 'sending' : q.state === 'queued' ? 'queued' : 'cancelled',
+          pulse: waiting,
         }),
       )
     }
@@ -885,6 +934,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     expanded,
     openedKeys,
     inFlightSends,
+    pendingPrompt,
     liveTail,
     cols,
   ])
@@ -1617,17 +1667,23 @@ export function reshapeTranscript(
   minRenderFeedSeq: number,
 ): { items: TranscriptItem[] } {
   const items: TranscriptItem[] = []
+  // Index of the "Waking the session…" line still awaiting its outcome, so the
+  // resumed record can settle it in place instead of adding a second row. The
+  // line KEEPS ITS KEY, so settling it doesn't move the scroll anchor or the
+  // ↑/↓ walk.
+  let wakeAt = -1
   for (const r of records) {
     if (r.feed_seq <= minRenderFeedSeq) continue
     if (r.source === 'lifecycle') {
+      if (r.record_type === 'session_resumed' && wakeAt >= 0) {
+        items[wakeAt] = { ...items[wakeAt], text: 'Session awake' }
+        wakeAt = -1
+        continue
+      }
       const text = sessionLogText(r)
       if (text) {
-        items.push({
-          key: `s${r.feed_seq}`,
-          kind: 'notice',
-          text,
-          spaceBefore: true,
-        })
+        items.push({ key: `s${r.feed_seq}`, kind: 'notice', text, spaceBefore: true })
+        wakeAt = text === 'Waking the session…' ? items.length - 1 : -1
       }
       continue
     }
@@ -1652,13 +1708,16 @@ export function reshapeTranscript(
 // The session milestones worth a line in the chat log, and how each reads.
 // Deliberately a SHORT list of state changes a reader would otherwise be left
 // guessing about:
-//   - the session parked between turns, and what wakes it
+//   - the session parked between turns
 //   - it is coming back up (a wake, or an infra retry after a wobble)
-//   - it came back and the conversation continues
 //   - it was stopped or cancelled
 // Everything else the lifecycle feed carries is startup detail (sandbox phases,
 // setup log chunks, per-phase timings) and belongs to the startup block up top,
 // not the conversation — logging it would bury the chat in provisioning noise.
+//
+// A wake is ONE line, not two: "Waking the session…" is the same event as
+// "Session awake" a few seconds later, so reshapeTranscript settles the waking
+// line in place rather than adding a second row under it.
 //
 // `session_ready`-style milestones are deliberately absent for a FIRST start:
 // the startup block already tells that story in place. A wake is different —
@@ -1667,7 +1726,7 @@ export function sessionLogText(record: LifecycleRecordLike): string | null {
   const p = record.payload
   switch (record.record_type) {
     case 'session_idle':
-      return 'Session asleep — your next message wakes it'
+      return 'Session asleep'
     case 'session_starting': {
       // Only a WAKE is logged: the first start is the startup block's story.
       const wake = typeof p.wake_index === 'number' ? p.wake_index : 0
@@ -1680,7 +1739,7 @@ export function sessionLogText(record: LifecycleRecordLike): string | null {
         ? `Retrying · ${p.reason}`
         : 'Retrying after a transient error…'
     case 'session_resumed':
-      return 'Session awake — picking up where it left off'
+      return 'Session awake'
     case 'session_cancelled': {
       const reason = typeof p.reason === 'string' && p.reason ? ` · ${p.reason}` : ''
       return `Session cancelled${reason}`
@@ -1733,27 +1792,43 @@ export function awaitingAgentPhase(
 // but the agent's echo record can lag by a whole sandbox wake — without this
 // bridge a send flashes and vanishes for the gap. Rendered as full-colour
 // user rows at the transcript's bottom edge (the mid-turn send is part of the
-// running turn, Claude Code-style). Pure, for tests.
+// running turn, Claude Code-style).
+//
+// `cancelled` means the turn that took the message DIED without answering it —
+// the /stop path, where the backend deliberately does not requeue an
+// interrupted turn's messages (the message is consumed, the answer never
+// comes). Rendered "cancelled" rather than left breathing forever, which is the
+// bug this distinction fixes. A message_requeued instead puts the message back
+// in the inbox, so it is queued again, not cancelled. Pure, for tests.
 export function deliveredUnechoedSends(
   records: readonly LifecycleRecordLike[],
-): { id: string; body: string }[] {
+): { id: string; body: string; cancelled: boolean }[] {
   const received = new Map<string, string>()
-  const delivered = new Set<string>()
+  // Message id -> the turn that consumed it, for the turn_failed correlation.
+  const delivered = new Map<string, string>()
+  const failedTurns = new Set<string>()
   const echoed = new Set<string>()
   for (const r of records) {
     if (r.session_message_id != null) echoed.add(r.session_message_id)
     if (r.source !== 'lifecycle') continue
+    if (r.record_type === 'turn_failed') {
+      if (typeof r.payload.turn_id === 'string') failedTurns.add(r.payload.turn_id)
+      continue
+    }
     const id = typeof r.payload.message_id === 'string' ? r.payload.message_id : null
     if (!id) continue
     if (r.record_type === 'message_received') {
       if (!received.has(id))
         received.set(id, typeof r.payload.body === 'string' ? r.payload.body : '')
-    } else if (r.record_type === 'message_delivered') delivered.add(id)
-    else if (r.record_type === 'message_requeued') delivered.delete(id)
+    } else if (r.record_type === 'message_delivered') {
+      delivered.set(id, typeof r.payload.turn_id === 'string' ? r.payload.turn_id : '')
+    } else if (r.record_type === 'message_requeued') delivered.delete(id)
   }
-  const out: { id: string; body: string }[] = []
+  const out: { id: string; body: string; cancelled: boolean }[] = []
   for (const [id, body] of received) {
-    if (delivered.has(id) && !echoed.has(id)) out.push({ id, body })
+    const turnId = delivered.get(id)
+    if (turnId === undefined || echoed.has(id)) continue
+    out.push({ id, body, cancelled: failedTurns.has(turnId) })
   }
   return out
 }
@@ -1889,7 +1964,7 @@ export function deriveSandboxState(
       }
       case 'session_idle': {
         seen = true
-        headline = 'Session idle — your next message wakes it'
+        headline = 'Session asleep'
         done = true
         break
       }

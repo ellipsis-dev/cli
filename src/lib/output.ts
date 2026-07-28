@@ -80,6 +80,10 @@ export function friendlyErrorMessage(err: unknown): string {
       ? 'The server rejected ELLIPSIS_API_TOKEN. Check the token, or unset it and run `agent login`.'
       : 'Your login is invalid or has expired. Run `agent login` to re-authenticate.'
   }
+  // A 429 detail is written for a human to act on (which limit was hit, how to
+  // get it raised), so print it alone — the `METHOD /path failed: 429` prefix
+  // buries the remedy.
+  if (err instanceof ApiError && err.status === 429) return err.detail
   return (err as Error).message
 }
 
