@@ -251,7 +251,7 @@ describe('deriveSandboxState', () => {
       ],
       0,
     )
-    expect(state?.headline).toBe('Session idle — your next message wakes it')
+    expect(state?.headline).toBe('Session asleep')
     expect(state?.done).toBe(true)
   })
 
@@ -345,8 +345,10 @@ describe('awaitingAgentPhase', () => {
 
 describe('deliveredUnechoedSends', () => {
   const received = (id: string, body: string) => rec('message_received', { message_id: id, body })
-  const delivered = (id: string) => rec('message_delivered', { message_id: id })
+  const delivered = (id: string, turn = 't1') =>
+    rec('message_delivered', { message_id: id, turn_id: turn })
   const requeued = (id: string) => rec('message_requeued', { message_id: id })
+  const turnFailed = (turn = 't1') => rec('turn_failed', { turn_id: turn, turn_index: 0 })
   const echo = (id: string | null) => ({
     ...rec('user', {}, 'claude_code'),
     session_message_id: id,
@@ -354,8 +356,20 @@ describe('deliveredUnechoedSends', () => {
 
   it('bridges the gap between delivery and the user-echo record', () => {
     expect(deliveredUnechoedSends([received('m1', 'hi'), delivered('m1')])).toEqual([
-      { id: 'm1', body: 'hi' },
+      { id: 'm1', body: 'hi', cancelled: false },
     ])
+  })
+
+  it('marks a send cancelled when the turn that took it died unanswered', () => {
+    expect(
+      deliveredUnechoedSends([received('m1', 'hi'), delivered('m1', 't7'), turnFailed('t7')]),
+    ).toEqual([{ id: 'm1', body: 'hi', cancelled: true }])
+  })
+
+  it('leaves a send waiting when a DIFFERENT turn failed', () => {
+    expect(
+      deliveredUnechoedSends([received('m1', 'hi'), delivered('m1', 't7'), turnFailed('t8')]),
+    ).toEqual([{ id: 'm1', body: 'hi', cancelled: false }])
   })
 
   it('retires the send once its echo record lands', () => {
@@ -379,8 +393,8 @@ describe('deliveredUnechoedSends', () => {
         echo(null),
       ]),
     ).toEqual([
-      { id: 'm1', body: 'first' },
-      { id: 'm2', body: 'second' },
+      { id: 'm1', body: 'first', cancelled: false },
+      { id: 'm2', body: 'second', cancelled: false },
     ])
   })
 })
@@ -434,24 +448,27 @@ describe('reshapeTranscript', () => {
     expect(items[1].isError).toBe(true)
   })
 
-  it('logs the session going to sleep and waking, in feed order', () => {
-    const { items } = reshapeTranscript(
-      [
-        assistant('done for now'),
-        rec('session_idle'),
-        rec('session_starting', { wake_index: 1 }),
-        rec('session_resumed'),
-        assistant('back'),
-      ],
-      0,
-    )
-    expect(items.map((i) => i.text)).toEqual([
+  it('settles the waking line in place instead of logging the wake twice', () => {
+    const records = [
+      assistant('done for now'),
+      rec('session_idle'),
+      rec('session_starting', { wake_index: 1 }),
+    ]
+    const waking = reshapeTranscript(records, 0)
+    expect(waking.items.map((i) => i.text)).toEqual([
       'done for now',
-      'Session asleep — your next message wakes it',
+      'Session asleep',
       'Waking the session…',
-      'Session awake — picking up where it left off',
+    ])
+    const awake = reshapeTranscript([...records, rec('session_resumed'), assistant('back')], 0)
+    expect(awake.items.map((i) => i.text)).toEqual([
+      'done for now',
+      'Session asleep',
+      'Session awake',
       'back',
     ])
+    // Same key, so settling the line can't slide the scroll anchor.
+    expect(awake.items[2].key).toBe(waking.items[2].key)
   })
 
   it('leaves startup detail out of the chat — that story is the startup block', () => {

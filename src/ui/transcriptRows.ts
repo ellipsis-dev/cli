@@ -367,11 +367,14 @@ export function activityRows(
 
 // An in-flight send, or the streaming assistant response: the same panel a
 // committed message sits on, so nothing shifts when the real record lands.
+// `pulse` marks the send as still in flight — the same breathing ⏺ a running
+// tool wears, so a message the agent hasn't answered yet never reads as settled
+// conversation.
 export function pendingMessageRows(
   key: string,
   text: string,
   cols: number,
-  opts: { gutter: string; dim?: boolean; bold?: boolean; right?: string },
+  opts: { gutter: string; dim?: boolean; bold?: boolean; right?: string; pulse?: boolean },
 ): TranscriptRow[] {
   const width = contentWidth(cols, { panel: true })
   const rows: TranscriptRow[] = [spacerRow(key, `${key}:sp`)]
@@ -382,11 +385,12 @@ export function pendingMessageRows(
       entryKey: key,
       gutter:
         i === 0 && opts.gutter
-          ? { text: opts.gutter, color: theme.foreground, dim: opts.dim }
+          ? { text: opts.gutter, color: theme.foreground, dim: opts.dim, pulse: opts.pulse }
           : undefined,
       spans: [{ text: line, dim: opts.dim, bold: opts.bold }],
       right: i === lines.length - 1 && opts.right ? { text: opts.right, dim: true } : undefined,
       panel: true,
+      pulse: i === 0 ? opts.pulse : undefined,
     })
   }
   return rows

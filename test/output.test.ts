@@ -70,6 +70,20 @@ describe('friendlyErrorMessage', () => {
     expect(friendlyErrorMessage(err)).toMatch(/ELLIPSIS_API_TOKEN/)
   })
 
+  it('prints a 429 detail bare, so the remedy is the whole message', () => {
+    const err = new ApiError(
+      429,
+      'POST',
+      '/v1/assets',
+      'Asset limit reached: your organization is storing 50 of 50 assets. ' +
+        'Delete assets you no longer need, or email team@ellipsis.dev to raise the limit.',
+    )
+    expect(friendlyErrorMessage(err)).toBe(
+      'Asset limit reached: your organization is storing 50 of 50 assets. ' +
+        'Delete assets you no longer need, or email team@ellipsis.dev to raise the limit.',
+    )
+  })
+
   it('passes other ApiErrors through with the server detail intact', () => {
     const err = new ApiError(409, 'POST', '/v1/sessions/s_1/messages', 'Session is closed')
     expect(friendlyErrorMessage(err)).toBe(
