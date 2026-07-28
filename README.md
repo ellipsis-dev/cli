@@ -40,6 +40,7 @@ skills:
 ## Usage
 
 ```sh
+agent install                     # open the dashboard sign-in page, where you install Ellipsis
 agent login                       # device-code auth against the active host
 agent logout                      # remove stored credentials (--all for every host)
 agent me                          # show the current credential's identity

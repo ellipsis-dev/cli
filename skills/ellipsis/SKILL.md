@@ -45,14 +45,15 @@ sandbox image actually builds, then deploy. The steps below are that flow.
 
    ```sh
    brew install ellipsis-dev/cli/agent
+   agent install    # opens the dashboard sign-in page, where you install Ellipsis
    agent login      # device-code flow tied to your GitHub identity
    agent ping       # confirms the CLI can authenticate and reach the API
    ```
 
    Sessions clone real repositories, so the GitHub App must be installed on
-   the account (app.ellipsis.dev walks through it). In CI or another headless
-   environment, export an API key as `ELLIPSIS_API_TOKEN` instead of logging
-   in.
+   the account. `agent install` opens the page that walks through it. In CI or
+   another headless environment, export an API key as `ELLIPSIS_API_TOKEN`
+   instead of logging in.
 
 2. See a session run before configuring anything:
 

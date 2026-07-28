@@ -25,6 +25,13 @@ export function cliAuthUrl(appBase: string, userCode: string): string {
   return `${appBase}/cli-auth?code=${encodeURIComponent(userCode)}`
 }
 
+// The dashboard sign-in page, where a new customer installs the Ellipsis
+// GitHub App. Built from the active host's app base for the same reason as
+// cliAuthUrl: a beta or self-hosted CLI must not send its user to prod.
+export function appLoginUrl(appBase: string): string {
+  return `${appBase}/login`
+}
+
 // Wrap `label` in an OSC 8 hyperlink so it opens `url` on click in terminals
 // that support it (iTerm2, VS Code, WezTerm, kitty, GNOME); degrades to plain
 // text elsewhere. Only emitted to a TTY — piped output stays free of escapes.
