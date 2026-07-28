@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cliAuthUrl, configUrl, hyperlink, sessionUrl } from '../src/lib/urls'
+import { appLoginUrl, cliAuthUrl, configUrl, hyperlink, sessionUrl } from '../src/lib/urls'
 
 describe('sessionUrl', () => {
   it('builds the account page link with the session query param', () => {
@@ -33,6 +33,18 @@ describe('cliAuthUrl', () => {
   it('tracks the app base host, so a beta base yields a beta approval url', () => {
     expect(cliAuthUrl('https://beta-app.ellipsis.dev', 'PMLJ-VMN2')).toBe(
       'https://beta-app.ellipsis.dev/cli-auth?code=PMLJ-VMN2',
+    )
+  })
+})
+
+describe('appLoginUrl', () => {
+  it('builds the dashboard sign-in page url', () => {
+    expect(appLoginUrl('https://app.ellipsis.dev')).toBe('https://app.ellipsis.dev/login')
+  })
+
+  it('tracks the app base host, so a beta base yields a beta sign-in url', () => {
+    expect(appLoginUrl('https://beta-app.ellipsis.dev')).toBe(
+      'https://beta-app.ellipsis.dev/login',
     )
   })
 })

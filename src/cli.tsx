@@ -1,4 +1,5 @@
 import { Command } from 'commander'
+import { registerInstall } from './commands/install'
 import { registerLogin } from './commands/login'
 import { registerHost } from './commands/host'
 import { registerMe } from './commands/me'
@@ -33,6 +34,7 @@ program
 // rendering (sorted, alias-free, grouped at the top level).
 configureCliHelp(program)
 
+registerInstall(program)
 registerLogin(program)
 registerHost(program)
 registerMe(program)
