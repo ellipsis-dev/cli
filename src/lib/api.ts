@@ -11,6 +11,7 @@ import type {
   BudgetSummary,
   CliAuthPoll,
   CliAuthStart,
+  CodeReviewDefaultView,
   CreateAgentConfigRequest,
   CreateAssetRequest,
   CreateAssetResponse,
@@ -32,6 +33,7 @@ import type {
   ListAgentTemplatesResponse,
   ListAssetsQuery,
   ListAssetsResponse,
+  ListCodeReviewDefaultsResponse,
   ListGithubMembersResponse,
   ListGithubRepositoriesResponse,
   ListLinearTeamsResponse,
@@ -43,6 +45,7 @@ import type {
   ListSlackChannelsResponse,
   ListSlackMembersResponse,
   PutAgentDefaultRequest,
+  PutCodeReviewDefaultRequest,
   ReplayAgentSessionRequest,
   Review,
   SendSessionMessageRequest,
@@ -360,6 +363,32 @@ export class ApiClient {
       query,
     )
     return res.reviews
+  }
+
+  // --------------------------- review defaults -----------------------------
+  // The default code review pipeline ladder (repo default -> account default),
+  // the code_review twin of the /v1/defaults methods below and addressed the
+  // same way: `repository` is "owner/name" for a repo rung and null/omitted
+  // for the account rung — never a row id. Read by POST /v1/reviews when no
+  // config is named; webhook reviews are unaffected. Mutations are refused
+  // for sandbox tokens (403).
+
+  async listReviewDefaults(): Promise<CodeReviewDefaultView[]> {
+    const res = await this.request<ListCodeReviewDefaultsResponse>(
+      'GET',
+      '/v1/reviews/defaults',
+    )
+    return res.defaults
+  }
+
+  putReviewDefault(req: PutCodeReviewDefaultRequest): Promise<CodeReviewDefaultView> {
+    return this.request('PUT', '/v1/reviews/defaults', req)
+  }
+
+  // Clears a rung: the account default when `repository` is omitted, that
+  // repo's default otherwise. 404 when the rung isn't set.
+  deleteReviewDefault(repository?: string): Promise<void> {
+    return this.request('DELETE', '/v1/reviews/defaults', undefined, { repository })
   }
 
   // ----------------------------- agent configs ----------------------------

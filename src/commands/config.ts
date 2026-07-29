@@ -340,8 +340,9 @@ const COMMIT_HINT =
 
 // --repo semantics on defaults mutations: absent -> the account rung; bare
 // --repo -> the repo you're standing in (from the origin remote, an error
-// when there isn't one); --repo owner/name -> that repo.
-function resolveRepoFlag(repo: string | boolean | undefined): string | undefined {
+// when there isn't one); --repo owner/name -> that repo. Shared with
+// `agent review default`, whose rungs are addressed identically.
+export function resolveRepoFlag(repo: string | boolean | undefined): string | undefined {
   if (repo === undefined || repo === false) return undefined
   if (repo === true) {
     const detected = repoFromCwd(process.cwd())
