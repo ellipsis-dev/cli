@@ -48,6 +48,29 @@ export type RowSpan = {
   pulse?: boolean
 }
 
+// The colour a span actually paints in. Every span resolves to a brand hex —
+// there is no "unstyled" span and no `dimColor` — because neither of the two
+// things a bare span would fall back on belongs to us:
+//
+//   * NO COLOUR MEANS THE TERMINAL'S COLOUR. Ink leaves an uncoloured `<Text>`
+//     on the terminal's default foreground, which under a LIGHT theme is the
+//     same near-black as the canvas we paint beneath it. Most spans carry no
+//     colour of their own (the assistant's prose included, via styleFor), so
+//     the bulk of a transcript came out dark on dark. See theme.ts, rule 1.
+//   * DIM IS OPTIONAL, as far as terminals are concerned: \x1b[2m is dropped
+//     outright by a fair number of them once a 24-bit foreground is also set.
+//     That is the same reason a pulsing mark SWAPS its colour on the off beat
+//     instead of dimming — bone → grey is a real colour change, so it reads
+//     everywhere. `dim` resolving to `muted` applies that everywhere else.
+export function spanColor(
+  span: Pick<RowSpan, 'color' | 'dim' | 'pulse'>,
+  pulseOn: boolean,
+): string {
+  if (span.pulse && !pulseOn) return theme.muted
+  if (span.color) return span.color
+  return span.dim ? theme.muted : theme.foreground
+}
+
 export type TranscriptRow = {
   // Unique per row, for React keys.
   id: string

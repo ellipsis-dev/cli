@@ -472,7 +472,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
         <Box flexShrink={0}>
           {/* truncate, never wrap: the bar is budgeted at exactly one row, and
               a wrapped meta line pushes the rule off the bottom of the band. */}
-          <Text dimColor wrap="truncate">
+          <Text color={theme.muted} wrap="truncate">
             {metaText ?? whoText}
           </Text>
         </Box>
@@ -515,10 +515,10 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
           paddingRight={1}
           paddingTop={1}
         >
-          <Text dimColor>
+          <Text color={theme.muted}>
             {loadError ? `✗ ${loadError}` : `loading ${mainPane.sessionId}…`}
           </Text>
-          {loadError && <Text dimColor>esc: back to the sessions</Text>}
+          {loadError && <Text color={theme.muted}>esc: back to the sessions</Text>}
           <EscOnlyInput active={focus === 'chat'} rawMode={isRawModeSupported} onEsc={focusNav} />
         </Box>
       )
@@ -620,27 +620,30 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
                   {cursorHere ? SELECTION_GLYPH : g.glyph}
                 </Text>{' '}
                 <Text
-                  color={cursorHere ? theme.foreground : attention.has(s.id) ? theme.foreground : undefined}
+                  color={
+                    cursorHere || attention.has(s.id) || !g.dim
+                      ? theme.foreground
+                      : theme.muted
+                  }
                   bold={isOpen}
-                  dimColor={!cursorHere && !attention.has(s.id) && g.dim}
                 >
                   {desc.slice(0, descW)}
                 </Text>
               </Text>
             </Box>
             <Box flexShrink={0}>
-              <Text dimColor>{meta}</Text>
+              <Text color={theme.muted}>{meta}</Text>
             </Box>
           </Box>
         )
       })}
       {rows.length === 0 && (
-        <Text dimColor>{polledOnce ? 'no sessions yet' : 'loading sessions…'}</Text>
+        <Text color={theme.muted}>{polledOnce ? 'no sessions yet' : 'loading sessions…'}</Text>
       )}
       {/* Absorbs the rows a short list leaves empty, keeping the hint on the
           band's bottom edge. */}
       <Box flexGrow={1} />
-      <Text wrap="truncate" dimColor>
+      <Text wrap="truncate" color={theme.muted}>
         {navFocused
           ? `↑↓ move · enter open · n new · esc chat · q quit${
               win.end < rows.length ? ` · ${rows.length - win.end} more below` : ''
@@ -1045,21 +1048,23 @@ function NewSessionPane({
     <Box width={width} height={height} flexDirection="column">
       <Box flexGrow={1} />
       <Box justifyContent="center">
-        <Text bold>What are we shipping today?</Text>
+        <Text bold color={theme.foreground}>
+          What are we shipping today?
+        </Text>
       </Box>
       {/* The fact box is sized to the text (capped so long facts wrap at a
           readable measure) so short facts sit centered, not left-aligned
           inside a fixed column. */}
       <Box justifyContent="center" paddingTop={1}>
         <Box width={Math.min(fact.length, Math.max(8, width - 4), 72)}>
-          <Text dimColor wrap="wrap">
+          <Text color={theme.muted} wrap="wrap">
             {fact}
           </Text>
         </Box>
       </Box>
       <Box flexGrow={1} />
       {error && <Text color={theme.error}> ✗ {error}</Text>}
-      {starting && <Text dimColor> ✻ Starting session…</Text>}
+      {starting && <Text color={theme.muted}> ✻ Starting session…</Text>}
       {/* The input panel — the SAME surface as the chat composer, stepping
           onto the lighter active surface while ANY of its four rows is where
           you are (a picker row, its open option list, or the prompt), no
@@ -1085,8 +1090,10 @@ function NewSessionPane({
           if (isOpen) {
             return (
               <Box key={r.key} flexDirection="column" width={inputWidth}>
-                <Text dimColor>{'  '}{r.label}:</Text>
-                {win.start > 0 && <Text dimColor>{'    '}… {win.start} more</Text>}
+                <Text color={theme.muted}>{'  '}{r.label}:</Text>
+                {win.start > 0 && (
+                  <Text color={theme.muted}>{'    '}… {win.start} more</Text>
+                )}
                 {openOptions.slice(win.start, win.end).map((opt, j) => {
                   const at = win.start + j
                   const hovered = at === openHover
@@ -1098,10 +1105,7 @@ function NewSessionPane({
                         <Text color={theme.foreground}>
                           {hovered ? SELECTION_GLYPH : ' '}
                         </Text>{' '}
-                        <Text
-                          color={hovered ? theme.foreground : undefined}
-                          dimColor={!hovered && !picked}
-                        >
+                        <Text color={hovered || picked ? theme.foreground : theme.muted}>
                           {`[${picked ? 'x' : ' '}] ${opt.label}`}
                         </Text>
                       </Text>
@@ -1109,7 +1113,9 @@ function NewSessionPane({
                   )
                 })}
                 {win.end < openOptions.length && (
-                  <Text dimColor>{'    '}… {openOptions.length - win.end} more</Text>
+                  <Text color={theme.muted}>
+                    {'    '}… {openOptions.length - win.end} more
+                  </Text>
                 )}
               </Box>
             )
@@ -1117,11 +1123,11 @@ function NewSessionPane({
           return (
             <Box key={r.key} width={inputWidth}>
               <Text wrap="truncate">
-                <Text color={theme.foreground} dimColor={!active}>
+                <Text color={active ? theme.foreground : theme.muted}>
                   {active ? SELECTION_GLYPH : ' '}
                 </Text>{' '}
-                <Text dimColor>{r.label}: </Text>
-                <Text color={active ? theme.foreground : undefined} dimColor={!active}>
+                <Text color={theme.muted}>{r.label}: </Text>
+                <Text color={active ? theme.foreground : theme.muted}>
                   {rowValue(r.key)}
                 </Text>
               </Text>
@@ -1140,7 +1146,15 @@ function NewSessionPane({
             remounts the node so a stale measurement can't wrap the caret
             onto the border row. */}
         <Box width={inputWidth} minHeight={2} alignItems="flex-start">
-          <Text wrap="wrap" key={`${text}:${cursor}:${focused && row === 'prompt'}`}>
+          {/* The colour on the parent is what the bare text children below
+              inherit (ink would leave typed text on the terminal's default
+              foreground, which a light theme paints near-black on our panel),
+              and it gives the inverse caret a known pair to swap. */}
+          <Text
+            wrap="wrap"
+            key={`${text}:${cursor}:${focused && row === 'prompt'}`}
+            color={theme.foreground}
+          >
             <Text color={theme.foreground}>
               {focused && row === 'prompt' && openPicker === null ? SELECTION_GLYPH : ' '}{' '}
             </Text>
@@ -1155,10 +1169,12 @@ function NewSessionPane({
             {text === '' && caretVisible && (
               <Text>
                 <Text inverse>S</Text>
-                <Text dimColor>tart a cloud session…</Text>
+                <Text color={theme.muted}>tart a cloud session…</Text>
               </Text>
             )}
-            {text === '' && !caretVisible && <Text dimColor>Start a cloud session…</Text>}
+            {text === '' && !caretVisible && (
+              <Text color={theme.muted}>Start a cloud session…</Text>
+            )}
           </Text>
         </Box>
       </Box>

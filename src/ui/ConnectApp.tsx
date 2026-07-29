@@ -55,6 +55,7 @@ import {
   rowViewport,
   snapAnchorForEntry,
   spacerRow,
+  spanColor,
   type RowSpan,
   type ScrollAnchor,
   type TranscriptRow,
@@ -1287,7 +1288,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           inside the budget so they never push a row out. */}
       <Box flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden">
         {view.showAbove && (
-          <Text dimColor wrap="truncate">
+          <Text color={theme.muted} wrap="truncate">
             {`   ↑ ${view.hiddenAbove} more line${view.hiddenAbove === 1 ? '' : 's'} above`}
           </Text>
         )}
@@ -1313,7 +1314,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           />
         ))}
         {view.showBelow && (
-          <Text dimColor wrap="truncate">
+          <Text color={theme.muted} wrap="truncate">
             {`   ↓ ${view.hiddenBelow} more line${view.hiddenBelow === 1 ? '' : 's'} below`}
           </Text>
         )}
@@ -1327,7 +1328,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             detail) can't grow the frame past the pane. */}
         {notice && noticeRows > 0 && (
           <Box height={noticeRows} flexShrink={0} overflow="hidden">
-            <Text dimColor>· {notice}</Text>
+            <Text color={theme.muted}>· {notice}</Text>
           </Box>
         )}
         {/* The composer: the input area on the elevated surface — one step
@@ -1368,8 +1369,16 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             {/* The prompt is the selection glyph while the composer is where
                 you are (focused, no transcript highlight) — the same cyan
                 marker as everywhere else — and dim when it isn't. */}
-            <Text key={`${composer.text}:${composer.cursor}:${focused && navKey === null}`}>
-              <Text color={theme.foreground} dimColor={!(focused && navKey === null)}>
+            {/* The explicit colour on the parent is what the bare text
+                children below inherit — ink would otherwise leave the typed
+                text on the terminal's default foreground, unreadable against
+                the panel on a light theme — and it gives the inverse caret a
+                known pair of colours to swap. */}
+            <Text
+              key={`${composer.text}:${composer.cursor}:${focused && navKey === null}`}
+              color={theme.foreground}
+            >
+              <Text color={focused && navKey === null ? theme.foreground : theme.muted}>
                 {SELECTION_GLYPH}{' '}
               </Text>
               {composer.text.slice(0, composer.cursor)}
@@ -1389,7 +1398,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             </Text>
           </Box>
         )}
-        {!props.hideMetaLine && <Text dimColor>{metaLine}</Text>}
+        {!props.hideMetaLine && <Text color={theme.muted}>{metaLine}</Text>}
       </Box>
     </Box>
   )
@@ -2096,12 +2105,11 @@ const RowLine = React.memo(function RowLine({
         },
       ]
     : row.spans
-  // A pulsing mark's off beat SWAPS ITS COLOUR rather than setting ink's
-  // dimColor: dim is \x1b[2m, which a fair number of terminals drop entirely
-  // when a 24-bit foreground is also set — the blink would silently do nothing
-  // there. Bone → grey is a real colour change, so it reads everywhere.
-  const markColor = (span: RowSpan): string | undefined =>
-    span.pulse && !pulseOn ? theme.muted : span.color
+  // Every span, gutter mark and right-hand readout below paints an explicit
+  // brand colour: `spanColor` resolves the pulse's off beat, a `dim` span and a
+  // span with no colour of its own onto real hexes, so nothing on the row is
+  // left to the terminal's own palette. See its comment in transcriptRows.
+  const markColor = (span: RowSpan): string => spanColor(span, pulseOn)
   // Durations always render parenthesized, in the right-hand metadata column.
   const right = row.tick
     ? { text: `(${[humanDuration(seconds), row.right?.text].filter(Boolean).join(' ')})`, dim: true }
@@ -2124,7 +2132,6 @@ const RowLine = React.memo(function RowLine({
             a heartbeat rather than a character swapping in and out. */}
         <Text
           color={selected || !row.gutter ? theme.foreground : markColor(row.gutter)}
-          dimColor={!selected && !row.gutter?.pulse && (row.gutter?.dim ?? false)}
           wrap="truncate"
         >
           {marker ? SELECTION_GLYPH : (row.gutter?.text ?? '')}
@@ -2136,7 +2143,6 @@ const RowLine = React.memo(function RowLine({
             <Text
               key={i}
               color={selected ? theme.foreground : markColor(span)}
-              dimColor={!selected && !span.pulse && span.dim}
               bold={span.bold}
             >
               {span.text}
@@ -2147,8 +2153,7 @@ const RowLine = React.memo(function RowLine({
       {right && (
         <Box flexShrink={0} paddingLeft={1}>
           <Text
-            color={selected ? theme.foreground : right.color}
-            dimColor={!selected && right.dim}
+            color={selected ? theme.foreground : markColor(right)}
             wrap="truncate"
           >
             {right.text}
