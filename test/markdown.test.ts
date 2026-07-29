@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import chalk from 'chalk'
 import stripAnsi from 'strip-ansi'
 import { fitLines, hasMarkdown, renderMarkdown, visibleWidth } from '../src/lib/markdown'
+import { theme } from '../src/lib/theme'
 
 const lines = (text: string): string[] => text.split('\n')
 const plain = (text: string): string => stripAnsi(text)
@@ -130,5 +132,50 @@ describe('fitLines', () => {
     const out = fitLines(row, 20)
     expect(out).toHaveLength(1)
     expect(visibleWidth(out[0])).toBeLessThanOrEqual(20)
+  })
+})
+
+// Everything a table draws used to resolve through the terminal's OWN 16-colour
+// palette: chalk.red on the header cells, and cli-table3's `border: ['gray']`,
+// which only takes a colour NAME. Whatever the user's theme mapped those two
+// slots to was what a table came out as.
+describe('renderMarkdown colours', () => {
+  const table = '| Name | Status |\n| --- | --- |\n| alpha | ok |'
+
+  // Rendered escapes only exist when chalk is actually emitting colour, which
+  // it isn't under a test runner's pipe. Force a level, and vary the width so
+  // the (width, source)-keyed cache can't hand back an uncoloured render.
+  const coloured = (source: string, width: number): string => {
+    const level = chalk.level
+    chalk.level = 3
+    try {
+      return renderMarkdown(source, width)
+    } finally {
+      chalk.level = level
+    }
+  }
+
+  it('draws the header in brand bone, not the palette red', () => {
+    const out = coloured(table, 41)
+    expect(out).not.toContain('[31m')
+    expect(out).toContain(chalk.hex(theme.foreground).bold('Name'))
+  })
+
+  it('draws the rules in brand muted, not the palette grey', () => {
+    const out = coloured(table, 42)
+    expect(out).not.toContain('[90m')
+    // Every box-drawing run carries the muted foreground.
+    for (const run of out.match(/[│┌┐└┘├┤┬┴┼─]+/g) ?? []) {
+      expect(out).toContain(chalk.hex(theme.muted)(run))
+    }
+  })
+
+  it('leaves cell text uncoloured so the row it lands on supplies the brand fg', () => {
+    // The transcript wraps each row in an explicit colour (see spanColor), and
+    // chalk re-opens it after a nested reset, so a cell needs no colour of its
+    // own — but it must not carry a full [0m either, which would drop the
+    // row's background tint for the rest of the line.
+    const out = coloured(table, 43)
+    expect(out).not.toContain('[0m')
   })
 })

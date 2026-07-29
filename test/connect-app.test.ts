@@ -21,10 +21,12 @@ import {
   layOutItems,
   rowViewport,
   snapToEntry,
+  spanColor,
   withRenderedMarkdown,
   type TranscriptRow,
 } from '../src/ui/transcriptRows'
 import stripAnsi from 'strip-ansi'
+import { theme } from '../src/lib/theme'
 import type { TranscriptItem } from '@ellipsis-dev/sdk/store'
 
 let seq = 0
@@ -945,5 +947,62 @@ describe('foldRun', () => {
 
   it('is empty when the anchor is gone from the unfolded list', () => {
     expect(foldRun('grp:missing', [prose('a')])).toEqual([])
+  })
+})
+
+describe('spanColor', () => {
+  // Nothing on a row may fall through to the terminal's own foreground: under a
+  // light theme that is the same near-black as the canvas painted beneath it.
+  it('gives an uncoloured span the brand foreground, never the terminal default', () => {
+    expect(spanColor({}, true)).toBe(theme.foreground)
+  })
+
+  it('resolves dim to muted instead of leaning on the terminal honouring dim', () => {
+    expect(spanColor({ dim: true }, true)).toBe(theme.muted)
+  })
+
+  it('keeps a span its own colour', () => {
+    expect(spanColor({ color: theme.error, dim: true }, true)).toBe(theme.error)
+  })
+
+  it('swaps a pulsing mark to muted on the off beat, whatever it is coloured', () => {
+    expect(spanColor({ color: theme.success, pulse: true }, false)).toBe(theme.muted)
+    expect(spanColor({ color: theme.success, pulse: true }, true)).toBe(theme.success)
+  })
+})
+
+describe('itemRows colours', () => {
+  // styleFor leaves textColor off for most kinds, the assistant's prose (the
+  // bulk of a transcript) included, so this is the path that used to reach ink
+  // with no colour and render in the terminal's default foreground.
+  // What each kind's body text lands on: prose and the work it describes read
+  // primary, the infrastructure and a tool's output read quiet, a failure reads
+  // error. Quiet is a COLOUR, so it survives a terminal that ignores dim.
+  const bodyColor: Array<[TranscriptItem['kind'], string]> = [
+    ['assistant', theme.foreground],
+    ['user', theme.foreground],
+    ['tool', theme.foreground],
+    ['tool_result', theme.muted],
+    ['thinking', theme.muted],
+    ['system', theme.muted],
+    ['notice', theme.muted],
+    ['summary', theme.muted],
+    ['error', theme.error],
+  ]
+
+  it('resolves each kind to its brand colour, never to the terminal default', () => {
+    for (const [kind, expected] of bodyColor) {
+      const rows = itemRows({ key: `k:${kind}`, kind, text: 'some text' }, 60, { clamp: false })
+      const body = rows.filter((r) => r.spans.some((s) => s.text.includes('some text')))
+      expect(body.length, kind).toBeGreaterThan(0)
+      for (const row of body) {
+        for (const span of row.spans) expect(spanColor(span, true), kind).toBe(expected)
+        if (row.gutter) {
+          expect(new Set<string>(Object.values(theme)), `${kind} gutter`).toContain(
+            spanColor(row.gutter, true),
+          )
+        }
+      }
+    }
   })
 })
