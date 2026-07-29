@@ -53,7 +53,7 @@ import {
   padPanelBlocks,
   pendingMessageRows,
   rowViewport,
-  snapToEntry,
+  snapAnchorForEntry,
   spacerRow,
   type RowSpan,
   type ScrollAnchor,
@@ -988,18 +988,12 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     [allRows, view],
   )
 
-  // Snap the window so a highlighted entry is readable: entering from above,
-  // its first line goes to the top of the frame; from below, it aligns to the
-  // bottom edge. See snapToEntry.
+  // Snap the window so a highlighted entry is readable, given which way the
+  // highlight is travelling (`dir`: 1 for ↓, -1 for ↑). See snapToEntry.
   const ensureVisible = useCallback(
-    (key: string): void => {
-      const target = snapToEntry(allRows, key, view, view.capacity)
-      if (target === null) return
-      const range = entryRange(allRows, key)
-      // Snapping to the newest entry means following the bottom again, so new
-      // content keeps arriving in view.
-      if (range && range.last >= allRows.length - 1) setScrollAnchor(null)
-      else setScrollAnchor(anchorAt(allRows, target))
+    (key: string, dir: 1 | -1 = 1): void => {
+      const move = snapAnchorForEntry(allRows, key, view, view.capacity, dir)
+      if (move) setScrollAnchor(move.anchor)
     },
     [allRows, view],
   )
@@ -1107,7 +1101,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           const target = idx === -1 ? navKeys.length - 1 : Math.max(0, idx - 1)
           if (navKeys.length > 0) {
             setNavKey(navKeys[target])
-            ensureVisible(navKeys[target])
+            ensureVisible(navKeys[target], -1)
           }
           return
         }
@@ -1118,7 +1112,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             setScrollAnchor(null)
           } else {
             setNavKey(navKeys[idx + 1])
-            ensureVisible(navKeys[idx + 1])
+            ensureVisible(navKeys[idx + 1], 1)
           }
           return
         }

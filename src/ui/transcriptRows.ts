@@ -519,27 +519,58 @@ export function entryRange(
 }
 
 // Where the window must sit for `entryKey` to be readable, given where it sits
-// now — the ↑/↓ snap.
+// now and which way the highlight is travelling (`dir`: 1 for ↓, -1 for ↑) —
+// the ↑/↓ snap.
 //
-// An entry coming into frame from ABOVE puts its first line at the TOP of the
-// window: you read a message from its beginning, with as much of it in front
-// of you as fits. So does one too tall to fit whole. An entry arriving from
-// BELOW aligns to the bottom edge, the direction it was already travelling.
-// One already fully in frame doesn't move the window at all. Returns the flat
-// row index to pin to the top, or null to leave the window alone. Pure, for
-// tests.
+// An entry already fully in frame doesn't move the window at all. One that
+// FITS but sits off-frame comes in from the side it is on: from above to the
+// top of the window, from below to the bottom edge. One TOO TALL to fit lands
+// on the edge you are heading towards, so the walk keeps its direction of
+// travel: ↓ lands on its FIRST line (you read a long message from its
+// beginning) and ↑ on its LAST (you back into the end of it). From there
+// ↑/↓ scroll THROUGH the rest of it a row at a time — see revealMore — so the
+// two together read the entry continuously in whichever direction you started.
+//
+// Returns the flat row index to pin to the top, or null to leave the window
+// alone. Pure, for tests.
 export function snapToEntry(
   rows: readonly TranscriptRow[],
   entryKey: string,
   view: { start: number; end: number },
   capacity: number,
+  dir: 1 | -1 = 1,
 ): number | null {
   const range = entryRange(rows, entryKey)
   if (!range) return null
+  // Already readable whole: don't jostle the window.
+  if (range.first >= view.start && range.last < view.end) return null
+  const bottomAligned = Math.max(0, range.last - capacity + 1)
   const height = range.last - range.first + 1
-  if (range.first < view.start || height >= capacity) return range.first
-  if (range.last >= view.end) return Math.max(0, range.last - capacity + 1)
-  return null
+  if (height >= capacity) return dir < 0 ? bottomAligned : range.first
+  return range.first < view.start ? range.first : bottomAligned
+}
+
+// snapToEntry's row index as the scroll move to apply: null to leave the window
+// where it is, or the anchor to park on — itself null when the snap lands on the
+// last screenful, which means following the bottom again so streamed content
+// keeps arriving in view.
+//
+// That bottom-follow is keyed on WHERE THE SNAP LANDS, not on the entry being
+// the newest one: an entry taller than the window is snapped to an interior row
+// (its first line, when walking down into it), and pinning to the bottom there
+// would throw the snap away and show the entry's end instead of its beginning.
+// Pure, for tests.
+export function snapAnchorForEntry(
+  rows: readonly TranscriptRow[],
+  entryKey: string,
+  view: { start: number; end: number },
+  capacity: number,
+  dir: 1 | -1 = 1,
+): { anchor: ScrollAnchor | null } | null {
+  const target = snapToEntry(rows, entryKey, view, capacity, dir)
+  if (target === null) return null
+  if (target >= rows.length - capacity) return { anchor: null }
+  return { anchor: anchorAt(rows, target) }
 }
 
 // Agent and user prose rendered as markdown (bold, headings, bullets, tables,

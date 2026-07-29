@@ -20,6 +20,7 @@ import {
   itemRows,
   layOutItems,
   rowViewport,
+  snapAnchorForEntry,
   snapToEntry,
   withRenderedMarkdown,
   type TranscriptRow,
@@ -901,6 +902,55 @@ describe('snapToEntry', () => {
       { id: 'c', entryKey: 'c', spans: [] },
     ]
     expect(snapToEntry(short, 'b', { start: 0, end: 3 }, 3)).toBeNull()
+  })
+
+  it('backs ↑ into a too-tall entry at its LAST line, keeping the walk going up', () => {
+    // 'b' spans rows 1..10. Walking UP out of 'c' lands on 'b's bottom edge
+    // (rows 7..10 on a 4-row window), not its far-away first line.
+    expect(snapToEntry(rows, 'b', { start: 8, end: 12 }, 4, -1)).toBe(7)
+  })
+
+  it('walks ↓ into a too-tall entry at its FIRST line', () => {
+    expect(snapToEntry(rows, 'b', { start: 0, end: 4 }, 4, 1)).toBe(1)
+  })
+})
+
+describe('snapAnchorForEntry', () => {
+  // A short entry, then one 10 rows tall — taller than the 4-row window.
+  const shortThenLong: TranscriptRow[] = [
+    { id: 'a', entryKey: 'a', spans: [] },
+    ...Array.from({ length: 10 }, (_, i) => ({ id: `b${i}`, entryKey: 'b', spans: [] })),
+  ]
+
+  it('parks on the TOP of a trailing too-tall entry walked into from above', () => {
+    // ↓ off the short entry onto the long last one: its first line, NOT the
+    // bottom-follow that being the newest entry used to force.
+    expect(snapAnchorForEntry(shortThenLong, 'b', { start: 0, end: 4 }, 4, 1)).toEqual({
+      anchor: { entryKey: 'b', rowOffset: 0 },
+    })
+  })
+
+  it('follows the bottom when the snap really does land on the last screenful', () => {
+    // The same trailing entry, but short enough to fit: bottom-aligning it IS
+    // the bottom of the log, so keep streaming content in view.
+    const shortTail: TranscriptRow[] = [
+      ...Array.from({ length: 6 }, (_, i) => ({ id: `a${i}`, entryKey: 'a', spans: [] })),
+      { id: 'b0', entryKey: 'b', spans: [] },
+    ]
+    expect(snapAnchorForEntry(shortTail, 'b', { start: 0, end: 4 }, 4, 1)).toEqual({ anchor: null })
+  })
+
+  it('parks on the BOTTOM of a too-tall entry walked into from below', () => {
+    // (short) (long) (short) with the highlight on the trailing short one: ↑
+    // lands on the long entry's END — rows 7..10 of an 11-row block.
+    const withTail: TranscriptRow[] = [...shortThenLong, { id: 'c', entryKey: 'c', spans: [] }]
+    expect(snapAnchorForEntry(withTail, 'b', { start: 8, end: 12 }, 4, -1)).toEqual({
+      anchor: { entryKey: 'b', rowOffset: 6 },
+    })
+  })
+
+  it('reports no move for an entry already fully in frame', () => {
+    expect(snapAnchorForEntry(shortThenLong, 'a', { start: 0, end: 4 }, 4, -1)).toBeNull()
   })
 })
 
