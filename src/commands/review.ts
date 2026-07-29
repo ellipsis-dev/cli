@@ -3,8 +3,15 @@ import { ApiClient, ApiError } from '../lib/api'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { createWipCommit, currentBranch, pushReviewBranch, repoFromCwd } from '../lib/laptop'
 import { formatTs, printJson, printTable, relativeAge, runAction, usdFromMillicents } from '../lib/output'
+import { resolveRepoFlag } from './config'
 import { watchSessionStreaming } from './session'
-import type { CreateReviewRequest, Finding, Review, ReviewScope } from '../lib/types'
+import type {
+  CodeReviewDefaultView,
+  CreateReviewRequest,
+  Finding,
+  Review,
+  ReviewScope,
+} from '../lib/types'
 
 // `agent review`: ask for a code review now, instead of waiting for a push to
 // trigger one. Two targets —
@@ -168,6 +175,158 @@ export function registerReview(program: Command): void {
         )
       })
     })
+
+  registerReviewDefaults(review)
+}
+
+// `agent review default`: which code review pipeline runs when an explicit
+// review names none — a two-rung ladder (account default + per-repo defaults,
+// repo wins) mirroring `agent config default`, with the same --repo
+// semantics. Only explicit reviews read it: webhook reviews keep matching the
+// pipelines' own `pull_requests:` filters.
+function registerReviewDefaults(review: Command): void {
+  const defaults = apiRoutes(
+    alsoKnownAs(
+      review
+        .command('default')
+        .description('Show or set which code review pipeline runs when a review names none'),
+      'defaults',
+    ),
+    'GET /v1/reviews/defaults',
+  )
+    .option('--json', 'output raw JSON')
+    // Bare `agent review default`: the effective default for the repo you're
+    // standing in, computed locally from GET /v1/reviews/defaults + the origin
+    // remote (the same ladder the server resolves at review start).
+    .action(async (opts: { json?: boolean }) => {
+      await runAction(async () => {
+        const rungs = await new ApiClient().listReviewDefaults()
+        const repo = repoFromCwd(process.cwd())
+        const repoRung = repo
+          ? rungs.find((d) => d.repository?.toLowerCase() === repo.toLowerCase())
+          : undefined
+        const accountRung = rungs.find((d) => d.repository === null)
+        const effective = repoRung ?? accountRung
+        if (opts.json) {
+          printJson({ repository: repo ?? null, effective: effective ?? null })
+          return
+        }
+        if (!effective) {
+          console.log(
+            repo
+              ? `no default set for ${repo} or the account (reviews run the synced pipeline, or the platform defaults)`
+              : 'no account default set (reviews run the synced pipeline, or the platform defaults)',
+          )
+          return
+        }
+        const rung = effective.repository
+          ? `repo default for ${effective.repository}`
+          : 'account default'
+        console.log(
+          `using pipeline "${defaultName(effective)}" (${rung})${brokenSuffix(effective)}`,
+        )
+      })
+    })
+
+  apiRoutes(
+    alsoKnownAs(
+      defaults
+        .command('list')
+        .description('List every default that is set, account rung and per-repo rungs'),
+      'ls',
+    ),
+    'GET /v1/reviews/defaults',
+  )
+    .option('--json', 'output raw JSON')
+    // The group also defines --json (for the bare view), and commander parses
+    // parent options even when they follow the subcommand name — so read the
+    // merged view, not just this command's own opts.
+    .action(async (_opts: { json?: boolean }, cmd: Command) => {
+      await runAction(async () => {
+        const rungs = await new ApiClient().listReviewDefaults()
+        if (cmd.optsWithGlobals().json) {
+          printJson(rungs)
+          return
+        }
+        if (rungs.length === 0) {
+          console.log(
+            'No defaults set. Reviews run the synced pipeline, or the platform defaults.',
+          )
+          return
+        }
+        printTable(
+          ['RUNG', 'PIPELINE', 'CONFIG ID', 'STATUS', 'UPDATED'],
+          rungs.map((d) => [
+            d.repository ?? 'account',
+            d.config_name ?? '—',
+            d.config_id,
+            d.broken ? `broken: ${d.broken}` : 'ok',
+            formatTs(d.updated_at),
+          ]),
+        )
+      })
+    })
+
+  apiRoutes(
+    defaults
+      .command('set <config-id>')
+      .description('Set the account default code review pipeline, or a repo default with --repo'),
+    'PUT /v1/reviews/defaults',
+  )
+    .option(
+      '-r, --repo [repository]',
+      'target a repo rung: "owner/name", or no value for the repo you are standing in',
+    )
+    .option('--json', 'output raw JSON')
+    .action(
+      async (configId: string, opts: { repo?: string | boolean; json?: boolean }, cmd: Command) => {
+        await runAction(async () => {
+          const repository = resolveRepoFlag(opts.repo)
+          const set = await new ApiClient().putReviewDefault({
+            config_id: configId,
+            ...(repository ? { repository } : {}),
+          })
+          if (cmd.optsWithGlobals().json) {
+            printJson(set)
+            return
+          }
+          const rung = set.repository ? `default for ${set.repository}` : 'account default'
+          console.log(`✓ set ${rung} to "${defaultName(set)}" (${set.config_id})`)
+        })
+      },
+    )
+
+  apiRoutes(
+    alsoKnownAs(
+      defaults
+        .command('clear')
+        .description('Clear the account default code review pipeline, or a repo default with --repo'),
+      'rm',
+      'delete',
+    ),
+    'DELETE /v1/reviews/defaults',
+  )
+    .option(
+      '-r, --repo [repository]',
+      'target a repo rung: "owner/name", or no value for the repo you are standing in',
+    )
+    .action(async (opts: { repo?: string | boolean }) => {
+      await runAction(async () => {
+        const repository = resolveRepoFlag(opts.repo)
+        await new ApiClient().deleteReviewDefault(repository)
+        console.log(`✓ cleared ${repository ? `default for ${repository}` : 'account default'}`)
+      })
+    })
+}
+
+function defaultName(d: CodeReviewDefaultView): string {
+  return d.config_name ?? d.config_id
+}
+
+// A set-but-broken rung fails explicit reviews closed (never a silent run of
+// a different pipeline), so surface it wherever the rung is shown.
+function brokenSuffix(d: CodeReviewDefaultView): string {
+  return d.broken ? ` (broken: ${d.broken})` : ''
 }
 
 interface StartOptions {

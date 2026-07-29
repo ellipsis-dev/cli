@@ -192,6 +192,67 @@ describe('ApiClient sandbox variables', () => {
   })
 })
 
+describe('ApiClient review defaults', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const rung = {
+    id: 'crdef_1',
+    repository: null,
+    config_id: 'crcfg_1',
+    config_name: 'Team reviewer',
+    broken: null,
+    updated_at: '',
+  }
+
+  it('lists rungs and unwraps the response envelope', async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ defaults: [rung] }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const out = await new ApiClient('http://api.test', 't').listReviewDefaults()
+    expect(out).toEqual([rung])
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/reviews/defaults')
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
+  })
+
+  it('PUTs the rung: account when repository is omitted, repo when named', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(rung), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await new ApiClient('http://api.test', 't').putReviewDefault({ config_id: 'crcfg_1' })
+    let [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('http://api.test/v1/reviews/defaults')
+    expect((init as RequestInit).method).toBe('PUT')
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ config_id: 'crcfg_1' })
+
+    await new ApiClient('http://api.test', 't').putReviewDefault({
+      config_id: 'crcfg_1',
+      repository: 'acme/api',
+    })
+    ;[url, init] = fetchMock.mock.calls[1]
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      config_id: 'crcfg_1',
+      repository: 'acme/api',
+    })
+  })
+
+  it('clears a rung via query param, omitted for the account rung', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const api = new ApiClient('http://api.test', 't')
+    await api.deleteReviewDefault()
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/reviews/defaults')
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('DELETE')
+
+    await api.deleteReviewDefault('acme/api')
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      'http://api.test/v1/reviews/defaults?repository=acme%2Fapi',
+    )
+  })
+})
+
 describe('getSessionLog', () => {
   afterEach(() => vi.unstubAllGlobals())
 

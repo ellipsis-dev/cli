@@ -305,6 +305,34 @@ export interface PutAgentDefaultRequest {
   config_id: string
 }
 
+// One rung of the default code review pipeline ladder (GET
+// /v1/reviews/defaults) — the code_review twin of AgentDefaultView, pointing
+// at a synced `kind: code_review` pipeline (crcfg_…) instead of an agent
+// config. Read by POST /v1/reviews when no config is named: repo default ->
+// account default -> the oldest synced pipeline -> the platform defaults.
+export interface CodeReviewDefaultView {
+  id: string
+  repository: string | null
+  config_id: string
+  // The pointed-at pipeline's name; null when the pipeline is gone (see broken).
+  config_name: string | null
+  // Why this rung can't serve reviews (config_deleted | config_disabled |
+  // config_sync_error | repo_inaccessible); null when healthy.
+  broken: string | null
+  updated_at: string
+}
+
+export interface ListCodeReviewDefaultsResponse {
+  defaults: CodeReviewDefaultView[]
+}
+
+// Body of PUT /v1/reviews/defaults: point a rung at a pipeline. `repository`
+// omitted sets the account default; "owner/name" sets that repo's default.
+export interface PutCodeReviewDefaultRequest {
+  repository?: string
+  config_id: string
+}
+
 // Create-config payload for POST /v1/configs. Exactly one of `config` (inline)
 // or `template_id` (a gallery template slug). `repository` is a bare repo name
 // in the caller's account — the owner is always the account.
