@@ -49,8 +49,9 @@ import { ConnectApp } from './ConnectApp'
 //      no session is focused
 //   2. the chat window (the hosted ConnectApp, full width)
 //   3. the text input (the ConnectApp's composer)
-//   4. the session nav — a vertical list: "+ New session" then your five
-//      most recent sessions
+//   4. the session nav — a vertical list: "+ New session" then your sessions,
+//      banded by status (live conversations first) and newest-born first
+//      inside a band
 // This is what a bare `agent`, `agent "prompt"`, and `agent session
 // connect <id>` all open.
 //
@@ -561,11 +562,12 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   }
 
   // ---- band 4: the session nav ----
-  // A vertical list of six rows: the pinned new-session row, then the five
-  // most recent sessions (status dot + description + a dim age tag), windowed
-  // so the highlight parks on the second-to-last row and the list scrolls
-  // under it. The band's height is fixed, so a short list leaves blank rows
-  // rather than moving the chat above it.
+  // A vertical list of six rows: the pinned new-session row, then five session
+  // rows (status dot + description + a dim age tag) in sortSidebarSessions
+  // order — status band, newest-born first — windowed so the highlight parks
+  // on the second-to-last row and the list scrolls under it. The band's height
+  // is fixed, so a short list leaves blank rows rather than moving the chat
+  // above it.
   const selectedRowIdx = Math.max(0, rows.findIndex((s) => s.id === selected))
   const win = navSlice(rows.length, navSessionRows, selectedRowIdx)
   const navFocused = focus === 'nav'

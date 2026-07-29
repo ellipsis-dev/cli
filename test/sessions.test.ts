@@ -6,7 +6,6 @@ import {
   composerModelOptions,
   connectability,
   isActiveStatusWord,
-  isOpenConversation,
   lastEventAt,
   navSlice,
   rowDescription,
@@ -17,6 +16,7 @@ import {
   shortAge,
   sidebarSlice,
   sortSidebarSessions,
+  statusBand,
   mergeSidebarSessions,
 } from '../src/lib/sessions'
 import { theme } from '../src/lib/theme'
@@ -245,38 +245,62 @@ describe('sessionSource', () => {
   })
 })
 
-describe('sortSidebarSessions', () => {
-  it('puts open conversations first, each group newest-event first', () => {
-    const open1 = session({ id: 'open1', session_state: 'idle', updated_at: '2026-07-23T10:00:00Z' })
-    const open2 = session({
-      id: 'open2',
-      session_state: 'running',
-      updated_at: '2026-07-23T11:00:00Z',
-    })
-    const closed = session({
-      id: 'closed',
-      session_state: 'closed',
-      updated_at: '2026-07-23T12:00:00Z',
-    })
-    const done = session({ id: 'done', status: 'completed', updated_at: '2026-07-23T13:00:00Z' })
-    expect(sortSidebarSessions([closed, open1, done, open2]).map((s) => s.id)).toEqual([
-      'open2',
-      'open1',
-      'done',
-      'closed',
-    ])
+describe('statusBand / sortSidebarSessions', () => {
+  // A row per band, deliberately born newest-first-is-wrong-order so a
+  // recency sort can't accidentally pass.
+  const waiting = session({
+    id: 'waiting',
+    created_at: '2026-07-20T00:00:00Z',
+    surface: { session: 'alive', run: 'waiting', status: 'waiting' },
+  })
+  const working = session({
+    id: 'working',
+    created_at: '2026-07-21T00:00:00Z',
+    surface: { session: 'alive', run: 'working', status: 'working' },
+  })
+  const sleeping = session({
+    id: 'sleeping',
+    created_at: '2026-07-22T00:00:00Z',
+    surface: { session: 'sleeping', run: 'done', status: 'sleeping' },
+  })
+  const done = session({ id: 'done', created_at: '2026-07-23T00:00:00Z', status: 'completed' })
+  const failed = session({ id: 'failed', created_at: '2026-07-24T00:00:00Z', status: 'error' })
+
+  it('bands by status: live, parked, done, dead', () => {
+    expect(sortSidebarSessions([failed, done, sleeping, waiting, working]).map((s) => s.id)).toEqual(
+      ['working', 'waiting', 'sleeping', 'done', 'failed'],
+    )
+    expect(statusBand('completed')).toBe(statusBand('closed'))
   })
 
-  it('treats non-terminal stateless sessions as open', () => {
-    expect(isOpenConversation(session({ status: 'running' }))).toBe(true)
-    expect(isOpenConversation(session({ status: 'completed' }))).toBe(false)
+  it('bands waiting with in-flight, so a finished turn does not move the row', () => {
+    // The same session either side of a turn boundary: same band, same
+    // created_at, so it holds its slot instead of jumping on every response.
+    expect(statusBand('waiting')).toBe(statusBand('working'))
+    expect(statusBand('waiting')).toBe(statusBand('starting'))
+    const mid = sortSidebarSessions([waiting, working, sleeping]).map((s) => s.id)
+    const after = sortSidebarSessions([
+      { ...waiting, surface: { session: 'alive', run: 'working', status: 'working' } },
+      { ...working, surface: { session: 'alive', run: 'waiting', status: 'waiting' } },
+      sleeping,
+    ] as AgentSession[]).map((s) => s.id)
+    expect(after).toEqual(mid)
+  })
+
+  it('orders within a band newest-born first, ignoring event recency', () => {
+    const old = session({ id: 'old', created_at: '2026-07-20T00:00:00Z', status: 'running' })
+    const fresh = session({ id: 'fresh', created_at: '2026-07-22T00:00:00Z', status: 'running' })
+    // `old` just spoke; that must not lift it above the younger session.
+    const chatty = { ...old, last_activity_at: '2026-07-23T00:00:00Z' } as AgentSession
+    expect(sortSidebarSessions([chatty, fresh]).map((s) => s.id)).toEqual(['fresh', 'old'])
+    expect(sortSidebarSessions([fresh, chatty]).map((s) => s.id)).toEqual(['fresh', 'old'])
   })
 })
 
 describe('mergeSidebarSessions', () => {
   it('keeps local sessions the poll has not returned yet', () => {
-    const polled = session({ id: 'a', updated_at: '2026-07-23T10:00:00Z' })
-    const local = session({ id: 'b', updated_at: '2026-07-23T11:00:00Z' })
+    const polled = session({ id: 'a', created_at: '2026-07-23T10:00:00Z' })
+    const local = session({ id: 'b', created_at: '2026-07-23T11:00:00Z' })
     expect(mergeSidebarSessions([polled], [local]).map((s) => s.id)).toEqual(['b', 'a'])
   })
 
