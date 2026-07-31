@@ -288,3 +288,47 @@ describe('fetchLogSegment', () => {
     await expect(fetchLogSegment(segment())).rejects.toThrow(/presigned URL likely expired/)
   })
 })
+
+// Regression: `[prompt]` was a single positional, so an unquoted
+// `agent fix the tests` sent just "fix" and dropped the rest silently.
+describe('session start prompt positional', () => {
+  async function startedPrompt(argv: string[]): Promise<string | undefined> {
+    const { Command } = await import('commander')
+    const { registerSession } = await import('../src/commands/session')
+    const { ApiClient } = await import('../src/lib/api')
+    let seen: string | undefined
+    const spy = vi
+      .spyOn(ApiClient.prototype, 'startAgentSession')
+      .mockImplementation(async (req) => {
+        seen = req.prompt
+        return session('queued')
+      })
+    const program = new Command()
+    program.exitOverride()
+    registerSession(program)
+    try {
+      await program.parseAsync(['node', 'agent', 'session', 'start', ...argv, '--json'])
+    } finally {
+      spy.mockRestore()
+    }
+    return seen
+  }
+
+  it('joins an unquoted multi-word prompt into one instruction', async () => {
+    expect(await startedPrompt(['fix', 'the', 'tests'])).toBe('fix the tests')
+  })
+
+  it('keeps a quoted prompt intact', async () => {
+    expect(await startedPrompt(['fix the tests'])).toBe('fix the tests')
+  })
+
+  it('still separates trailing flags from the prompt', async () => {
+    expect(await startedPrompt(['fix', 'the', 'tests', '--model', 'claude-fable-5'])).toBe(
+      'fix the tests',
+    )
+  })
+
+  it('leaves a promptless start without a prompt', async () => {
+    expect(await startedPrompt([])).toBeUndefined()
+  })
+})

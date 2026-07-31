@@ -4,7 +4,10 @@ import {
   collectKeyValue,
   collectSource,
   collectStatus,
+  commandTypoMessage,
+  looksLikeCommandTypo,
   parseScope,
+  similarCommands,
   parseWhen,
   toInt,
 } from '../src/lib/args'
@@ -92,5 +95,69 @@ describe('parseWhen', () => {
   it('rejects anything else', () => {
     expect(() => parseWhen('last tuesday', now)).toThrow(/ISO 8601/)
     expect(() => parseWhen('', now)).toThrow(/ISO 8601/)
+  })
+})
+
+// A bare `agent <text>` starts a session with that text as the prompt, so a
+// mistyped command must not silently spawn one.
+describe('looksLikeCommandTypo', () => {
+  it('flags a single bare word', () => {
+    expect(looksLikeCommandTypo(['sesion'])).toBe(true)
+    expect(looksLikeCommandTypo(['xyzzy'])).toBe(true)
+  })
+
+  it('lets a real multi-word prompt through', () => {
+    expect(looksLikeCommandTypo(['fix', 'the', 'tests'])).toBe(false)
+    expect(looksLikeCommandTypo(['fix the tests'])).toBe(false)
+  })
+
+  it('leaves options to commander', () => {
+    expect(looksLikeCommandTypo(['--model'])).toBe(false)
+    expect(looksLikeCommandTypo(['-p'])).toBe(false)
+  })
+
+  // `--` means the caller already said "this is a prompt", and a one-word
+  // prompt plus any flag is deliberate enough to trust.
+  it('does not flag anything but a lone word', () => {
+    expect(looksLikeCommandTypo([])).toBe(false)
+    expect(looksLikeCommandTypo(['--', 'sesion'])).toBe(false)
+    expect(looksLikeCommandTypo(['refactor', '--model', 'claude-fable-5'])).toBe(false)
+  })
+})
+
+describe('similarCommands', () => {
+  const commands = ['session', 'review', 'config', 'install', 'model', 'host']
+
+  it('finds the intended command behind a typo', () => {
+    expect(similarCommands('sesion', commands)).toEqual(['session'])
+    expect(similarCommands('reveiw', commands)).toEqual(['review'])
+    expect(similarCommands('instal', commands)).toEqual(['install'])
+  })
+
+  it('returns nothing when the word resembles no command', () => {
+    expect(similarCommands('xyzzy', commands)).toEqual([])
+  })
+
+  it('returns every tie at the best distance', () => {
+    expect(similarCommands('hos', ['hook', 'host'])).toEqual(['host'])
+    expect(similarCommands('mode', ['model', 'mode1'])).toEqual(['mode1', 'model'])
+  })
+})
+
+describe('commandTypoMessage', () => {
+  const commands = ['session', 'review', 'install']
+
+  it('names the likely command and how to force a prompt', () => {
+    const msg = commandTypoMessage('sesion', commands)
+    expect(msg).toContain('unknown command "sesion"')
+    expect(msg).toContain('did you mean "agent session"?')
+    expect(msg).toContain('agent -p sesion')
+  })
+
+  it('still explains the escape hatch with no suggestion', () => {
+    const msg = commandTypoMessage('xyzzy', commands)
+    expect(msg).not.toContain('did you mean')
+    expect(msg).toContain('agent -p xyzzy')
+    expect(msg).toContain('agent --help')
   })
 })
