@@ -3,11 +3,13 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 import {
   buildCreateRequest,
   formatFinding,
   parsePullRequest,
   splitRepo,
+  starterPipeline,
 } from '../src/commands/review'
 import { currentBranch, reviewBranchName } from '../src/lib/laptop'
 import type { Finding } from '../src/lib/types'
@@ -222,5 +224,27 @@ describe('formatFinding', () => {
   it('flags a finding that was recorded but never posted inline', () => {
     const out = formatFinding({ ...base, anchor: 'not_commentable' })
     expect(out).toContain('outside the diff')
+  })
+})
+
+describe('starterPipeline', () => {
+  it('marks the file as a pipeline, not an agent', () => {
+    expect(starterPipeline('code_review', 'cli')).toContain('kind: code_review')
+  })
+
+  it('parses as YAML and only sets keys the schema allows', () => {
+    const parsed = parse(starterPipeline('code_review', 'cli')) as Record<string, unknown>
+    expect(Object.keys(parsed).sort()).toEqual(['budget', 'ellipsis', 'pull_requests'])
+    expect(parsed.ellipsis).toMatchObject({ version: 'v1', kind: 'code_review' })
+    expect(parsed.pull_requests).toEqual({ repositories: ['cli'] })
+  })
+
+  it('names the pipeline after the file, so a second file does not collide', () => {
+    const parsed = parse(starterPipeline('backend', 'cli')) as { ellipsis: { name: string } }
+    expect(parsed.ellipsis.name).toBe('backend')
+  })
+
+  it('falls back to a placeholder repository outside a git checkout', () => {
+    expect(starterPipeline('code_review', undefined)).toContain('- my-repo')
   })
 })

@@ -204,6 +204,7 @@ Author and inspect agents:
 
 ```sh
 agent config init                            # scaffold agents/my_agent.yaml
+agent review init                            # scaffold agents/code_review.yaml
 agent config create --template code-reviewer --repo api   # deploy via PR
 agent config default set <config-id>         # the config a bare start runs (--repo for one repo)
 agent template list                          # browse maintained templates
