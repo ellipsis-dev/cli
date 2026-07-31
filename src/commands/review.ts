@@ -1,4 +1,6 @@
 import { type Command } from 'commander'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { basename, dirname, extname } from 'node:path'
 import { ApiClient, ApiError } from '../lib/api'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { createWipCommit, currentBranch, pushReviewBranch, repoFromCwd } from '../lib/laptop'
@@ -30,6 +32,9 @@ import type {
 
 // How long to wait between REST polls when the stream isn't available.
 const FALLBACK_POLL_INTERVAL_SECONDS = 3
+
+// The conventional path for a pipeline file. Convention only: `kind:` decides.
+const DEFAULT_PIPELINE_PATH = 'agents/code_review.yaml'
 
 export function registerReview(program: Command): void {
   const review = alsoKnownAs(
@@ -176,7 +181,95 @@ export function registerReview(program: Command): void {
       })
     })
 
+  registerReviewInit(review)
   registerReviewDefaults(review)
+}
+
+// `agent review init`: the code review twin of `agent config init`. Scaffolds a
+// starter pipeline YAML locally; you commit it and Ellipsis syncs it from
+// GitHub. No API call and no pull request, because `agent config create` posts
+// an agent config and a pipeline is a different kind of file.
+function registerReviewInit(review: Command): void {
+  review
+    .command('init [path]')
+    .description(
+      `Scaffold a starter code review pipeline YAML locally (default: ${DEFAULT_PIPELINE_PATH})`,
+    )
+    // No `-f` short: CLI-wide, `-f` means an input file.
+    .option('--force', 'overwrite the file if it already exists')
+    .action((path: string | undefined, opts: { force?: boolean }) => {
+      const target = path ?? DEFAULT_PIPELINE_PATH
+      if (existsSync(target) && !opts.force) {
+        console.error(`error: ${target} already exists (use --force to overwrite)`)
+        process.exitCode = 1
+        return
+      }
+      const name = basename(target, extname(target))
+      mkdirSync(dirname(target), { recursive: true })
+      writeFileSync(target, starterPipeline(name, repoNameFromCwd()))
+      console.log(`✓ wrote ${target}`)
+      console.log(
+        'Commit it to your default branch. Ellipsis syncs code review pipelines from GitHub.',
+      )
+    })
+}
+
+// The repository this pipeline should watch, as the bare name the schema takes
+// (`repositories:` is scoped to your account, so it never carries the owner).
+function repoNameFromCwd(): string | undefined {
+  const repo = repoFromCwd(process.cwd())
+  return repo ? repo.split('/')[1] : undefined
+}
+
+// A minimal valid pipeline. `ellipsis.kind` is the only field the schema
+// requires; every stage left unset runs the platform's default reviewers.
+// Exported for tests.
+export function starterPipeline(name: string, repository: string | undefined): string {
+  return `# Ellipsis code review pipeline. Commit this to your default branch; Ellipsis
+# syncs it from GitHub. Valid locations: agents/, .agents/, ellipsis/, .ellipsis/
+# (any depth). The kind line is what makes this a review pipeline, not an agent.
+ellipsis:
+  version: v1
+  kind: code_review
+  name: ${name}
+  description: What this pipeline reviews.
+
+# Which pull requests this pipeline watches. Only one enabled pipeline may watch
+# a given pull request, so name your repositories here. Leaving this out watches
+# every repository in the account.
+pull_requests:
+  repositories:
+    - ${repository ?? 'my-repo'}
+  # base: [main]
+  # draft: false
+  # paths: ["src/**"]
+  # for: { bots: false }
+
+# Every stage is optional. With all of them unset, reviews run the platform
+# default pipeline: three reviewer lenses (correctness, security, regression)
+# and a gatekeeper that judges what they found.
+#
+# review:
+#   - name: migration-safety
+#     claude:
+#       system: |
+#         Review SQL migrations for locks that block writes on a large table.
+#     pull_requests:
+#       paths: ["sql/migrations/**"]
+#
+# include_default_reviewers: true   # run the built-in lenses as well
+#
+# filter:
+#   name: gatekeeper
+#   claude:
+#     system: |
+#       Drop any finding that is not worth the author's time.
+
+budget:
+  run: 2.00
+  day: 20.00
+  week: 75.00
+`
 }
 
 // `agent review default`: which code review pipeline runs when an explicit

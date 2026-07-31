@@ -67,6 +67,13 @@ agent session connect <session-id>    # connect to a session: transcript + live 
 agent session connect                 # inside an Ellipsis sandbox: connects to the running session
 agent session stop <session-id>       # stop an in-flight session
 
+agent review 123                  # review a pull request now, instead of waiting for a push
+agent review                      # review the work in your tree; findings print here
+agent review list --repo api      # list a repository's reviews, newest first
+agent review init [path]          # scaffold a starter review pipeline (default: agents/code_review.yaml)
+agent review default              # the effective review pipeline for the repo you are standing in
+agent review default set <config-id>   # set the account default pipeline (--repo [owner/name] for one repo)
+
 agent config list                 # list saved agent configs
 agent config get <config-id>      # show one config as YAML (--json for JSON)
 agent config init [path]          # scaffold a starter config (default: agents/my_agent.yaml)
