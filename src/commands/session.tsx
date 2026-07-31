@@ -96,7 +96,7 @@ export function registerSession(program: Command): void {
     'WS /v1/sessions/{id}/stream with --watch or --connect',
   )
     .argument(
-      '[prompt]',
+      '[prompt...]',
       'what the agent should do this session (positional shorthand for --prompt)',
     )
     .option(
@@ -164,7 +164,7 @@ export function registerSession(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(
       async (
-        promptArg: string | undefined,
+        promptWords: string[],
         opts: {
           config?: string
           configFile?: string
@@ -196,6 +196,9 @@ export function registerSession(program: Command): void {
           if (sources.length > 1) {
             throw new Error('provide only one of --config / --config-file / --template')
           }
+          // An unquoted prompt arrives as one word per argv entry, so join it
+          // back into a sentence: `agent fix the tests` means one instruction.
+          const promptArg = promptWords.length > 0 ? promptWords.join(' ') : undefined
           // The prompt is either positional or --prompt, not both.
           if (promptArg !== undefined && opts.prompt !== undefined) {
             throw new Error('provide the prompt positionally or with --prompt, not both')
@@ -699,7 +702,7 @@ export function registerSession(program: Command): void {
   // literal `claude --resume` of the local session.
   apiRoutes(
     session
-      .command('handoff <prompt>')
+      .command('handoff <prompt...>')
       .description('Hand this repo and a synced local session off to a cloud agent'),
     'POST /v1/sessions',
   )
@@ -711,10 +714,11 @@ export function registerSession(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(
       async (
-        prompt: string,
+        promptWords: string[],
         opts: { parent: string; cwd?: string; json?: boolean },
       ) => {
         await runAction(async () => {
+          const prompt = promptWords.join(' ')
           const cwd = opts.cwd ?? process.cwd()
           const repo = repoFromCwd(cwd)
           if (!repo) {

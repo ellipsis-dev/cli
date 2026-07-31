@@ -19,6 +19,7 @@ import { registerSentry } from './commands/sentry'
 import { registerUsage } from './commands/usage'
 import { registerAnalytics } from './commands/analytics'
 import { registerPing } from './commands/ping'
+import { commandTypoMessage, looksLikeCommandTypo } from './lib/args'
 import { VERSION } from './lib/constants'
 import { configureCliHelp } from './lib/help'
 import { canHostSessionsUi, defaultStartRequest, runSessionsUi } from './ui/launch'
@@ -66,10 +67,17 @@ registerPing(program)
 // flag through to a fresh connected session, which opens in the same UI.
 // `agent --help`, `agent --version`, `agent help`, and every subcommand
 // dispatch unchanged.
+//
+// The exception is a single bare word (`agent sesion`): see
+// looksLikeCommandTypo. Quoting does not help, since the shell strips the
+// quotes. Use `agent -p word` or `agent -- word` to force it through.
 const topLevelCommands = new Set([
   'help',
   ...program.commands.flatMap((c) => [c.name(), ...c.aliases()]),
 ])
+// Hidden plural aliases dispatch, but a "did you mean" hint should only ever
+// name the spelling we document.
+const suggestableCommands = ['help', ...program.commands.map((c) => c.name())]
 const first = process.argv[2]
 const isTopLevel =
   first === '-h' ||
@@ -84,6 +92,13 @@ if (first === undefined && canHostSessionsUi()) {
   )
 } else {
   if (!isTopLevel) {
+    // One bare word is far more likely a mistyped command than a prompt, so
+    // stop instead of starting a session nobody asked for.
+    const rest = process.argv.slice(2)
+    if (looksLikeCommandTypo(rest)) {
+      console.error(commandTypoMessage(rest[0]!, suggestableCommands))
+      process.exit(1)
+    }
     process.argv.splice(2, 0, 'session', 'start', '--connect')
   }
   await program.parseAsync(process.argv)
