@@ -177,27 +177,35 @@ function numberField(container: unknown, key: string): number {
   return typeof value === 'number' && isFinite(value) ? value : 0
 }
 
-// Whether the conversation is still open (alive/idle) — the sidebar's top
-// group. Terminal-status single-shot sessions and closed conversations sink
-// to the bottom group.
-export function isOpenConversation(session: AgentSession): boolean {
-  if (session.session_state === 'closed') return false
-  if (session.session_state === 'running' || session.session_state === 'idle') return true
-  // No session_state (older rows, laptop syncs): treat non-terminal raw
-  // statuses as open.
-  return !['completed', 'error', 'cancelled', 'stopped'].includes(session.status)
+// The sidebar's status bands, top to bottom: live conversations, then parked
+// ones, then finished ones, with the dead ends last.
+//
+// `waiting` shares the top band with the in-flight statuses on purpose. A warm
+// session crosses working → waiting → working on EVERY turn, so banding those
+// apart would reorder the list on every agent response — exactly the churn
+// created_at ordering exists to kill. Both mean "this conversation is live";
+// which side of a turn it's on is the row's dot color, not its position.
+export function statusBand(word: string): number {
+  if (word === 'waiting' || isActiveStatusWord(word)) return 0
+  if (word === 'sleeping' || word === 'idle') return 1
+  if (['error', 'failed', 'stopped', 'cancelled'].includes(word)) return 3
+  // closed / completed and anything unrecognized settles as done.
+  return 2
 }
 
-// Sidebar order: open conversations first, then the rest, each group by most
-// recent event first. Stable for equal keys.
+// Sidebar order: status band, then oldest-last within the band (newest first).
+//
+// Deliberately NOT "most recent event first": with several sessions in flight
+// every agent response is a new event, so a recency sort permutes the list on
+// every poll and the row you were reading walks out from under you. Birth
+// order is fixed for the life of a session, so a row only ever moves when its
+// status band changes — a handful of times, not once per turn.
+//
+// Stable for equal keys (equal band + equal created_at keeps input order).
 export function sortSidebarSessions(sessions: readonly AgentSession[]): AgentSession[] {
-  const key = (s: AgentSession): number => Date.parse(lastEventAt(s)) || 0
-  return [...sessions].sort((a, b) => {
-    const openA = isOpenConversation(a)
-    const openB = isOpenConversation(b)
-    if (openA !== openB) return openA ? -1 : 1
-    return key(b) - key(a)
-  })
+  const band = (s: AgentSession): number => statusBand(rowStatusWord(s))
+  const born = (s: AgentSession): number => Date.parse(s.created_at) || 0
+  return [...sessions].sort((a, b) => band(a) - band(b) || born(b) - born(a))
 }
 
 // The sidebar list: the polled snapshot plus composer-spawned sessions the
