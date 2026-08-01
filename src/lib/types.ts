@@ -346,6 +346,21 @@ export interface CreateAgentConfigRequest {
   path?: string
 }
 
+// Result of POST /v1/configs/validate: whether a config file would sync, and
+// what is wrong with it if not. An invalid file is a 200 with valid false, so
+// only a transport or auth failure throws.
+export interface ValidateConfigResult {
+  valid: boolean
+  // The `ellipsis.kind` the file declares ("agent" or "code_review"), which is
+  // what the server picked the schema by. Null when the kind is unreadable.
+  kind: string | null
+  // One entry per problem, "field.path: message". Empty when valid.
+  errors: string[]
+  // The parsed, normalized config when valid: what the platform actually read,
+  // with every default filled in.
+  config: Record<string, unknown> | null
+}
+
 // Result of creating a config: the pending row plus the pull request that adds
 // its YAML file. The agent goes live once that PR merges and syncs.
 export interface CreatedAgentConfig {

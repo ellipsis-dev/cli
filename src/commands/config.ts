@@ -1,5 +1,5 @@
 import { type Command } from 'commander'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname } from 'node:path'
 import { ApiClient } from '../lib/api'
 import { resolveAppBase } from '../lib/config'
@@ -272,6 +272,11 @@ export function registerConfig(program: Command): void {
       })
     })
 
+  registerValidate(config, {
+    noun: 'agent config',
+    description: 'Check an agent config file for errors, without deploying it',
+  })
+
   apiRoutes(
     config
       .command('init [path]')
@@ -337,6 +342,75 @@ export function registerConfig(program: Command): void {
 
 const COMMIT_HINT =
   'Commit it to your default branch. Ellipsis syncs agent configs from GitHub.'
+
+// `agent config validate` and `agent review validate` are the same command with
+// two names, because the file they check is the same file: one YAML format whose
+// `ellipsis.kind` decides which schema it must satisfy. Registering it under both
+// nouns means neither reader has to know that. The server does the parsing, so
+// the answer here matches what the GitHub sync will decide, and `expectKind`
+// only catches handing the wrong noun the wrong file.
+//
+// Exit code 1 on an invalid file, so this is usable as a pre-commit or CI check.
+export function registerValidate(
+  parent: Command,
+  { noun, description, expectKind }: { noun: string; description: string; expectKind?: string },
+): void {
+  apiRoutes(
+    parent.command('validate <path>').description(description),
+    'POST /v1/configs/validate',
+  )
+    .option('--json', 'output raw JSON')
+    .action(async (path: string, opts: { json?: boolean }) => {
+      await runAction(async () => {
+        const result = await new ApiClient().validateConfig(readConfigText(path))
+        if (opts.json) {
+          printJson(result)
+          if (!result.valid) process.exitCode = 1
+          return
+        }
+        if (!result.valid) {
+          console.error(`✗ ${path} is not valid`)
+          // A YAML syntax error arrives as several lines with its own caret
+          // pointing at the column, so indent every line, not just the first.
+          for (const error of result.errors) {
+            for (const line of error.split('\n')) console.error(`  ${line}`)
+          }
+          process.exitCode = 1
+          return
+        }
+        // A valid file of the other kind is still a mistake worth naming: `agent
+        // review validate` on an agent config would otherwise print a cheerful
+        // ✓ for a file that will never run a review.
+        if (expectKind && result.kind !== expectKind) {
+          console.error(
+            `✗ ${path} is a valid ${kindNoun(result.kind)}, not a ${noun}` +
+              (expectKind === CONFIG_KIND_CODE_REVIEW
+                ? " (a review pipeline needs 'kind: code_review' under ellipsis:)"
+                : ''),
+          )
+          process.exitCode = 1
+          return
+        }
+        console.log(`✓ ${path} is a valid ${kindNoun(result.kind)}`)
+      })
+    })
+}
+
+const CONFIG_KIND_CODE_REVIEW = 'code_review'
+
+// The raw file text, since the server validates what the author wrote. Sent
+// as-is, so a syntax error is the server's to report, not a local parse failure.
+function readConfigText(path: string): string {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    throw new Error(`could not read ${path}`)
+  }
+}
+
+function kindNoun(kind: string | null): string {
+  return kind === CONFIG_KIND_CODE_REVIEW ? 'code review pipeline' : 'agent config'
+}
 
 // --repo semantics on defaults mutations: absent -> the account rung; bare
 // --repo -> the repo you're standing in (from the origin remote, an error

@@ -61,6 +61,7 @@ import type {
   StartAgentSessionRequest,
   SupportedModel,
   UsageDashboard,
+  ValidateConfigResult,
   WhoAmI,
   GetSessionLogResponse,
 } from './types'
@@ -406,6 +407,14 @@ export class ApiClient {
 
   getAgentConfig(configId: string): Promise<SavedAgentConfig> {
     return this.request('GET', `/v1/configs/${encodeURIComponent(configId)}`)
+  }
+
+  // Checks a config file without deploying it, running the same parse the GitHub
+  // sync runs (dispatched on `ellipsis.kind`, so pipelines are judged as
+  // pipelines). Send the raw file text, not a parsed object: the server reports
+  // what is wrong with what the author wrote.
+  validateConfig(yaml: string): Promise<ValidateConfigResult> {
+    return this.request('POST', '/v1/configs/validate', { yaml })
   }
 
   // ------------------------------ defaults --------------------------------

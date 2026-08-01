@@ -5,7 +5,7 @@ import { ApiClient, ApiError } from '../lib/api'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { createWipCommit, currentBranch, pushReviewBranch, repoFromCwd } from '../lib/laptop'
 import { formatTs, printJson, printTable, relativeAge, runAction, usdFromMillicents } from '../lib/output'
-import { resolveRepoFlag } from './config'
+import { registerValidate, resolveRepoFlag } from './config'
 import { watchSessionStreaming } from './session'
 import type {
   CodeReviewDefaultView,
@@ -182,6 +182,11 @@ export function registerReview(program: Command): void {
     })
 
   registerReviewInit(review)
+  registerValidate(review, {
+    noun: 'code review pipeline',
+    description: 'Check a code review pipeline file for errors, without deploying it',
+    expectKind: 'code_review',
+  })
   registerReviewDefaults(review)
 }
 

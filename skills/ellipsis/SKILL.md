@@ -112,7 +112,9 @@ The same flow with transcripts: https://www.ellipsis.dev/docs/guides/cli-setup
 - **Agents as code**: YAML files under `agents/` in a repository. Creating or
   editing an agent is a pull request; it is live on merge. Validation is
   strict, so typos fail loudly, and every session freezes the exact config it
-  ran with.
+  ran with. `agent config validate <path>` runs that same check on a local file
+  before you commit it, and exits non-zero, so it works as a pre-commit or CI
+  step.
 - **Sessions**: every run is recorded, streamable, searchable, and
   replayable. Durable surfaces (a PR, an issue, a Slack thread, a Sentry
   alert) get one persistent conversation each: the agent remembers earlier
@@ -205,6 +207,8 @@ Author and inspect agents:
 ```sh
 agent config init                            # scaffold agents/my_agent.yaml
 agent review init                            # scaffold agents/code_review.yaml
+agent config validate agents/my_agent.yaml   # check a file before you commit it
+agent review validate agents/code_review.yaml
 agent config create --template code-reviewer --repo api   # deploy via PR
 agent config default set <config-id>         # the config a bare start runs (--repo for one repo)
 agent template list                          # browse maintained templates
