@@ -374,13 +374,31 @@ export interface ListAgentTemplatesResponse {
   first_run_yaml: string
 }
 
+// USD cents per 1M tokens, one field per pricing lane. A provider without
+// prompt caching reports 0 for the cache lanes.
+export interface ModelRateCard {
+  input_cents_per_1m_tokens: number
+  cache_write_5m_cents_per_1m_tokens: number
+  cache_write_1h_cents_per_1m_tokens: number
+  cache_read_cents_per_1m_tokens: number
+  output_cents_per_1m_tokens: number
+}
+
+// Who built the model, for per-vendor display. Not who serves it: the GPT
+// models reach us through Bedrock, so routing would attribute an OpenAI model
+// to AWS. A union rather than an enum, so an unrecognized value is a type
+// error here instead of silently rendering as a known vendor.
+export type ModelManufacturer = 'anthropic' | 'openai' | 'zai'
+
 // One model a customer may select for their agent, from the registry behind
 // the dashboard's rate table. `is_default_agent_model` marks what the server
 // resolves "Default" to.
 export interface SupportedModel {
   id: string
   display_name: string
+  manufacturer: ModelManufacturer
   is_default_agent_model: boolean
+  rate_card: ModelRateCard
 }
 
 export interface GetSupportedModelsResponse {
