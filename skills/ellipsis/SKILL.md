@@ -1,18 +1,51 @@
 ---
 name: ellipsis
-description: What the Ellipsis platform is and how to drive it with the agent CLI. Use when the user mentions Ellipsis, wants to run or deploy coding agents in the cloud, automate work on GitHub, Slack, Linear, or Sentry events, get pull requests reviewed, hand a local task off to a background agent, or asks about the agent CLI.
+description: What the Ellipsis platform is and how to drive it with the agent CLI. Use when the user mentions Ellipsis, wants to run or deploy coding agents in the cloud, govern agents with budgets and scoped permissions, automate work on GitHub, Slack, Linear, or Sentry events, get pull requests reviewed, hand a local task off to a background agent, or asks about the agent CLI.
 ---
 
 # Ellipsis
 
-Ellipsis (https://www.ellipsis.dev) runs coding agents in isolated cloud
-sandboxes, with a team's repositories cloned and their GitHub, Slack, Linear,
-and Sentry integrations connected. An event fires, an agent wakes up, reads the
-code, does the work, and delivers a real artifact: a pull request, an answer in
-the thread that asked, a summary of the week's merged work. Then it shuts down,
-and the full session stays readable.
+Ellipsis (https://www.ellipsis.dev) is a cloud platform for coding agents. It
+runs them like managed infrastructure: defined in your repository, deployed by
+git push, governed by scoped credentials and hard budgets, with every session
+recorded and searchable.
 
-Two products:
+An event fires, an agent wakes in an isolated sandbox with your repositories
+cloned, reads the code, does the work, and delivers a real artifact: a pull
+request, an answer in the thread that asked, a review on the diff. Then the
+sandbox is destroyed and the full session stays readable.
+
+## The problem it solves
+
+Teams run a lot of agents now, and nothing manages the fleet.
+
+- Agents run on a developer's own credentials, so an agent's blast radius is a
+  person's blast radius.
+- Spend is unbounded and invisible until the invoice arrives.
+- Setup lives in one engineer's dotfiles, so only that engineer benefits.
+- No transcript outlives the session, so a bad pull request has no audit trail.
+
+Every other kind of compute a team runs is defined in code, scoped, budgeted,
+and logged. Agents are not, yet.
+
+Individual developers feel a different half of it. Agents clobber each other's
+work even with git worktrees. Agents die when the laptop closes. Nobody can read
+the logs of a session they do not own.
+
+## Why cloud beats laptop
+
+- **Parallelism.** Each session gets its own sandbox, so ten agents work the
+  same repository at once without stepping on each other. Each can boot the
+  full stack in its own box.
+- **Shared.** The config is a repository asset. New engineers discover the
+  team's automation the way they discover the code.
+- **Governed.** Budgets, scoped credentials, and the audit trail are the
+  platform's job, not each developer's.
+- **Always on.** Agents trigger on GitHub events, Slack and Linear mentions,
+  Sentry alerts, or a schedule. Work starts when the event fires, not when
+  someone opens a laptop.
+
+## The two products
 
 - **Cloud Agents**: agents you define. Each is one YAML file in a repository, a
   trigger plus a model plus a prompt. The version on the default branch is the
@@ -23,6 +56,8 @@ Two products:
 
 Surfaces: the dashboard at app.ellipsis.dev, the REST API at
 api.ellipsis.dev/v1, and the `agent` CLI. All three drive the same `/v1` API.
+Pricing is usage based, the tokens and compute a session spent plus a platform
+fee. There are no seats.
 
 ## When to reach for Ellipsis
 
@@ -33,12 +68,18 @@ api.ellipsis.dev/v1, and the `agent` CLI. All three drive the same `/v1` API.
 - **Questions in a thread**: mention `@ellipsis` on GitHub, Slack, or Linear.
   The built-in responder needs no configuration and answers in the thread.
 - **Catching bugs before merge**: turn code review on and every pull request is
-  reviewed, or commit a pipeline file for custom reviewers.
+  reviewed, or commit a pipeline file to scope and customize it.
 - **A task that should not block the laptop**: `agent session handoff` pushes a
   snapshot of the working tree and continues the work in a cloud session.
 - **Delegation from scripts or CI**: `agent session start` or
   `POST /v1/sessions`. With `--watch` it streams into the log and exits nonzero
   unless the session completes, so it works as a gate.
+
+Things teams actually build: screenshot every pull request that touches the
+frontend so reviewers see the change; investigate Sentry alerts when they fire
+and post the root cause on the issue; require a migration file on any pull
+request that touches the database; keep pull request descriptions current on
+every push.
 
 Not a fit: anything needing more than an hour of wall clock in one session (the
 sandbox cap), or a workflow that must run on the user's own machine.
@@ -97,6 +138,12 @@ What each push does:
 | A rename with content unchanged | Keeps the same agent, history, and schedules. |
 | A delete | Soft-deletes it. Past sessions stay intact; re-adding the file at the same path revives it. |
 | An invalid edit | Records the error and keeps the last good version running. |
+
+Why this matters: an agent change is a pull request, so a teammate reads the new
+prompt and the new permissions before they go live. `git log` on the file is the
+agent's changelog. A bad change is `git revert`. There is no console state to
+reconcile against the repository, and `ls agents/` reads like a roster of every
+job the team has delegated.
 
 An invalid config never takes an agent down, and Ellipsis maintains one comment
 on a pull request listing every config file that fails to parse. On a pull
@@ -179,9 +226,13 @@ budget:
 - Trigger `repositories` is the watch set and is independent of
   `sandbox.repositories`, the clone set. The triggering repository is always
   cloned.
+- Sentry re-fires inside a 6 hour per-issue window append to the existing
+  conversation, so an alert storm produces one investigation, not dozens of
+  duplicates. Webhook deliveries are deduplicated, so a replay never
+  double-runs an agent.
 - React and cron sessions are single-shot. Mention and on-demand sessions are
   durable conversations: follow-ups keep the whole exchange and the working
-  tree.
+  tree, and an idle conversation costs near nothing between turns.
 
 ## Code review
 
@@ -194,35 +245,58 @@ How it behaves:
 - **New commits only.** The first review of a pull request covers everything on
   it; every later review covers only the commits since the last review that
   posted, and never re-comments a line it already covered.
-- **A gatekeeper judges findings before they post.** It rejects claims that do
-  not hold against the code, are handled elsewhere, are style preferences, or
-  are speculative. Rejected findings are still visible on the reviews dashboard
-  with the reason.
-- **Comment-only.** Ellipsis posts one pull request review as the Ellipsis bot.
-  It never approves, requests changes, pushes commits, or merges, so it cannot
-  satisfy a required-review rule. A review that finds nothing posts a one-line
-  summary instead of invented nitpicks.
-- The built-in pipeline is one Opus reviewer named `bugs` plus an Opus
-  `gatekeeper`. The stages are `pre_review`, `review`, deduplication, `filter`,
-  `post_review`.
+- **Only confirmed defects.** The reviewer files a finding only when it can
+  point at the wrong line and name the input or state that breaks it, so a
+  review is a short list of real problems rather than a page of "consider
+  whether". It reads the surrounding code, not the diff alone, because most real
+  findings depend on a caller or a guard the diff does not show.
+- **Comment-only.** Ellipsis posts one pull request review as the Ellipsis bot,
+  anchored to the commit it reviewed. It never approves, requests changes,
+  pushes commits, or merges, so it cannot satisfy a required-review rule. A
+  review that finds nothing posts a one-line summary instead of invented
+  nitpicks.
+- **Bots are reviewed too**, minus dependabot and renovate. A dependency bump is
+  exactly the change nobody reads closely.
+- The built-in pipeline is two agents: a Haiku `pr-description` agent that keeps
+  the pull request description's summary current, and one Opus reviewer named
+  `bugs`. The stages are `pre_review`, `description`, `review`, deduplication,
+  `filter`, `post_review`; only `description` and `review` are populated by
+  default.
+- Reviewers never post. Each writes findings to a file, and the platform posts.
+  A reviewer prompt is the reviewing brain only: Ellipsis supplies the commit
+  range, so never restate the scope and never tell a reviewer to post to GitHub.
 
-An optional pipeline file customizes it. `ellipsis.kind: code_review` is what
-marks the file, not its path; `agents/code_review.yaml` is the convention, and
-`agent review init` scaffolds one. The file is an overlay, so it declares only
-what it changes:
+### The pipeline file
+
+One optional file customizes the review. **There is one filename,
+`code_review.yaml`, and where you commit it decides what it governs:**
+
+- At the root of a repository: governs that repository. `.ellipsis/code_review.yaml`
+  also works for its own repository, and the root path wins if both exist.
+- At the root of the repository literally named `.ellipsis`: governs every
+  repository in the organization. That repository is never itself reviewed.
+- Anywhere else: a configuration error, not a file that silently reviews
+  nothing.
+
+First hit wins, and a repository's own file **replaces** the organization-wide
+one rather than merging with it, so copy across whatever you meant to keep. That
+also means an organization file's filters are not a ceiling: a repository the
+organization file excluded can review itself by committing its own file.
+
+The file is an overlay on the built-in pipeline, so it declares only what it
+changes:
 
 ```yaml
+# code_review.yaml at the root of the .ellipsis repository
 ellipsis:
   version: v1
   kind: code_review
   name: Backend review
 
 pull_requests:
-  repositories: [api]
+  repositories: [api]        # valid only in the .ellipsis repository's copy
   base: [main, "release/*"]
   draft: false
-
-include_default_reviewers: true
 
 review:
   - name: migration-safety
@@ -235,6 +309,13 @@ review:
     pull_requests:
       paths: ["**/migrations/**"]
 
+filter:
+  name: strict-gate
+  claude:
+    system: |
+      Approve only findings a staff engineer would raise in review.
+      Reject style opinions and anything a linter catches.
+
 budget:
   run: 15.00
   day: 100.00
@@ -242,24 +323,39 @@ budget:
 
 Merge rules that catch people out:
 
-- **Declaring `pull_requests:` makes it authoritative.** A pull request the file
-  does not match gets no review at all, rather than falling back to the built-in
-  pipeline. `enabled: false` suppresses it the same way.
-- **Declaring `review:` replaces the built-in reviewer.** Use
-  `include_default_reviewers: true` to keep it in front of yours, so you never
-  copy its prompt into your file.
-- **Unset and empty differ.** No `filter:` key inherits the built-in
-  gatekeeper; `filter: []` runs no gatekeeper and every finding posts unjudged.
-  `filter` is exactly one agent, never a list with entries.
-- `sandbox:` and `budget:` merge field by field. At most 8 reviewers, each with
-  a unique name. Reviewers run in parallel, and a reviewer whose own
-  `pull_requests` filters exclude a pull request costs nothing.
-- A reviewer prompt is the reviewing brain only. Ellipsis supplies the commit
-  range and posts the findings, so never restate the scope and never tell a
-  reviewer to post to GitHub.
-- `budget.run` (default $10) caps one whole review; `budget.day` and
-  `budget.week` are trailing caps checked before a review starts, which is the
-  guard against a push storm.
+- **`ellipsis.kind: code_review` marks the file**, and the path decides its
+  scope. A pipeline file is not an agent config and is not synced from `agents/`.
+- **Declaring `pull_requests:` makes it authoritative.** A pull request the
+  governing file does not match gets no review at all, rather than falling back
+  to the built-in pipeline. It also narrows the audience to humans unless the
+  block writes `for` back out, because the block replaces the default wholesale.
+- **Declaring a stage list replaces that stage wholesale.** There is no
+  "append to the built-in reviewers" knob. A file wanting a specialist beside a
+  general pass declares both reviewers itself.
+- **Unset and empty differ where the built-in ships a stage.** No `review:` key
+  inherits the built-in reviewer. No `description:` key inherits the built-in
+  description agent, and `description: []` is the only way to stop it. For
+  `filter:` both unset and `[]` mean no gatekeeper, since nothing gates findings
+  unless you declare one.
+- **`enabled: false` does not suppress review.** It marks the file inactive, so
+  Ellipsis reads it as no policy and continues to the organization file, then the
+  built-in pipeline. To stop reviews in one repository, commit a file whose
+  `pull_requests:` matches nothing, such as `for: {users: false, bots: false}`.
+- `description` and `filter` are each exactly one agent, never a list with
+  entries. At most 8 reviewers, each with a unique name. Reviewers run in
+  parallel, and a reviewer whose own `pull_requests` filters exclude a pull
+  request costs nothing.
+- `sandbox:` and `budget:` merge field by field.
+- `budget.run` (default $10) caps one whole review across every stage, divided
+  among its agents. `budget.day` and `budget.week` are trailing caps checked
+  before a review starts, which is the guard against a push storm.
+
+An optional `filter` gatekeeper judges every finding before it posts and rejects
+claims that do not hold against the code, are handled elsewhere, are style
+preferences, or are speculative. Rejected findings stay visible on the reviews
+dashboard with the reason. It is off by default because one careful reviewer
+leaves a second pass little to arbitrate, and that pass doubles every review's
+cost and latency.
 
 ## The agent CLI
 
@@ -272,12 +368,13 @@ brew install ellipsis-dev/cli/agent
 agent install     # opens the dashboard page that installs the GitHub app
 agent login       # device-code flow tied to your GitHub identity
 agent ping        # confirms the API is reachable and the credential is valid
+agent me          # the identity behind the current credential
 ```
 
-In CI or any headless environment, skip the login: create an API key under
-Platform then API keys in the dashboard, and export it as `ELLIPSIS_API_TOKEN`.
-Credentials resolve highest wins: an explicit argument, then the environment,
-then the stored token.
+In CI or any headless environment, skip the login: create an API key in the
+dashboard and export it as `ELLIPSIS_API_TOKEN`. Credentials resolve highest
+wins: the environment variable, then the token stored in `~/.ellipsis/config.json`.
+`ELLIPSIS_API_BASE_URL` points the CLI at a non-default host.
 
 Start and follow work:
 
@@ -300,8 +397,9 @@ the sole instruction. The CLI also sends the repository you are standing in, and
 the server clones it. Per-session overrides need no config edit: `--model`,
 `--system`, `--repo`, `--cpu`, `--memory`, `--timeout`, `--budget`, and
 `--config-override` for a full partial config. `--rebuild` skips the image
-cache. `--watch --quiet` prints only status transitions and the result, and
-either watch form exits `0` only when the session completes.
+cache. `--detach` returns immediately. `--watch --quiet` prints only status
+transitions and the result, and either watch form exits `0` only when the session
+completes.
 
 Search and audit what agents have done:
 
@@ -316,22 +414,24 @@ agent budget                                 # this period's spend against the a
 agent usage                                  # this period's tokens and cost by model
 ```
 
-Review code on demand, without waiting for a push:
+Search covers transcripts, recaps, and pull request references, with embedding
+similarity alongside full text, so one agent's investigation compounds into team
+knowledge. Facets cover repository, author, agent, status, source, and date.
+
+Review pull requests on demand, without waiting for a push:
 
 ```sh
 agent review 519                  # review a pull request by number
-agent review                      # review the work in your tree; findings print here
-agent review --branch <name>      # review an already-pushed branch, skipping the snapshot
+agent review 519 --full           # re-review the whole PR, ignoring earlier reviews
 agent review --no-post            # print findings instead of posting to GitHub
 agent review list --repo api      # a repository's reviews, newest first
 agent review get <review-id>      # one review's findings, scope, and whether it posted
-agent review init                 # scaffold agents/code_review.yaml
 ```
 
-A bare `agent review` snapshots the working tree and pushes it to a sidecar
-branch (`ellipsis/review/<your-branch>`, never the branch you are on), then
-reviews a reusable draft pull request that holds it. Branch reviews from the CLI
-post nothing to GitHub and always cover the branch's full range.
+Which pipeline runs is not a parameter. An explicit review resolves the same
+pipeline by location that the webhook does, so the two entry points can never
+disagree. A review with nothing new to cover returns a `skipped` review rather
+than an error.
 
 Author and deploy agents:
 
@@ -366,15 +466,18 @@ off:
 agent hook install                           # Stop and SessionEnd hooks
 agent hook enroll                            # opt this repository in; sync is per-repo
 agent hook status                            # what is installed and enrolled
-agent session handoff "finish the retry backoff and add tests"
+agent session handoff "finish the retry backoff and add tests" --parent <session-id>
 ```
 
 Sync is opt-in per repository: installing the hooks alone uploads nothing.
-`handoff` pushes the working-tree snapshot to a hidden ref, never a branch, and
-leaves your tree undisturbed.
+Transcripts are redacted locally before upload, so local work becomes auditable
+without shipping credentials. `handoff` requires `--parent`, pushes the
+working-tree snapshot to a hidden ref rather than a branch, and leaves your tree
+undisturbed.
 
-Every command is singular. The plural spelling of each works as a hidden alias.
-`agent --help` and `agent <command> --help` are authoritative for flags.
+Most singular commands accept the plural spelling as a hidden alias, and
+`review` also answers to `cr`. `agent --help` and `agent <command> --help` are
+authoritative for flags.
 
 ## Writing a config
 
@@ -399,16 +502,22 @@ than being silently dropped. Points that decide whether a config works:
 - `claude.system` takes inline text, a `{file: path}` reference to a repository
   file, or an ordered list of both, joined at session start. It is appended to
   Claude Code's default prompt. 64 KiB per file.
-- `claude.model` defaults to `claude-opus-5`. `agent model list` is the
-  authoritative list of ids. Digest and summary jobs run well on
-  `claude-haiku-4-5-20251001`; judgment jobs earn the frontier model.
+- `claude.model` defaults to `claude-opus-5`. Claude, GPT, and GLM models are
+  available, and `agent model list` is the authoritative list of ids. Digest and
+  summary jobs run well on `claude-haiku-4-5-20251001`; judgment jobs earn the
+  frontier model.
 - `budget.session` defaults to $250, which is also the platform maximum, so it
   can only be lowered. `day`, `week`, and `month` are trailing 1, 7, and 28 day
   caps on this agent, with ceilings of $1,000, $10,000, and $40,000. A session
-  that reaches a cap stops mid-task and records `budget_hit`.
+  that reaches a cap stops mid-task and records `budget_hit`, which is a distinct
+  exit status from an error. Accounts also have their own trailing caps, plus
+  opt-in per-developer caps.
+- `structured_output` makes an agent a function with a contract: it exits through
+  your JSON Schema, so downstream automation gets typed data instead of prose to
+  parse. Schema failures exit loudly as `tool_call_failed`. It does not go
+  together with a mention trigger.
 - `ellipsis.interactive: false` opts sessions out of messages entirely, for
   fire-and-forget automations. `ellipsis.ide: false` locks the sandbox shut.
-- `structured_output` and a mention trigger do not go together.
 
 Validation surfaces on push to the default branch, on config pull requests, in
 the dashboard editor, and at session start for checks that need the session's
@@ -421,7 +530,7 @@ own commit. Session-start failures record an exit status that names the cause:
 Every session runs in its own Linux sandbox, created for that session with its
 repositories already cloned and destroyed when the session ends. The base image
 carries Python 3.13, Node.js 22, `git`, the `gh` CLI, `curl`, and a C/C++
-toolchain.
+toolchain. Your agents can build and test your product, not just read it.
 
 Three `sandbox` fields define the environment, each with a different lifetime:
 
@@ -437,9 +546,10 @@ Three `sandbox` fields define the environment, each with a different lifetime:
 
 A non-zero exit from any of them fails the session with
 `lifecycle_hook_failed`. The image is cached per repository set, commit, and
-image definition, so repeat sessions start warm. `agent session start
---config-file <path> --rebuild --watch` provisions through a fresh full build
-and streams every phase, which is how you prove an environment before merging.
+image definition, so repeat sessions start in seconds instead of reinstalling
+dependencies. `agent session start --config-file <path> --rebuild --watch`
+provisions through a fresh full build and streams every phase, which is how you
+prove an environment before merging.
 
 `sandbox.compute` sizes the machine: `cpu` 0.125 to 16, `memory` 512MB to 64GB,
 `timeout` 60s to 1h. Defaults are 1 vCPU, 4GB, and 1h. One hour is also the
@@ -457,16 +567,42 @@ Credentials are scoped and short-lived:
   nothing in the sandbox can exceed it, not a misbehaving tool and not a prompt
   injection in a pull request description. `sandbox.github.repositories` narrows
   which repositories the token may touch, independently of what is cloned.
+  Because permissions are YAML in git, every agent's blast radius is explicit
+  and reviewed.
 - Other credentials enter as `sandbox.variables`. Store the value once with
   `agent variable set`, then name it in the config. The name list is the scope,
-  so only agents that name a variable receive it. Stored values are write-only
-  and never readable back through the dashboard, API, or CLI. An inline `value:`
-  is for non-secret settings only.
+  so only agents that name a variable receive it, and a compromised agent never
+  sees the inventory. Stored values are write-only and never readable back
+  through the dashboard, API, or CLI, so rotation is one update in one place. An
+  inline `value:` is for non-secret settings only.
 - Model calls route through Ellipsis with a per-session key. A real provider key
-  never enters a sandbox.
+  never enters a sandbox. You can bring your own Anthropic key so token spend
+  lands on your own account, or route an agent through your own LLM gateway with
+  `llm.proxy`.
 
 Session logs are not redacted: they record whatever setup scripts and the agent
 print, so keep `image.setup` and hooks from echoing a value.
+
+## Sessions you can audit
+
+Every session outlives its sandbox, which is what makes agent work reviewable
+rather than a black box.
+
+- The live feed interleaves the agent's own output with lifecycle events, and
+  streams with lossless resume, so you can watch an agent work and catch a wrong
+  turn before it compounds.
+- Every turn and tool call is recorded, with the config version it ran and the
+  exact instructions it launched with, so "what did the agent do" and "what was
+  the agent told" are both reads rather than reconstructions.
+- The complete log downloads as archived segments, so audit and compliance get
+  first-party records. Retention is configurable.
+- Every session is attributed to a person, an API key, or the parent session
+  that spawned it, which is what per-developer spend limits and author search
+  hang off.
+- Screenshots persist past the sandbox as organization-gated links, so agents
+  attach evidence to pull requests that outlives the session.
+- Analytics split every metric by human and bot, so agent contribution is
+  measured next to your team's, over the same merge funnel and time-to-merge.
 
 ## Skills
 
@@ -485,12 +621,13 @@ skills:
 
 `repository` takes any repository of your installation or a public repository
 from another owner; external private repositories are rejected. That is how one
-shared skills repository serves every agent in an organization. The skill
-installs under the last segment of `path`, and a config-declared skill overrides
-a same-named repository skill. At most 10 entries per config, each at most 50
-files, 512 KiB total, 64 KiB per file, UTF-8 text. A skill that cannot be
-resolved fails the session before the agent starts, so a session never runs with
-a silently missing skill.
+shared skills repository serves every agent in an organization, so rolling out
+new expertise is one commit instead of the same guidance pasted into a dozen
+prompts. The skill installs under the last segment of `path`, and a
+config-declared skill overrides a same-named repository skill. At most 10 entries
+per config, each at most 50 files, 512 KiB total, 64 KiB per file, UTF-8 text. A
+skill that cannot be resolved fails the session before the agent starts, so a
+session never runs with a silently missing skill.
 
 This skill is installable in any coding agent:
 
@@ -505,7 +642,7 @@ Ellipsis session. The `agent` CLI is pre-installed and pre-authenticated with a
 session-scoped token, so you can start child sessions, search the team's session
 history, read analytics, and upload screenshots as org-gated links
 (`agent asset upload shot.png`) with no login. `agent session connect` with no
-id connects to the current session.
+id connects to the current session, via `ELLIPSIS_SESSION_ID`.
 
 That token is deliberately narrower than a human's. It can list variable names
 but not set or delete them, cannot delete an asset, and cannot repoint an
@@ -519,12 +656,17 @@ index is https://www.ellipsis.dev/llms.txt, and https://www.ellipsis.dev/llms-fu
 is every page in one file.
 
 - Agents as code: https://www.ellipsis.dev/docs/agents-as-code
-- Cloud Agents quick start: https://www.ellipsis.dev/docs/cloud-agents/quick-start
+- Cloud Agents: https://www.ellipsis.dev/docs/cloud-agents
+- Quick start: https://www.ellipsis.dev/docs/cloud-agents/quick-start
 - Agent config reference: https://www.ellipsis.dev/docs/cloud-agents/configuration-yaml
 - Triggers: https://www.ellipsis.dev/docs/cloud-agents/triggers
 - Sandboxes: https://www.ellipsis.dev/docs/cloud-agents/sandboxes
+- Permissions: https://www.ellipsis.dev/docs/cloud-agents/permissions
+- Conversations: https://www.ellipsis.dev/docs/cloud-agents/conversations
+- Skills: https://www.ellipsis.dev/docs/cloud-agents/skills
 - Code review: https://www.ellipsis.dev/docs/code-review
 - Review pipeline reference: https://www.ellipsis.dev/docs/code-review/configuration-yaml
+- Which PRs get reviewed: https://www.ellipsis.dev/docs/code-review/which-prs-get-reviewed
 - CLI reference: https://www.ellipsis.dev/docs/cli
 - REST API reference: https://www.ellipsis.dev/docs/api
 - Models: https://www.ellipsis.dev/docs/models
