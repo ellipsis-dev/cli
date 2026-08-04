@@ -74,6 +74,7 @@ One meaning per short flag, across the whole CLI. The reserved ones:
 | `-w` | `--watch` | block and stream |
 | `-m` | `--metadata` | repeatable key=value |
 | `-n` | `--tail <n>` | tail N entries |
+| `-i` | `--interactive` | open a conversation instead of printing |
 
 Other rules:
 
@@ -112,6 +113,12 @@ One line, imperative verb first, no trailing period.
 Integrations, Spend, Account. Groups live in `TOP_LEVEL_GROUPS` in
 `src/lib/help.ts`. **A new top-level command must be added to a group** or it
 falls through to "Other", which is the signal that someone forgot.
+
+Every help page ends with the `agent help --interactive` hint, registered once
+as an `afterAll` help text on the program in `src/lib/help.ts` (commander emits
+that event up the ancestor chain, so subcommands inherit it). Do not re-add it
+per command. Text added this way is not wrapped by commander, so it goes
+through `wrapToHelpWidth` to match every other column.
 
 ## Checklist for a new command
 

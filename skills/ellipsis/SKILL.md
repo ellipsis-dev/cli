@@ -382,7 +382,7 @@ Start and follow work:
 agent session start "triage the failing CI on api"   # runs the resolved default agent
 agent session start --config <config-id> --watch     # stream until terminal
 agent session start --config-file agents/my_agent.yaml --watch
-agent session start --template welcome-to-ellipsis --watch
+agent session start --template ellipsis-helper --watch
 agent session get <session-id> --watch               # follow a running session
 agent session connect <session-id>                   # live view plus send messages
 agent session stop <session-id>
