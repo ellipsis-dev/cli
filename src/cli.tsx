@@ -19,6 +19,7 @@ import { registerSentry } from './commands/sentry'
 import { registerUsage } from './commands/usage'
 import { registerAnalytics } from './commands/analytics'
 import { registerPing } from './commands/ping'
+import { registerHelp } from './commands/help'
 import { commandTypoMessage, looksLikeCommandTypo } from './lib/args'
 import { VERSION } from './lib/constants'
 import { configureCliHelp } from './lib/help'
@@ -55,6 +56,7 @@ registerSentry(program)
 registerUsage(program)
 registerAnalytics(program)
 registerPing(program)
+registerHelp(program)
 
 // A bare `agent` opens the multi-session UI: the sidebar of your running
 // sessions beside a new-session composer — nothing starts until you type a

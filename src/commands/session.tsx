@@ -109,7 +109,7 @@ export function registerSession(program: Command): void {
     )
     .option(
       '-t, --template <slug>',
-      'start from a maintained session template (e.g. welcome-to-ellipsis)',
+      'start from a maintained session template (e.g. ellipsis-helper)',
     )
     .option(
       '--config-override <yaml>',

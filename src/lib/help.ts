@@ -24,7 +24,20 @@ const TOP_LEVEL_GROUPS: ReadonlyArray<{ title: string; commands: readonly string
   { title: 'Integrations', commands: ['integration', 'github', 'slack', 'linear', 'sentry'] },
   { title: 'Spend', commands: ['budget', 'usage', 'analytics'] },
   { title: 'Account', commands: ['install', 'login', 'logout', 'me', 'host', 'ping'] },
+  { title: 'Help', commands: ['help'] },
 ]
+
+// Closes out every help page, so a caller who can't find what they need has a
+// next move. Kept here rather than in the help command so it can't drift.
+const INTERACTIVE_HELP_HINT =
+  'Use `agent help --interactive` to have an agent answer questions about the Ellipsis platform, or if you are stuck while building an agent.'
+
+// Commander wraps descriptions to the terminal width but passes addHelpText
+// through verbatim, so wrap this ourselves or it renders as one long line.
+function wrapToHelpWidth(text: string): string {
+  const width = new Help().helpWidth || 80
+  return Help.prototype.wrap.call(new Help(), text, width, 0)
+}
 
 export function configureCliHelp(program: Command): void {
   program.configureHelp({
@@ -39,6 +52,15 @@ export function configureCliHelp(program: Command): void {
       if (cmd.parent) return Help.prototype.formatHelp.call(helper, cmd, helper)
       return formatTopLevelHelp(cmd, helper)
     },
+  })
+  // Registered on the program only: commander emits `afterAllHelp` up the
+  // ancestor chain, so this lands on every subcommand's help page too. It goes
+  // last, after each command's own `API:` line. Suppressed on `agent help
+  // --interactive`'s own page, where pointing at the flag you just read about
+  // is noise.
+  program.addHelpText('afterAll', ({ command }) => {
+    if (command.name() === 'help') return ''
+    return `\n${wrapToHelpWidth(INTERACTIVE_HELP_HINT)}`
   })
 }
 
