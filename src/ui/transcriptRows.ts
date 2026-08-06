@@ -24,11 +24,12 @@ import { theme } from '../lib/theme'
 // shifting, and a wrapped line's continuation aligns under its first.
 export const GUTTER_COLS = 2
 
-// Horizontal pad inside a chat message's panel — the text sits one cell off
-// the tint's edge, like the composer's interior. The VERTICAL pad is a blank
-// tinted row above and below each panel block, added in one place
-// (padPanelBlocks) after the rows are assembled, so a message and the tool
-// run nested under it share one pad rather than getting one each.
+// Horizontal pad on EVERY transcript row — the text sits one cell off the
+// pane's edge, like the composer's interior. Universal, not panel-only: a
+// panelled row is one the pad happens to be tinted on, so your messages and
+// the agent's share one left edge instead of stepping in and out by a column.
+// The VERTICAL pad is a blank tinted row above and below each panel block,
+// added in one place (padPanelBlocks) after the rows are assembled.
 export const MESSAGE_PAD = 1
 
 // Long bodies collapse to this many lines until ctrl+r (or → on the line)
@@ -92,19 +93,19 @@ export type TranscriptRow = {
   // Blank columns before the gutter: an opened fold's children sit one level
   // in, so they read as the fold's children.
   indent?: number
+  // Extra blank columns BETWEEN the gutter and the text. Set on every row of a
+  // ⎿ item, continuation rows included, so the whole body stays aligned — see
+  // BRANCH_TEXT_PAD.
+  textPad?: number
   spans: RowSpan[]
   // Right-aligned metadata (a ticking duration, a pipeline state). The row's
   // spans are fitted to the columns left over.
   right?: RowSpan
-  // Sits on a message panel: the elevated tint, with a horizontal pad.
+  // Sits on a message panel: the elevated tint. Only a message YOU sent does.
   panel?: boolean
-  // On the active surface regardless of the transcript selection — the
-  // startup block's selected phase, which has its own cursor.
-  activeRow?: boolean
-  // A blank separator row. Off-panel it is never tinted or highlighted, so
-  // the gap between blocks stays canvas even when the block below it is
-  // selected. On a panel (panel + spacer) it is the block's vertical pad: it
-  // carries the tint, and the selection treatment when its block is selected.
+  // A blank separator row. Off-panel it is bare canvas, so the gap between
+  // blocks reads as a gap. On a panel (panel + spacer) it is the block's
+  // vertical pad, and carries the tint.
   spacer?: boolean
   // The "+N lines" marker under a clamped body. The key that opens it depends
   // on whether the line is highlighted (→) or not (ctrl+r), which the renderer
@@ -134,6 +135,12 @@ export const LIVE_GLYPH = '⏺'
 // It reads as a branch off the prose above, which is what the nesting means.
 export const BRANCH_GLYPH = '⎿'
 
+// Extra columns between a ⎿ and its text. The glyph's ink runs right up to its
+// cell's edge, so the one space every other mark gets is not enough — the body
+// reads as touching the branch. Applied to every row of the item, so a wrapped
+// result and its "+N lines" marker stay aligned under the first line.
+export const BRANCH_TEXT_PAD = 1
+
 // Columns a nested line shifts right, so its branch glyph sits under the
 // parent's text rather than under the parent's own mark.
 export const NEST_INDENT = 2
@@ -141,10 +148,10 @@ export const NEST_INDENT = 2
 // Printable columns a row's text may occupy in a pane `cols` wide.
 export function contentWidth(
   cols: number,
-  opts: { panel?: boolean; indent?: number } = {},
+  opts: { indent?: number; textPad?: number } = {},
 ): number {
-  const pad = opts.panel ? MESSAGE_PAD * 2 : 0
-  return Math.max(8, cols - pad - GUTTER_COLS - (opts.indent ?? 0))
+  const taken = MESSAGE_PAD * 2 + GUTTER_COLS + (opts.indent ?? 0) + (opts.textPad ?? 0)
+  return Math.max(8, cols - taken)
 }
 
 export function spacerRow(entryKey: string, id: string): TranscriptRow {
@@ -159,10 +166,10 @@ export function navKeyOf(row: TranscriptRow): string {
 }
 
 // One blank tinted row above and below every maximal run of consecutive panel
-// rows — the vertical pad around each lifted block, matching the composer's
+// rows — the vertical pad around a message YOU sent, matching the composer's
 // interior pad. Applied to the ASSEMBLED list rather than inside itemRows so a
-// message and the tool run attached under it read as one padded block instead
-// of each bringing its own pad. Pure, for tests.
+// run of consecutive sends reads as one padded block instead of each bringing
+// its own pad. Pure, for tests.
 export function padPanelBlocks(rows: readonly TranscriptRow[]): TranscriptRow[] {
   const out: TranscriptRow[] = []
   // A pad row inherits the edge row's BLOCK, not just its entry: a pad added
@@ -195,27 +202,27 @@ export function itemRows(
   cols: number,
   opts: { indent?: number; clamp: boolean; nested?: boolean; attach?: boolean },
 ): TranscriptRow[] {
-  // Nested tool activity sits ON the parent message's panel: the call and its
-  // result are work done while writing that message, so they live inside the
-  // same lifted, padded block rather than on the canvas beside it. A ✦ notice
-  // ("Session asleep", "Stopped the agent") is an event in the conversation, so
-  // it takes a panel of its own rather than sitting bare on the canvas.
-  const panel = isMessage(item) || opts.nested === true || item.kind === 'notice'
+  // Only what YOU said sits on the lifted, padded panel the composer uses.
+  // Everything the agent says or does — prose, tool chatter, notices — stays
+  // bare on the canvas, so the transcript reads as dense output with your turns
+  // marked out of it.
+  const panel = item.kind === 'user'
   const indent = opts.indent ?? 0
-  const width = contentWidth(cols, { panel, indent })
+  // Nested lines are marked by their INDENT, so each keeps the glyph that says
+  // what it is: ● the call, ⎿ the result that came back. Only a collapsed fold
+  // (key grp:*, "Ran 2 tool calls") takes the branch glyph — as a notice it
+  // would otherwise wear ✦, the mark for the infrastructure speaking, which is
+  // not what a fold is. Keyed on the fold itself, not on `nested`: a
+  // turn-opening run is flat, and it is still a fold.
+  const gutter = item.key.startsWith('grp:') ? BRANCH_GLYPH : gutterFor(item)
+  const textPad = gutter === BRANCH_GLYPH ? BRANCH_TEXT_PAD : 0
+  const width = contentWidth(cols, { indent, textPad })
   const shown = withRenderedMarkdown(item, width)
   const clamped =
     opts.clamp && isCollapsible(shown)
       ? clampLines(shown.text, COLLAPSE_LINES)
       : { body: shown.text, more: 0 }
   const { gutterColor, textColor, dim, bold } = styleFor(shown)
-  // Nested lines are marked by their INDENT, so each keeps the glyph that says
-  // what it is: ● the call, ⎿ the result that came back. Only a collapsed fold
-  // ("Ran 2 tool calls") takes the branch glyph — as a notice it would
-  // otherwise wear ✦, the mark for the infrastructure speaking, which is not
-  // what a fold is.
-  const gutter =
-    opts.nested && shown.kind === 'notice' ? BRANCH_GLYPH : gutterFor(shown)
 
   const rows: TranscriptRow[] = []
   // `attach` overrides the item's own spacing: a nested line sits directly
@@ -231,6 +238,7 @@ export function itemRows(
           ? { text: gutter, color: gutterColor, dim: dim && !shown.isError }
           : undefined,
       indent,
+      textPad,
       spans,
       panel,
       ...extra,
@@ -263,23 +271,32 @@ export function itemRows(
 // glyph, attached with no blank row between. Prose, user messages and notices
 // keep their own gutter mark and their spacing.
 //
-// A run with no assistant message before it (the agent opened the turn with a
-// tool call) still nests — under the user message that prompted it — because
-// the indent is what says "this is work, not talk". Only a run at the very top
-// of the transcript, with no parent at all, stays flat.
+// INDENT and OWNERSHIP are decided separately, because they answer different
+// questions. A run belongs to (is opened by, travels with) whatever message
+// came last, YOURS INCLUDED — the agent often opens a turn with a tool call,
+// and a run that belonged to nothing could not be reached with →. But it only
+// INDENTS under something the AGENT said (isAgentSpeech: prose or ✻ thinking):
+// your message is a lifted box, and a ⎿ branch under it would read as work YOU
+// did, so a turn-opening run stays flat and separated by its own blank row.
+// Only a run at the very top of the transcript, with no message above it at
+// all, belongs to nothing.
 //
-// Nesting also decides what ↑/↓ can LAND on, because a tool call is not a stop
-// of its own — it belongs to the message that made it. Three levels, each
-// opened by → on the level above:
+// Ownership is what ↑/↓ can LAND on, because a tool call is not a stop of its
+// own — it belongs to the message that made it. Three levels, each opened by →
+// on the level above:
 //
 //   ● the message            a stop; ↑/↓ walk these
 //     ⎿ Ran 3 tool calls     part of the message's block (navKey → the message)
-//       ● Bash(pytest)       a stop once the message is opened
-//         ⎿ output           part of that call's block (navKey → the call)
 //
-// So ↑ lands on the message with its tool chatter in tow; → reveals the calls
-// and ↑/↓ then step through them one at a time; → on a call opens its output;
-// ← walks back out (parentKey). Pure, for tests.
+// opened with → the fold is REPLACED by what it stood for, at the same indent:
+//
+//   ● the message            a stop
+//     ● Bash(pytest)         a stop of its own now
+//     ⎿ output               part of that call's block (navKey → the call)
+//
+// So ↑ lands on the message with its tool chatter in tow; → swaps the fold for
+// the calls and ↑/↓ then step through them one at a time; → on a call opens its
+// output; ← walks back out (parentKey). Pure, for tests.
 export type PlacedItem = {
   item: TranscriptItem
   indent: number
@@ -298,19 +315,23 @@ export function layOutItems(
   opts: { openedKeys?: ReadonlySet<string>; revealAll?: boolean } = {},
 ): PlacedItem[] {
   const out: PlacedItem[] = []
-  // The message the current run hangs off — null at the head of the transcript,
-  // where a run has nothing to hang off and stays flat.
+  // The message the current run BELONGS to — what → opens and ↑/↓ land on.
+  // Either sender's; null only at the head of the transcript.
   let parent: string | null = null
+  // Whether that message was the agent's, which is what decides the visual
+  // nesting: only what the agent said gets a ⎿ branch under it.
+  let parentIsAgent = false
   // The call a ⎿ result belongs to, so a result travels with its own call.
   let call: string | null = null
   for (const item of items) {
     if (!isToolActivity(item)) {
       out.push({ item, indent: 0, nested: false, attach: false })
       parent = item.key
+      parentIsAgent = isAgentSpeech(item)
       call = null
       continue
     }
-    const nested = parent !== null
+    const nested = parent !== null && parentIsAgent
     const revealed =
       opts.revealAll === true || (parent !== null && opts.openedKeys?.has(parent) === true)
     if (item.kind === 'tool') call = item.key
@@ -322,14 +343,9 @@ export function layOutItems(
     let owner = parent
     if (revealed && item.kind === 'tool') owner = null
     else if (revealed && item.kind === 'tool_result') owner = call
-    // A revealed call sits one level further in than the fold it came out of,
-    // so the expansion still reads as that fold's children, and its result
-    // indents with it. The fold line itself doesn't move — it is the header the
-    // children hang under. ctrl+r has no fold to nest below, so nothing shifts.
-    const deeper = revealed && !opts.revealAll && item.kind !== 'notice'
     out.push({
       item,
-      indent: (nested ? NEST_INDENT : 0) + (deeper ? NEST_INDENT : 0),
+      indent: nested ? NEST_INDENT : 0,
       nested,
       // Attach every line of the run: the first to its parent message, the
       // rest to the line above.
@@ -349,13 +365,20 @@ export function isToolActivity(item: TranscriptItem): boolean {
   return item.kind === 'tool' || item.kind === 'tool_result' || item.key.startsWith('grp:')
 }
 
+// Whether a message is one the AGENT said, which is what a tool run may branch
+// off with its ⎿. Its prose and its ✻ thinking both count — with extended
+// thinking on, thinking is what most runs actually follow. Your own message
+// does not: it is a lifted box, and a branch under it reads as work YOU did.
+export function isAgentSpeech(item: TranscriptItem): boolean {
+  return item.kind === 'assistant' || item.kind === 'thinking'
+}
+
 // A live status line — "Generating…", "Running Bash(pytest…)…" — with its
-// ticking readout in the right-hand metadata column. It sits on a panel like
-// any other block, so a turn in flight is as legible as the messages around
-// it. `hug` drops the spacer above so the line reads as part of the tool burst
-// it belongs to. The duration is a `tick` marker rather than text: it changes
-// every second, and baking it in here would re-wrap the transcript once a
-// second.
+// ticking readout in the right-hand metadata column. It is the agent working, so
+// it stays bare on the canvas. `hug` drops the spacer above so the line reads as
+// part of the tool burst it belongs to. The duration is a `tick` marker rather
+// than text: it changes every second, and baking it in here would re-wrap the
+// transcript once a second.
 export function activityRows(
   key: string,
   label: string,
@@ -364,15 +387,14 @@ export function activityRows(
   cols: number,
   hug: boolean,
   // The line describes a TOOL CALL in flight, so it nests under the message
-  // that made the call, exactly where its ⎿ result will land a moment later —
-  // on that message's panel, inside its pad. A "Generating…"/"Working…" line
-  // describes the message itself and stays flat.
+  // that made the call, exactly where its ⎿ result will land a moment later. A
+  // "Generating…"/"Working…" line describes the message itself and stays flat.
   nested = false,
 ): TranscriptRow[] {
   const indent = nested ? NEST_INDENT : 0
-  // Reserve the widest the readout gets ("(1h 3m 30s · ↓ 12.3k tokens)") so
-  // the label doesn't reflow as the clock ticks.
-  const width = Math.max(8, contentWidth(cols, { indent, panel: true }) - visibleWidth(suffix) - 16)
+  // Reserve the widest the readout gets ("1h 3m 30s, 12.3k tokens") so the
+  // label doesn't reflow as the clock ticks.
+  const width = Math.max(8, contentWidth(cols, { indent }) - visibleWidth(suffix) - 16)
   const rows: TranscriptRow[] = hug || nested ? [] : [spacerRow(key, `${key}:sp`)]
   rows.push({
     id: `${key}:r`,
@@ -381,25 +403,33 @@ export function activityRows(
     indent,
     spans: [{ text: fitLines(label, width)[0] ?? '', dim: true }],
     right: { text: suffix, dim: true },
-    panel: true,
     tick,
     pulse: true,
   })
   return rows
 }
 
-// An in-flight send, or the streaming assistant response: the same panel a
-// committed message sits on, so nothing shifts when the real record lands.
-// `pulse` marks the send as still in flight — the same breathing ⏺ a running
-// tool wears, so a message the agent hasn't answered yet never reads as settled
-// conversation.
+// An in-flight send, or the streaming assistant response: laid out exactly like
+// the committed record it becomes, so nothing shifts when that record lands —
+// which is why `panel` is the caller's call (your send is panelled, the
+// streaming response is not). `pulse` marks the send as still in flight — the
+// same breathing ⏺ a running tool wears, so a message the agent hasn't answered
+// yet never reads as settled conversation.
 export function pendingMessageRows(
   key: string,
   text: string,
   cols: number,
-  opts: { gutter: string; dim?: boolean; bold?: boolean; right?: string; pulse?: boolean },
+  opts: {
+    gutter: string
+    dim?: boolean
+    bold?: boolean
+    right?: string
+    pulse?: boolean
+    panel?: boolean
+  },
 ): TranscriptRow[] {
-  const width = contentWidth(cols, { panel: true })
+  const panel = opts.panel ?? false
+  const width = contentWidth(cols)
   const rows: TranscriptRow[] = [spacerRow(key, `${key}:sp`)]
   const lines = fitLines(text, width)
   for (const [i, line] of lines.entries()) {
@@ -412,7 +442,7 @@ export function pendingMessageRows(
           : undefined,
       spans: [{ text: line, dim: opts.dim, bold: opts.bold }],
       right: i === lines.length - 1 && opts.right ? { text: opts.right, dim: true } : undefined,
-      panel: true,
+      panel,
       pulse: i === 0 ? opts.pulse : undefined,
     })
   }
@@ -606,12 +636,6 @@ export function withRenderedMarkdown(item: TranscriptItem, width: number): Trans
   if (!hasMarkdown(item.text)) return item
   const rendered = renderMarkdown(item.text, width)
   return rendered === item.text ? item : { ...item, text: rendered }
-}
-
-// Messages (user + assistant prose) sit on the lifted panel the composer
-// uses; tool chatter and notices stay on the canvas.
-function isMessage(item: TranscriptItem): boolean {
-  return item.kind === 'user' || item.kind === 'assistant'
 }
 
 // Which items collapse when long: tool results and user turns (the latter carry

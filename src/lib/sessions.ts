@@ -6,11 +6,11 @@ import type { AgentSession, SupportedModel } from './types'
 // Pure session-model helpers shared by the connect command and the
 // multi-session UI (SessionsApp). No I/O here — everything is testable.
 
-// THE selection marker, everywhere: the one bone-bright character that says
-// "you are here" — it replaces a sidebar row's status dot, a transcript
-// line's gutter icon, and the focused composer's prompt. One char, always the
-// accent, so the eye finds the cursor instantly anywhere in the console. The
-// thick right-arrow is reserved for selection alone; statuses are colored dots.
+// THE selection marker, everywhere: the one character that says "you are here"
+// — it replaces a sidebar row's status dot, a transcript line's gutter icon,
+// and the focused composer's prompt. Always painted theme.cursor, the cyan that
+// means nothing else, so the eye finds it instantly anywhere in the console.
+// The thick right-arrow is reserved for selection alone; statuses are dots.
 export const SELECTION_GLYPH = '▶'
 
 // Whether the composer can send to this session, and — when it can't — why.

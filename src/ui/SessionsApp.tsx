@@ -591,7 +591,8 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
           <Text wrap="truncate">
             {selected === 'new' && navFocused ? (
               <Text bold color={theme.foreground}>
-                {`${SELECTION_GLYPH} ${NAV_NEW_LABEL.slice(2)}`}
+                <Text color={theme.cursor}>{SELECTION_GLYPH}</Text>
+                {` ${NAV_NEW_LABEL.slice(2)}`}
               </Text>
             ) : (
               <Text bold color={theme.foreground}>
@@ -618,7 +619,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
           <Box key={s.id} backgroundColor={cursorHere ? SURFACE_ACTIVE : undefined}>
             <Box flexGrow={1} flexShrink={1}>
               <Text wrap="truncate">
-                <Text color={cursorHere ? theme.foreground : g.color} dimColor={!cursorHere && g.dim}>
+                <Text color={cursorHere ? theme.cursor : g.color} dimColor={!cursorHere && g.dim}>
                   {cursorHere ? SELECTION_GLYPH : g.glyph}
                 </Text>{' '}
                 <Text
@@ -1104,7 +1105,7 @@ function NewSessionPane({
                     <Box key={opt.id ?? 'default'} width={inputWidth}>
                       <Text wrap="truncate">
                         {'  '}
-                        <Text color={theme.foreground}>
+                        <Text color={theme.cursor}>
                           {hovered ? SELECTION_GLYPH : ' '}
                         </Text>{' '}
                         <Text color={hovered || picked ? theme.foreground : theme.muted}>
@@ -1125,7 +1126,7 @@ function NewSessionPane({
           return (
             <Box key={r.key} width={inputWidth}>
               <Text wrap="truncate">
-                <Text color={active ? theme.foreground : theme.muted}>
+                <Text color={active ? theme.cursor : theme.muted}>
                   {active ? SELECTION_GLYPH : ' '}
                 </Text>{' '}
                 <Text color={theme.muted}>{r.label}: </Text>
@@ -1157,7 +1158,7 @@ function NewSessionPane({
             key={`${text}:${cursor}:${focused && row === 'prompt'}`}
             color={theme.foreground}
           >
-            <Text color={theme.foreground}>
+            <Text color={theme.cursor}>
               {focused && row === 'prompt' && openPicker === null ? SELECTION_GLYPH : ' '}{' '}
             </Text>
             {text.slice(0, cursor)}

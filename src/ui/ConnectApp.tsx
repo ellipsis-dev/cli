@@ -43,6 +43,7 @@ import {
   contentWidth,
   entryRange,
   GUTTER_COLS,
+  isAgentSpeech,
   isCollapsible,
   isToolActivity,
   itemRows,
@@ -671,9 +672,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
 
   // The rendered transcript lines, in order: collapsed (the default) folds
   // consecutive tool activity into "Ran N …" notices, except the runs under a
-  // MESSAGE opened in place with → (openedKeys), which render their tool calls
-  // right below the fold line — indented one level (2 columns), so the
-  // expansion reads as the fold's children — and ← closes them again. The
+  // MESSAGE opened in place with → (openedKeys), where the fold is REPLACED by
+  // the calls it stood for — "Ran 2 shell commands" above the two commands is
+  // just a stale count of what you can already see — and ← folds them back. The
   // message is what opens, not the fold: a run of tool calls is work that
   // message did, so it is reached by opening the message (see layOutItems).
   // Expanded (ctrl+r) shows everything, flat.
@@ -687,14 +688,14 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     // The message a fold hangs off: opening THAT is what reveals the run.
     let parent: string | null = null
     for (const item of folded) {
-      out.push(item)
       if (!isToolActivity(item)) {
+        out.push(item)
         parent = item.key
         continue
       }
-      if (item.key.startsWith('grp:') && parent !== null && openedKeys.has(parent)) {
-        out.push(...foldRun(item.key, base))
-      }
+      const open = item.key.startsWith('grp:') && parent !== null && openedKeys.has(parent)
+      if (open) out.push(...foldRun(item.key, base))
+      else out.push(item)
     }
     return out
   }, [items, expanded, pendingTools, openedKeys])
@@ -791,7 +792,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         text: liveText,
         label: 'Generating…',
         tick: 'elapsed' as const,
-        suffix: liveTokens != null ? `· ↓ ${formatTokens(liveTokens)} tokens` : '',
+        suffix: liveTokens != null ? `${formatTokens(liveTokens)} tokens` : '',
         // The ⏺ line sits directly under the prose it describes.
         hug: liveText !== '',
         nested: false,
@@ -802,9 +803,19 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         pendingTools.length === 1
           ? `Running ${pendingTools[0].text}${pendingTools[0].detail ?? ''}…`
           : `Running ${pendingTools.length} tool calls (${[...new Set(pendingTools.map((t) => t.text))].join(', ')})…`
-      // A running tool call nests under the message that made it, in the
-      // same place its ⎿ result will land.
-      return { text: '', label, tick: 'tool' as const, suffix: '', hug, nested: true }
+      // A running tool call nests under the message that made it, in the same
+      // place its ⎿ result will land — so it takes the SAME predicate
+      // layOutItems uses for that result. Any disagreement here shows up as the
+      // live line sitting flat and then jumping a level when the result lands.
+      const said = visible.filter((i) => !isToolActivity(i)).pop()
+      return {
+        text: '',
+        label,
+        tick: 'tool' as const,
+        suffix: '',
+        hug,
+        nested: said != null && isAgentSpeech(said),
+      }
     }
     if (working && !infraActivity && (awaitingAgent !== null || sendPending)) {
       return {
@@ -878,7 +889,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     // full-colour ◆ rows ABOVE the live activity — the running turn is the
     // response to THIS message, so its stream belongs below it.
     for (const q of inFlightSends.filter((q) => q.state === 'accepted')) {
-      out.push(...pendingMessageRows(q.key, q.text, cols, { gutter: '◆', bold: true }))
+      out.push(...pendingMessageRows(q.key, q.text, cols, { gutter: '◆', bold: true, panel: true }))
     }
     if (liveTail.text) {
       out.push(...pendingMessageRows('live', liveTail.text, cols, { gutter: '' }))
@@ -906,6 +917,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           dim: true,
           right: 'queued',
           pulse: true,
+          panel: true,
         }),
       )
     }
@@ -920,6 +932,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           dim: true,
           right: q.state === 'sending' ? 'sending' : q.state === 'queued' ? 'queued' : 'cancelled',
           pulse: waiting,
+          panel: true,
         }),
       )
     }
@@ -967,14 +980,21 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     return rowViewport(allRows.length, viewBudget, anchor)
   }, [allRows, viewBudget, scrollAnchor])
 
-  // The one row that wears the ▶ marker: the highlighted block's FIRST row with
-  // a gutter glyph. The whole block tints, but the marker points at a single
-  // line — a block with nested tool activity has a glyph on the call and on its
-  // ⎿ result, and marking both reads as two separate selections.
+  // The one row that wears the ▶ marker: the selected block's FIRST row with a
+  // gutter glyph, since the marker replaces that glyph in place. Only one row
+  // takes it — a block with nested tool activity has a glyph on the call and on
+  // its ⎿ result, and marking both reads as two separate selections.
+  //
+  // Restricted to rows ON SCREEN, because the marker is now the ONLY thing that
+  // says "you are here" (there is no highlight bar any more). A block taller
+  // than the window is bottom-aligned by the ↑ snap, which puts its first row
+  // above the frame — so the marker falls to the topmost visible row of the
+  // block, and the selection stays legible instead of vanishing.
   const markerRowId = useMemo(() => {
     if (navKey === null) return null
-    return allRows.find((r) => navKeyOf(r) === navKey && r.gutter)?.id ?? null
-  }, [allRows, navKey])
+    const onScreen = allRows.slice(view.start, view.end).filter((r) => navKeyOf(r) === navKey)
+    return (onScreen.find((r) => r.gutter) ?? onScreen.find((r) => !r.spacer))?.id ?? null
+  }, [allRows, navKey, view.start, view.end])
 
   // Move the window by `delta` ROWS. Reaching the last row re-pins it to the
   // bottom, so streamed content follows again.
@@ -1297,13 +1317,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             key={row.id}
             row={row}
             cols={cols}
-            // The whole block lifts, tool rows included — the highlight is what
-            // says "this message and the work it did". A panel's pad rows
-            // (spacer + panel) lift with it; canvas spacers between blocks
-            // never highlight.
-            selected={
-              navKey !== null && navKeyOf(row) === navKey && (!row.spacer || row.panel === true)
-            }
+            // Every row of the selected BLOCK, tool rows included: the ▶ marks
+            // one of them, and the rest read "→ to expand" on their clamp hint.
+            selected={navKey !== null && navKeyOf(row) === navKey}
             marker={row.id === markerRowId}
             // Both ticking values are passed as constants to rows that don't
             // use them, so React.memo skips those rows entirely: the
@@ -1378,7 +1394,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
               key={`${composer.text}:${composer.cursor}:${focused && navKey === null}`}
               color={theme.foreground}
             >
-              <Text color={focused && navKey === null ? theme.foreground : theme.muted}>
+              <Text color={focused && navKey === null ? theme.cursor : theme.muted}>
                 {SELECTION_GLYPH}{' '}
               </Text>
               {composer.text.slice(0, composer.cursor)}
@@ -1462,12 +1478,12 @@ function sandboxRows(o: {
   const { sandbox, infraActivity, settled, cols } = o
   const key = 'sandbox'
   const rows: TranscriptRow[] = []
-  const width = contentWidth(cols, { panel: true })
-  // Every row of the block sits on the panel and reserves the standard gutter,
-  // so the ▶ marker lands in the headline's mark slot when the block is
-  // highlighted — the same treatment every other entry gets.
+  const width = contentWidth(cols)
+  // Every row of the block reserves the standard gutter, so the ▶ marker lands
+  // in the headline's mark slot when the block is highlighted — the same
+  // treatment every other entry gets.
   const line = (spans: RowSpan[], extra: Partial<TranscriptRow> = {}): void => {
-    rows.push({ id: `${key}:r${rows.length}`, entryKey: key, panel: true, spans, ...extra })
+    rows.push({ id: `${key}:r${rows.length}`, entryKey: key, spans, ...extra })
   }
   // The conversation's opening line: where it lives. Plain text — an OSC 8
   // hyperlink here gets broken by ink's wrapping and swallows the label; the
@@ -1840,8 +1856,8 @@ export function deliveredUnechoedSends(
 // scales down with size: under 1s reads as milliseconds ("428ms"), under 5s
 // keeps one decimal ("1.2s", trimming a trailing .0), and everything longer
 // reads as whole h/m/s components with zero parts dropped ("10s", "1m 2s",
-// "2m", "1h 3m 30s"). The one duration format everywhere in the app, always
-// shown parenthesized: "(10s)". Pure, for tests.
+// "2m", "1h 3m 30s"). The one duration format everywhere in the app, and it
+// reads bare — a readout, not a parenthetical aside. Pure, for tests.
 export function humanDuration(seconds: number): string {
   const clamped = Math.max(0, seconds)
   if (clamped === 0) return '0s'
@@ -1986,14 +2002,13 @@ export function deriveSandboxState(
         if (p.status === 'completed' || p.status === 'failed') {
           const detail =
             p.detail && typeof p.detail === 'object' ? (p.detail as Record<string, unknown>) : {}
-          // "full build (2s)", "(42s)", or a bare tier — the duration always
-          // parenthesized (the app-wide duration format).
+          // "Preparing image, full build, 2s" — the label then its readout,
+          // comma-separated like every other metadata line in the app.
           const tier = cacheTierLabel(detail.cache_tier)
           const dur = msLabel(p.duration_ms)
-          const note = [...(tier ? [tier] : []), ...(dur ? [`(${dur})`] : [])].join(' ')
           const failed = p.status === 'failed'
           const base = failed ? `${label} failed` : label
-          const text = note ? (note.startsWith('(') ? `${base} ${note}` : `${base} · ${note}`) : base
+          const text = [base, ...(tier ? [tier] : []), ...(dur ? [dur] : [])].join(', ')
           const line = open.get(key)
           if (line) {
             // Close the line this phase opened, in place: one line per phase,
@@ -2031,8 +2046,11 @@ export function deriveSandboxState(
         push(
           record,
           'done',
-          ['Sandbox ready', ...(tier ? [tier] : [])].join(' · ') +
-            (totalSeconds > 0 ? ` (${humanDuration(totalSeconds)})` : ''),
+          [
+            'Sandbox ready',
+            ...(tier ? [tier] : []),
+            ...(totalSeconds > 0 ? [humanDuration(totalSeconds)] : []),
+          ].join(', '),
         )
         sandboxDone = true
         // The box coming up is the session-level outcome too.
@@ -2064,10 +2082,10 @@ export function deriveSandboxState(
 // belt-and-braces guarantee — a row that wrapped would push every row below it
 // down and slide the window out of sync with the scroll position.
 //
-// The selected row steps onto the lighter active surface, the app-wide "you are
-// here" treatment (the focused composer, sidebar rows, dropdown options all
-// match). Never inverse: a bone-white bar is far too loud on the charcoal
-// canvas.
+// Selection is carried by the cyan ▶ in the gutter and NOTHING else: no tint,
+// no recolored text. A highlight bar across a multi-row block is a lot of paint
+// for "you are here", and it fought with the one panel tint that still means
+// something (a message you sent). The marker is one glyph and unmistakable.
 const RowLine = React.memo(function RowLine({
   row,
   cols,
@@ -2078,10 +2096,12 @@ const RowLine = React.memo(function RowLine({
 }: {
   row: TranscriptRow
   cols: number
+  // This row belongs to the selected BLOCK. It changes nothing visually — only
+  // which key the "+N lines" hint names (→ vs ctrl+r).
   selected: boolean
-  // Whether THIS row carries the ▶ selection marker in its gutter. Every row of
-  // the highlighted block is `selected` (they all tint), but only one is the
-  // marker row — see markerRowId.
+  // Whether THIS row carries the ▶ marker in its gutter. Every row of the
+  // selected block is `selected`, but only one is the marker row — see
+  // markerRowId.
   marker: boolean
   // The row's ticking duration, resolved here so the once-a-second tick
   // repaints this line instead of rebuilding the transcript's rows.
@@ -2090,11 +2110,7 @@ const RowLine = React.memo(function RowLine({
   // the blink repaints the live lines and leaves the rest of the window alone.
   pulseOn: boolean
 }): React.ReactElement {
-  const background = selected || row.activeRow
-    ? SURFACE_ACTIVE
-    : row.panel
-      ? SURFACE_ELEVATED
-      : undefined
+  const background = row.panel ? SURFACE_ELEVATED : undefined
   // The "+N lines" marker's hint names the key that actually opens it: → when
   // the line is highlighted, ctrl+r otherwise.
   const spans: RowSpan[] = row.clampedLines
@@ -2110,9 +2126,10 @@ const RowLine = React.memo(function RowLine({
   // span with no colour of its own onto real hexes, so nothing on the row is
   // left to the terminal's own palette. See its comment in transcriptRows.
   const markColor = (span: RowSpan): string => spanColor(span, pulseOn)
-  // Durations always render parenthesized, in the right-hand metadata column.
+  // The right-hand metadata column reads as plain prose — "23s, 4 tokens", no
+  // parentheses and no interpuncts. It is a readout, not an aside.
   const right = row.tick
-    ? { text: `(${[humanDuration(seconds), row.right?.text].filter(Boolean).join(' ')})`, dim: true }
+    ? { text: [humanDuration(seconds), row.right?.text].filter(Boolean).join(', '), dim: true }
     : row.right
   // height=1 is load-bearing: a blank row (a spacer, or a message panel's pad)
   // has no text, and ink collapses an empty Box to zero height — the row would
@@ -2121,7 +2138,7 @@ const RowLine = React.memo(function RowLine({
   // width, so the panel reads as a block, not a ragged strip behind the text.
   return (
     <Box width={cols} height={1} flexShrink={0} backgroundColor={background}>
-      {row.panel && <Box width={MESSAGE_PAD} flexShrink={0} />}
+      <Box width={MESSAGE_PAD} flexShrink={0} />
       {row.indent ? <Box width={row.indent} flexShrink={0} /> : null}
       <Box width={GUTTER_COLS} flexShrink={0}>
         {/* The gutter glyph, or the selection marker in its place on the one
@@ -2131,20 +2148,19 @@ const RowLine = React.memo(function RowLine({
             itself never changes, so the column holds still and the eye reads
             a heartbeat rather than a character swapping in and out. */}
         <Text
-          color={selected || !row.gutter ? theme.foreground : markColor(row.gutter)}
+          color={marker ? theme.cursor : row.gutter ? markColor(row.gutter) : theme.foreground}
           wrap="truncate"
         >
           {marker ? SELECTION_GLYPH : (row.gutter?.text ?? '')}
         </Text>
       </Box>
+      {/* A ⎿ item's extra breathing room, on every row of it so a wrapped
+          result stays aligned under its first line. */}
+      {row.textPad ? <Box width={row.textPad} flexShrink={0} /> : null}
       <Box flexGrow={1} flexShrink={1} overflow="hidden">
         <Text wrap="truncate">
           {spans.map((span, i) => (
-            <Text
-              key={i}
-              color={selected ? theme.foreground : markColor(span)}
-              bold={span.bold}
-            >
+            <Text key={i} color={markColor(span)} bold={span.bold}>
               {span.text}
             </Text>
           ))}
@@ -2152,15 +2168,12 @@ const RowLine = React.memo(function RowLine({
       </Box>
       {right && (
         <Box flexShrink={0} paddingLeft={1}>
-          <Text
-            color={selected ? theme.foreground : markColor(right)}
-            wrap="truncate"
-          >
+          <Text color={markColor(right)} wrap="truncate">
             {right.text}
           </Text>
         </Box>
       )}
-      {row.panel && <Box width={MESSAGE_PAD} flexShrink={0} />}
+      <Box width={MESSAGE_PAD} flexShrink={0} />
     </Box>
   )
 })
