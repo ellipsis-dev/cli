@@ -275,10 +275,11 @@ export function itemRows(
 // questions. A run belongs to (is opened by, travels with) whatever message
 // came last, YOURS INCLUDED — the agent often opens a turn with a tool call,
 // and a run that belonged to nothing could not be reached with →. But it only
-// INDENTS under assistant prose: your message is a lifted box, and a ⎿ branch
-// under it would read as work YOU did, so a turn-opening run stays flat and
-// separated by its own blank row. Only a run at the very top of the transcript,
-// with no message above it at all, belongs to nothing.
+// INDENTS under something the AGENT said (isAgentSpeech: prose or ✻ thinking):
+// your message is a lifted box, and a ⎿ branch under it would read as work YOU
+// did, so a turn-opening run stays flat and separated by its own blank row.
+// Only a run at the very top of the transcript, with no message above it at
+// all, belongs to nothing.
 //
 // Ownership is what ↑/↓ can LAND on, because a tool call is not a stop of its
 // own — it belongs to the message that made it. Three levels, each opened by →
@@ -318,7 +319,7 @@ export function layOutItems(
   // Either sender's; null only at the head of the transcript.
   let parent: string | null = null
   // Whether that message was the agent's, which is what decides the visual
-  // nesting: only the agent's prose gets a ⎿ branch under it.
+  // nesting: only what the agent said gets a ⎿ branch under it.
   let parentIsAgent = false
   // The call a ⎿ result belongs to, so a result travels with its own call.
   let call: string | null = null
@@ -326,7 +327,7 @@ export function layOutItems(
     if (!isToolActivity(item)) {
       out.push({ item, indent: 0, nested: false, attach: false })
       parent = item.key
-      parentIsAgent = item.kind === 'assistant'
+      parentIsAgent = isAgentSpeech(item)
       call = null
       continue
     }
@@ -362,6 +363,14 @@ export function layOutItems(
 // them (keyed grp:*, kind 'notice').
 export function isToolActivity(item: TranscriptItem): boolean {
   return item.kind === 'tool' || item.kind === 'tool_result' || item.key.startsWith('grp:')
+}
+
+// Whether a message is one the AGENT said, which is what a tool run may branch
+// off with its ⎿. Its prose and its ✻ thinking both count — with extended
+// thinking on, thinking is what most runs actually follow. Your own message
+// does not: it is a lifted box, and a branch under it reads as work YOU did.
+export function isAgentSpeech(item: TranscriptItem): boolean {
+  return item.kind === 'assistant' || item.kind === 'thinking'
 }
 
 // A live status line — "Generating…", "Running Bash(pytest…)…" — with its

@@ -561,6 +561,15 @@ describe('layOutItems', () => {
     ])
   })
 
+  it('nests under a ✻ thinking block too — thinking is the agent speaking', () => {
+    // With extended thinking on, thinking → tool_use → tool_result is the usual
+    // turn shape, so treating thinking as not-the-agent would flatten almost
+    // every run in the transcript.
+    const think: TranscriptItem = { key: 'th', kind: 'thinking', text: 'hmm', gutter: '✻' }
+    const out = layOutItems([think, fold('t1')])
+    expect(out[1]).toMatchObject({ indent: 2, nested: true, attach: true, navKey: 'th' })
+  })
+
   it('still lets that flat run BELONG to your message, so → can open it', () => {
     // Indent and ownership are separate: the run doesn't branch off your
     // message visually, but it is reached by opening it. Owning nothing would
