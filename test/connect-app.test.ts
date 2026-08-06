@@ -561,6 +561,14 @@ describe('layOutItems', () => {
     ])
   })
 
+  it('still lets that flat run BELONG to your message, so → can open it', () => {
+    // Indent and ownership are separate: the run doesn't branch off your
+    // message visually, but it is reached by opening it. Owning nothing would
+    // make the run unreachable without ctrl+r.
+    const out = layOutItems([user('u'), fold('t1')])
+    expect(out[1].navKey).toBe('u')
+  })
+
   it('leaves a run with no parent above it flat', () => {
     // Replayed history can start mid-burst; there is nothing to hang off.
     const out = layOutItems([call('t1'), res('r1'), prose('a')])
@@ -830,6 +838,27 @@ describe('itemRows', () => {
     const withGutter = rows.filter((r) => r.gutter)
     expect(withGutter).toHaveLength(1)
     expect(withGutter[0].gutter?.text).toBe('◆')
+  })
+
+  it('marks a fold ⎿ whether or not it nests, since a flat one is still a fold', () => {
+    const foldItem: TranscriptItem = { key: 'grp:t1', kind: 'notice', text: 'Ran 1 shell command' }
+    for (const nested of [true, false]) {
+      const rows = itemRows(foldItem, 40, { clamp: false, nested })
+      expect(rows[0].gutter?.text, `nested=${nested}`).toBe('⎿')
+    }
+    // A real ✦ notice keeps its own mark either way.
+    const notice: TranscriptItem = { key: 'n', kind: 'notice', text: 'Session asleep' }
+    expect(itemRows(notice, 40, { clamp: false, nested: true })[0].gutter?.text).toBe('✦')
+  })
+
+  it('pads every row of a ⎿ item, so a wrapped body stays aligned', () => {
+    const rows = itemRows({ key: 'r', kind: 'tool_result', text: 'a\nb', gutter: '⎿' }, 40, {
+      clamp: false,
+    })
+    expect(rows.map((r) => r.textPad)).toEqual([1, 1])
+    // And nothing else gets it.
+    expect(itemRows({ key: 'a', kind: 'assistant', text: 'hi' }, 40, { clamp: false })[0].textPad)
+      .toBe(0)
   })
 
   it('leads with a spacer row when the item wants space before it', () => {

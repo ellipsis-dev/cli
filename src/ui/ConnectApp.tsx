@@ -979,14 +979,21 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     return rowViewport(allRows.length, viewBudget, anchor)
   }, [allRows, viewBudget, scrollAnchor])
 
-  // The one row that wears the ▶ marker: the highlighted block's FIRST row with
-  // a gutter glyph. The whole block tints, but the marker points at a single
-  // line — a block with nested tool activity has a glyph on the call and on its
-  // ⎿ result, and marking both reads as two separate selections.
+  // The one row that wears the ▶ marker: the selected block's FIRST row with a
+  // gutter glyph, since the marker replaces that glyph in place. Only one row
+  // takes it — a block with nested tool activity has a glyph on the call and on
+  // its ⎿ result, and marking both reads as two separate selections.
+  //
+  // Restricted to rows ON SCREEN, because the marker is now the ONLY thing that
+  // says "you are here" (there is no highlight bar any more). A block taller
+  // than the window is bottom-aligned by the ↑ snap, which puts its first row
+  // above the frame — so the marker falls to the topmost visible row of the
+  // block, and the selection stays legible instead of vanishing.
   const markerRowId = useMemo(() => {
     if (navKey === null) return null
-    return allRows.find((r) => navKeyOf(r) === navKey && r.gutter)?.id ?? null
-  }, [allRows, navKey])
+    const onScreen = allRows.slice(view.start, view.end).filter((r) => navKeyOf(r) === navKey)
+    return (onScreen.find((r) => r.gutter) ?? onScreen.find((r) => !r.spacer))?.id ?? null
+  }, [allRows, navKey, view.start, view.end])
 
   // Move the window by `delta` ROWS. Reaching the last row re-pins it to the
   // bottom, so streamed content follows again.

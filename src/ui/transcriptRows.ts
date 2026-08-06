@@ -210,10 +210,11 @@ export function itemRows(
   const indent = opts.indent ?? 0
   // Nested lines are marked by their INDENT, so each keeps the glyph that says
   // what it is: ● the call, ⎿ the result that came back. Only a collapsed fold
-  // ("Ran 2 tool calls") takes the branch glyph — as a notice it would
-  // otherwise wear ✦, the mark for the infrastructure speaking, which is not
-  // what a fold is.
-  const gutter = opts.nested && item.kind === 'notice' ? BRANCH_GLYPH : gutterFor(item)
+  // (key grp:*, "Ran 2 tool calls") takes the branch glyph — as a notice it
+  // would otherwise wear ✦, the mark for the infrastructure speaking, which is
+  // not what a fold is. Keyed on the fold itself, not on `nested`: a
+  // turn-opening run is flat, and it is still a fold.
+  const gutter = item.key.startsWith('grp:') ? BRANCH_GLYPH : gutterFor(item)
   const textPad = gutter === BRANCH_GLYPH ? BRANCH_TEXT_PAD : 0
   const width = contentWidth(cols, { indent, textPad })
   const shown = withRenderedMarkdown(item, width)
@@ -270,14 +271,18 @@ export function itemRows(
 // glyph, attached with no blank row between. Prose, user messages and notices
 // keep their own gutter mark and their spacing.
 //
-// The parent is always an ASSISTANT message. A run with none before it (the
-// agent opened its turn with a tool call) stays FLAT rather than hanging off
-// the user message that prompted it: your message is a lifted box, and a ⎿
-// branch under it would read as work YOU did.
+// INDENT and OWNERSHIP are decided separately, because they answer different
+// questions. A run belongs to (is opened by, travels with) whatever message
+// came last, YOURS INCLUDED — the agent often opens a turn with a tool call,
+// and a run that belonged to nothing could not be reached with →. But it only
+// INDENTS under assistant prose: your message is a lifted box, and a ⎿ branch
+// under it would read as work YOU did, so a turn-opening run stays flat and
+// separated by its own blank row. Only a run at the very top of the transcript,
+// with no message above it at all, belongs to nothing.
 //
-// Nesting also decides what ↑/↓ can LAND on, because a tool call is not a stop
-// of its own — it belongs to the message that made it. Three levels, each
-// opened by → on the level above:
+// Ownership is what ↑/↓ can LAND on, because a tool call is not a stop of its
+// own — it belongs to the message that made it. Three levels, each opened by →
+// on the level above:
 //
 //   ● the message            a stop; ↑/↓ walk these
 //     ⎿ Ran 3 tool calls     part of the message's block (navKey → the message)
@@ -309,19 +314,23 @@ export function layOutItems(
   opts: { openedKeys?: ReadonlySet<string>; revealAll?: boolean } = {},
 ): PlacedItem[] {
   const out: PlacedItem[] = []
-  // The ASSISTANT message the current run hangs off — null until the agent has
-  // said something, where a run has nothing to hang off and stays flat.
+  // The message the current run BELONGS to — what → opens and ↑/↓ land on.
+  // Either sender's; null only at the head of the transcript.
   let parent: string | null = null
+  // Whether that message was the agent's, which is what decides the visual
+  // nesting: only the agent's prose gets a ⎿ branch under it.
+  let parentIsAgent = false
   // The call a ⎿ result belongs to, so a result travels with its own call.
   let call: string | null = null
   for (const item of items) {
     if (!isToolActivity(item)) {
       out.push({ item, indent: 0, nested: false, attach: false })
-      parent = item.kind === 'assistant' ? item.key : null
+      parent = item.key
+      parentIsAgent = item.kind === 'assistant'
       call = null
       continue
     }
-    const nested = parent !== null
+    const nested = parent !== null && parentIsAgent
     const revealed =
       opts.revealAll === true || (parent !== null && opts.openedKeys?.has(parent) === true)
     if (item.kind === 'tool') call = item.key
