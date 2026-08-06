@@ -11,8 +11,9 @@ import chalk from 'chalk'
 //
 // One rule carried over from the web app (landing globals.css `.dark`): the
 // accent in dark mode is BONE, not brand blue. Brand ink #175173 scores
-// 1.79:1 on the panel — unreadable as terminal text. So "you are here" is
-// carried by brightness (bone against stone), not by hue.
+// 1.79:1 on the panel — unreadable as terminal text. So emphasis is carried by
+// brightness (bone against stone), not by hue. The ▶ cursor is the one
+// exception, and takes `cursor` below.
 //
 // Because the CLI paints its own canvas, the palette only holds if it is used
 // for EVERY cell of the frame. Two rules keep it whole on a terminal whose own
@@ -85,6 +86,13 @@ export const theme = {
   // reads quiet. 7.4:1 on the canvas, so quiet still means legible.
   foreground: '#f0efe9',
   muted: '#a8a59c',
+
+  // The ▶ cursor, and nothing else. Bone-on-stone was too quiet a step to find
+  // at a glance on a busy frame, so the cursor carries HUE as well as
+  // brightness: cyan is the one hue not already spoken for (green = done,
+  // amber = working, red = failed), so it never reads as a status. 9.7:1 on
+  // the canvas and 7.2:1 on the active surface, so it holds up highlighted.
+  cursor: '#5fd3e0',
 
   // Status. Tuned for the charcoal canvas, not the light one.
   success: '#4ebc7b',

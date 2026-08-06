@@ -112,7 +112,7 @@ describe('deriveSandboxState', () => {
     // Not "Preparing image…" AND "Preparing image ✓" — the same line closes.
     expect(texts(state)).toEqual([
       'Starting sandbox…',
-      'Preparing image · cached image (1.2s)',
+      'Preparing image, cached image, 1.2s',
       'Fetching repositories…',
     ])
     expect(kinds(state)).toEqual(['step', 'done', 'step'])
@@ -138,7 +138,7 @@ describe('deriveSandboxState', () => {
     // This is the point of the flat log: the output you want while a session
     // is slow to start is right there, not three keystrokes deep.
     expect(texts(state)).toEqual([
-      'Building image (42s)',
+      'Building image, 42s',
       '#1 FROM base',
       '#2 RUN npm ci',
       'Post-clone setup…',
@@ -181,7 +181,7 @@ describe('deriveSandboxState', () => {
       ],
       0,
     )
-    expect(texts(state)).toEqual(['Running setup failed (4s)'])
+    expect(texts(state)).toEqual(['Running setup failed, 4s'])
     expect(kinds(state)).toEqual(['failed'])
   })
 
@@ -206,7 +206,7 @@ describe('deriveSandboxState', () => {
     expect(texts(state)).toEqual([
       'Starting sandbox…',
       'Preparing image…',
-      'Sandbox ready · cached image (29s)',
+      'Sandbox ready, cached image, 29s',
     ])
     // A phase still open when the box came up is no longer live.
     expect(kinds(state)).toEqual(['step', 'done', 'done'])
@@ -550,9 +550,15 @@ describe('layOutItems', () => {
     expect(out[1]).toMatchObject({ indent: 2, nested: true })
   })
 
-  it('nests a turn-opening tool call under the user message that prompted it', () => {
-    const out = layOutItems([user('u'), call('t1')])
-    expect(out[1]).toMatchObject({ indent: 2, nested: true })
+  it('leaves a turn-opening tool call flat, never branching off YOUR message', () => {
+    // Your message is a lifted box; a ⎿ branch under it would read as work you
+    // did rather than work the agent did.
+    const out = layOutItems([user('u'), call('t1'), res('r1')])
+    expect(out.map((p) => [p.item.key, p.indent, p.nested])).toEqual([
+      ['u', 0, false],
+      ['t1', 0, false],
+      ['r1', 0, false],
+    ])
   })
 
   it('leaves a run with no parent above it flat', () => {
@@ -561,11 +567,13 @@ describe('layOutItems', () => {
     expect(out.map((p) => p.nested)).toEqual([false, false, false])
   })
 
-  it("indents an opened message's revealed calls one level FURTHER than the fold", () => {
-    const out = layOutItems([prose('a'), fold('t1'), call('t1'), res('r1')], {
+  it("keeps an opened message's revealed calls at the fold's own indent", () => {
+    // The fold is REPLACED by its calls (see `visible` in ConnectApp), so there
+    // is no header above them to step in from.
+    const out = layOutItems([prose('a'), call('t1'), res('r1')], {
       openedKeys: new Set(['a']),
     })
-    expect(out.map((p) => p.indent)).toEqual([0, 2, 4, 4])
+    expect(out.map((p) => p.indent)).toEqual([0, 2, 2])
   })
 
   it('makes a tool call part of its message block, not a stop of its own', () => {
@@ -580,19 +588,18 @@ describe('layOutItems', () => {
   })
 
   it('promotes revealed calls to stops of their own, results still travelling with them', () => {
-    const out = layOutItems([prose('a'), fold('t1'), call('t1'), res('r1')], {
+    const out = layOutItems([prose('a'), call('t1'), res('r1')], {
       openedKeys: new Set(['a']),
     })
-    // The fold stays part of the message; the call becomes its own stop and
-    // owns its result.
-    expect(out.map((p) => p.navKey)).toEqual([undefined, 'a', undefined, 't1'])
+    // The call becomes its own stop and owns its result.
+    expect(out.map((p) => p.navKey)).toEqual([undefined, undefined, 't1'])
   })
 
   it('points a revealed call back at its message, so ← steps out', () => {
-    const out = layOutItems([prose('a'), fold('t1'), call('t1'), res('r1')], {
+    const out = layOutItems([prose('a'), call('t1'), res('r1')], {
       openedKeys: new Set(['a']),
     })
-    expect(out[2].parentKey).toBe('a')
+    expect(out[1].parentKey).toBe('a')
   })
 
   it('promotes every call when ctrl+r reveals the whole transcript', () => {
@@ -786,7 +793,17 @@ describe('itemRows', () => {
       clamp: false,
     })
     expect(rows).toHaveLength(1)
-    expect(rows[0].panel).toBe(true)
+  })
+
+  it('panels what you said and leaves everything the agent said on the canvas', () => {
+    const panelOf = (kind: TranscriptItem['kind'], nested = false): boolean | undefined =>
+      itemRows({ key: 'a', kind, text: 'x' } as TranscriptItem, 40, { clamp: false, nested })[0]
+        .panel
+    expect(panelOf('user')).toBe(true)
+    expect(panelOf('assistant')).toBe(false)
+    expect(panelOf('notice')).toBe(false)
+    expect(panelOf('tool', true)).toBe(false)
+    expect(panelOf('tool_result', true)).toBe(false)
   })
 
   it('emits one row per line of a multi-line body', () => {
