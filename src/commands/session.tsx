@@ -92,8 +92,8 @@ export function registerSession(program: Command): void {
 
   apiRoutes(
     session.command('start').description('Start a new agent session in the cloud'),
-    'POST /v1/sessions',
-    'WS /v1/sessions/{id}/stream with --watch or --connect',
+    'POST /sessions',
+    'WS /sessions/{id}/stream with --watch or --connect',
   )
     .argument(
       '[prompt...]',
@@ -325,8 +325,8 @@ export function registerSession(program: Command): void {
       '\nSources: laptop, react, manual, api, cli, mention, cron. ' +
         '--since/--until accept ISO 8601 or "today", "yesterday", "N days ago".',
     ),
-    'GET /v1/sessions',
-    'GET /v1/github/members to resolve --author',
+    'GET /sessions',
+    'GET /github/members to resolve --author',
   )
     .option('-c, --config <config-id>', 'only sessions run by this saved agent config')
     .option(
@@ -401,8 +401,8 @@ export function registerSession(program: Command): void {
           'Sources: laptop, react, manual, api, cli, mention, cron. ' +
           '--since/--until accept ISO 8601 or "today", "yesterday", "N days ago".',
       ),
-    'GET /v1/sessions/search',
-    'GET /v1/github/members to resolve --author',
+    'GET /sessions/search',
+    'GET /github/members to resolve --author',
   )
     .option(
       '-a, --author <login>',
@@ -498,7 +498,7 @@ export function registerSession(program: Command): void {
         .description("Print a session's stored transcript, one line per record"),
       'records',
     ),
-    'GET /v1/sessions/{id}/records',
+    'GET /sessions/{id}/records',
   )
     .option('--json', 'output raw JSON (full record payloads)')
     .action(async (sessionId: string, opts: { json?: boolean }) => {
@@ -526,7 +526,7 @@ export function registerSession(program: Command): void {
         .description("Download a session's complete archived log to stdout or a file"),
       'logs',
     ),
-    'GET /v1/sessions/{id}/log',
+    'GET /sessions/{id}/log',
   )
     .option('-o, --output <path>', 'write to a file instead of stdout')
     .option('--gzip', 'keep the concatenated .jsonl.gz bytes as-is (skip gunzip)')
@@ -580,8 +580,8 @@ export function registerSession(program: Command): void {
     session
       .command('get <session-id>')
       .description("Show one session's status, cost, and dashboard link"),
-    'GET /v1/sessions/{id}',
-    'WS /v1/sessions/{id}/stream with --watch',
+    'GET /sessions/{id}',
+    'WS /sessions/{id}/stream with --watch',
   )
     .option(
       '-w, --watch',
@@ -620,8 +620,8 @@ export function registerSession(program: Command): void {
     session
       .command('replay <session-id>')
       .description("Re-run an existing session's trigger input as a fresh session"),
-    'POST /v1/sessions/{id}/replay',
-    'WS /v1/sessions/{id}/stream with --watch',
+    'POST /sessions/{id}/replay',
+    'WS /sessions/{id}/stream with --watch',
   )
     .option(
       '-c, --config <config-id>',
@@ -704,7 +704,7 @@ export function registerSession(program: Command): void {
     session
       .command('handoff <prompt...>')
       .description('Hand this repo and a synced local session off to a cloud agent'),
-    'POST /v1/sessions',
+    'POST /sessions',
   )
     .requiredOption(
       '-p, --parent <session-id>',
@@ -760,7 +760,7 @@ export function registerSession(program: Command): void {
     session
       .command('sync')
       .description('Sync a local Claude Code transcript up, as the installed hooks do'),
-    'POST /v1/sessions/sync',
+    'POST /sessions/sync',
   )
     .option('--transcript <path>', 'transcript JSONL path (default: from hook stdin)')
     .option('--session-id <id>', 'Claude Code session id (default: from hook stdin)')
@@ -783,7 +783,7 @@ export function registerSession(program: Command): void {
 
   apiRoutes(
     session.command('stop <session-id>').description('Stop an in-flight session'),
-    'POST /v1/sessions/{id}/stop',
+    'POST /sessions/{id}/stop',
   )
     .option('--json', 'output raw JSON')
     .action(async (sessionId: string, opts: { json?: boolean }) => {
@@ -798,7 +798,7 @@ export function registerSession(program: Command): void {
       })
     })
 
-  // The browser IDE into a live session's sandbox (GET /v1/sessions/{id}/ide).
+  // The browser IDE into a live session's sandbox (GET /sessions/{id}/ide).
   // The URL is the membership-gated dashboard page for the sandbox — no
   // credential in it, so it is durable and safe to share with any org member.
   // 409s (sandbox idle/torn down) carry curated server messages; runAction
@@ -814,7 +814,7 @@ export function registerSession(program: Command): void {
           'org members. If the session is idle, send it a message to wake it first ' +
           '(agent session connect).',
       ),
-    'GET /v1/sessions/{id}/ide',
+    'GET /sessions/{id}/ide',
   )
     .option('--no-open', 'print the URL without opening a browser')
     .option('--json', 'output raw JSON')
@@ -830,7 +830,7 @@ export function registerSession(program: Command): void {
       })
     })
 
-  // A preview port's link (GET /v1/sessions/{id}/ports/{port}) — a dev
+  // A preview port's link (GET /sessions/{id}/ports/{port}) — a dev
   // server the agent or the IDE user started in the sandbox, opened through
   // the same membership-gated dashboard page as the IDE.
   apiRoutes(
@@ -844,7 +844,7 @@ export function registerSession(program: Command): void {
           'port, so it is safe to share with org members. The preview renders while ' +
           'something in the sandbox listens on that port.',
       ),
-    'GET /v1/sessions/{id}/ports/{port}',
+    'GET /sessions/{id}/ports/{port}',
   )
     .option('--no-open', 'print the URL without opening a browser')
     .option('--json', 'output raw JSON')
@@ -993,7 +993,7 @@ export function exitCodeForStatus(status: string): number {
 
 // Poll a session until it reaches a terminal status, printing each status
 // transition. This is the status-level fallback used when live streaming isn't
-// available: the /v1 REST API exposes session state, not the step-by-step stream.
+// available: the public REST API exposes session state, not the step-by-step stream.
 export async function watchSession(
   api: ApiClient,
   sessionId: string,
@@ -1046,7 +1046,7 @@ function printSessionSummary(s: AgentSession): void {
 }
 
 // Print a clickable dashboard link for a session. The route is scoped by
-// account login, which isn't on the session object, so resolve it from /v1/me.
+// account login, which isn't on the session object, so resolve it from /me.
 async function printSessionUrl(api: ApiClient, sessionId: string): Promise<void> {
   const me = await api.whoami()
   console.log(`  ${sessionUrl(resolveAppBase(), me.customer_login, sessionId)}`)
@@ -1179,7 +1179,7 @@ function readMappingFile(path: string, label: string): Record<string, unknown> {
 }
 
 // Resolve a --author GitHub login to the account id the API filters by
-// (author_id on GET /v1/sessions and /v1/sessions/search), via the org roster.
+// (author_id on GET /sessions and /sessions/search), via the org roster.
 // An unknown login fails with the known logins so the user can self-correct.
 export async function resolveAuthorId(api: ApiClient, login: string): Promise<number> {
   const { members } = await api.listGithubMembers()

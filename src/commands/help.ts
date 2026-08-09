@@ -21,7 +21,7 @@ export function registerHelp(program: Command): void {
     program
       .command('help')
       .description('Show help for a command, or ask the help agent with --interactive'),
-    'POST /v1/sessions with --interactive',
+    'POST /sessions with --interactive',
   )
     .argument('[command...]', 'command to show help for (e.g. `session start`)')
     .option(

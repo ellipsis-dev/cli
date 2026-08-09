@@ -107,7 +107,7 @@ agent usage                       # usage dashboard for the period
 agent analytics reviewer --account-type bot   # which apps review the most PRs
 agent analytics pr --days 30      # PR volume/trend with human vs bot splits
 agent analytics review --repo my-service      # review totals + top reviewers
-agent ping                        # check authenticated /v1 connectivity
+agent ping                        # check authenticated API connectivity
 ```
 
 Every command shown is singular. The plural spelling of each (`agent assets`,
@@ -117,7 +117,7 @@ left out of `--help`. See
 argument, flag, and help-text conventions.
 
 Most commands accept `--json` to print the raw API response. The CLI talks to
-the public `/v1` REST API. Point it at a different instance durably with
+the public REST API. Point it at a different instance durably with
 `agent host` (below), or per-invocation with `ELLIPSIS_API_BASE_URL` (or the
 legacy `ELLIPSIS_API_BASE`).
 
@@ -184,7 +184,7 @@ npm run compile             # single-binary build (bun)
 - `scripts/smoke-local.sh` is a **fully-automated** end-to-end check against a
   local `docker compose` backend. It drives the device-code login itself —
   scraping the verification code and approving it headlessly through the
-  running `public_api` container — then exercises the authenticated `/v1` calls
+  running `public_api` container — then exercises the authenticated API calls
   with a throwaway config dir. One command, no manual approval:
 
   ```sh
@@ -193,7 +193,7 @@ npm run compile             # single-binary build (bun)
   ```
 
 - `scripts/smoke.sh` is the manual variant for any backend (incl. staging/prod):
-  it drives login and the `/v1` calls but waits for you to approve in the
+  it drives login and the API calls but waits for you to approve in the
   dashboard. See its header for the approval options.
 
   ```sh
@@ -233,7 +233,7 @@ scoped to that one repo only — no account-wide PAT involved.
 
 ### Status
 
-The full `/v1` REST surface (auth, sessions, session search/steps, configs,
+The full public REST surface (auth, sessions, session search/steps, configs,
 integration discovery, budget/usage) is wired against the live API, including
 live WebSocket streaming and `session stop`.
 Still pending: replacing the hand-rolled request/response types with the

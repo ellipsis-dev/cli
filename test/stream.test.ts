@@ -22,10 +22,10 @@ describe('resolveWsBase', () => {
 describe('buildStreamUrl', () => {
   it('builds the bearer-door URL with the SDK handshake query', () => {
     expect(buildStreamUrl('wss://h', 'session 1', 'protocol=2')).toBe(
-      'wss://h/v1/sessions/session%201/stream?protocol=2',
+      'wss://h/sessions/session%201/stream?protocol=2',
     )
     expect(buildStreamUrl('wss://h', 's', 'protocol=2&after_seq=7')).toBe(
-      'wss://h/v1/sessions/s/stream?protocol=2&after_seq=7',
+      'wss://h/sessions/s/stream?protocol=2&after_seq=7',
     )
   })
 })

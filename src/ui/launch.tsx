@@ -18,7 +18,7 @@ export interface SessionsUiOptions {
   // The start response's resolved config name + a caveat for that chat.
   initialConfigName?: string
   initialNotice?: string
-  // Builds the POST /v1/sessions request for a composer-spawned session; the
+  // Builds the POST /sessions request for a composer-spawned session; the
   // typed text rides as the prompt. Entry points bake their flags in here.
   buildStartRequest: (prompt: string) => StartAgentSessionRequest
 }

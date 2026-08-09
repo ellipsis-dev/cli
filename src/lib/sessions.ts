@@ -234,7 +234,7 @@ export function attentionFlip(prevWord: string | undefined, nextWord: string): b
 
 export type ComposerModel = { id: string | null; label: string }
 
-// The composer's model list when GET /v1/models is unavailable (an older
+// The composer's model list when GET /models is unavailable (an older
 // server): the agent-selectable set as of this build, most expensive first.
 // `null` id = let the server pick (DEFAULT_AGENT_MODEL). Labels are the raw
 // model ids — the CLI speaks the API's vocabulary, not marketing names.

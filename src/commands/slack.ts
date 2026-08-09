@@ -13,7 +13,7 @@ export function registerSlack(program: Command): void {
       slack.command('channels').description('List the channels in the Slack workspace'),
       'channel',
     ),
-    'GET /v1/slack/channels',
+    'GET /slack/channels',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
@@ -46,7 +46,7 @@ export function registerSlack(program: Command): void {
         .description('List the workspace members, with linked GitHub identities'),
       'member',
     ),
-    'GET /v1/slack/members',
+    'GET /slack/members',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {

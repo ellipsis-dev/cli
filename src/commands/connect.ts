@@ -14,9 +14,9 @@ import { canHostSessionsUi, defaultStartRequest, runSessionsUi } from '../ui/lau
 // `agent session connect [sessionId]` — the terminal window into a cloud
 // session (documents/eng/SESSION_IDE.md §2.6, in the ellipsis monorepo).
 //
-// A pure /v1 client: it renders the conversation so far from the stored
+// A pure API client: it renders the conversation so far from the stored
 // transcript, follows new output live over the session WebSocket, and sends
-// what you type through POST /v1/sessions/{id}/messages — the same inbox that
+// what you type through POST /sessions/{id}/messages — the same inbox that
 // delivers webhook events to the agent's Claude Code stdin at the next turn
 // boundary. It NEVER spawns or attaches a Claude Code process (a second
 // writer on one CC session corrupts the transcript; the cloud worker is the
@@ -59,7 +59,7 @@ export function registerConnect(session: Command): void {
 headless or from inside the session's own sandbox, where the id is optional.
 Pass --no-input to follow read-only from a script or agent (no TTY needed).
 
-API: GET /v1/sessions/{id}, GET /v1/sessions/{id}/records, POST /v1/sessions/{id}/messages, WS /v1/sessions/{id}/stream`,
+API: GET /sessions/{id}, GET /sessions/{id}/records, POST /sessions/{id}/messages, WS /sessions/{id}/stream`,
     )
     .action(async (sessionId: string | undefined, opts: { records: boolean; input: boolean }) => {
       await runAction(async () => {

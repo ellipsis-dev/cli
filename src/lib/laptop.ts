@@ -6,7 +6,7 @@
 // with the session id and the live on-disk transcript path. The sync checks
 // per-repo enrollment (cwd → git remote → enrolled set; silent no-op
 // otherwise), redacts client-side (secrets never leave the laptop
-// unredacted), gzips, and POSTs to /v1/sessions/sync. Network failures spool
+// unredacted), gzips, and POSTs to /sessions/sync. Network failures spool
 // to disk and are flushed on the next successful sync.
 
 import { execFileSync } from 'node:child_process'
@@ -279,7 +279,7 @@ export function spooledPendingCount(): number {
 // ---------------------------------------------------------------------------
 
 export type SyncOutcome =
-  | 'synced' // delivered to POST /v1/sessions/sync
+  | 'synced' // delivered to POST /sessions/sync
   | 'skipped_unenrolled' // consent gate: repo not enrolled (or no git remote)
   | 'not_logged_in' // no token anywhere
   | 'no_transcript' // transcript path missing/empty on disk
@@ -292,7 +292,7 @@ export interface SyncLogEntry {
   cc_session_id?: string
   repo?: string
   reason?: string // stop | session_end
-  session_id?: string // v1 API session id (synced only)
+  session_id?: string // public API session id (synced only)
   event_count?: number // events the server acknowledged (synced only)
   error?: string // failure detail (non-synced outcomes)
 }
@@ -307,7 +307,7 @@ export interface HookSyncStats {
   failed_24h: number // not_logged_in / no_transcript / spooled / rejected
   spooled_pending: number
   total_synced: number
-  recent_session_ids: string[] // distinct v1 session ids, most recent first
+  recent_session_ids: string[] // distinct public API session ids, most recent first
 }
 
 // The log is an audit trail for "did that background sync fail, and why",

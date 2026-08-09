@@ -87,7 +87,7 @@ export function registerAsset(program: Command): void {
     asset
       .command('upload <path>')
       .description('Upload a PNG and print its org-gated URL, ready to paste into a PR comment'),
-    'POST /v1/assets',
+    'POST /assets',
   )
     .option('--json', 'output raw JSON')
     .action(async (path: string, opts: { json?: boolean }) => {
@@ -106,7 +106,7 @@ export function registerAsset(program: Command): void {
       asset.command('list').description('List your stored assets, newest first'),
       'ls',
     ),
-    'GET /v1/assets',
+    'GET /assets',
   )
     .option('--session <id>', 'only assets uploaded by this agent session')
     .option('-l, --limit <n>', 'max results (server cap: 250)', parsePositiveInt)
@@ -142,7 +142,7 @@ export function registerAsset(program: Command): void {
     asset
       .command('get <asset-id>')
       .description("Print one asset's metadata, or download its bytes with -o"),
-    'GET /v1/assets/{id}',
+    'GET /assets/{id}',
     'presigned S3 GET',
   )
     .option('-o, --output <path>', 'write the file contents to this path')
@@ -170,7 +170,7 @@ export function registerAsset(program: Command): void {
         .description('Delete an asset, so its link stops resolving'),
       'rm',
     ),
-    'DELETE /v1/assets/{id}',
+    'DELETE /assets/{id}',
   )
     .option('--json', 'output raw JSON')
     .action(async (assetId: string, opts: { json?: boolean }) => {

@@ -29,7 +29,7 @@ export function registerConfig(program: Command): void {
       config.command('list').description('List your saved agent configs'),
       'ls',
     ),
-    'GET /v1/configs',
+    'GET /configs',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
@@ -59,7 +59,7 @@ export function registerConfig(program: Command): void {
     config
       .command('get <config-id>')
       .description('Print one agent config as YAML, or as JSON with --json'),
-    'GET /v1/configs/{id}',
+    'GET /configs/{id}',
   )
     .option('--json', 'output raw JSON')
     .action(async (configId: string, opts: { json?: boolean }) => {
@@ -85,7 +85,7 @@ export function registerConfig(program: Command): void {
     config
       .command('create')
       .description('Create an agent config by opening a pull request that adds it to a repo'),
-    'POST /v1/configs',
+    'POST /configs',
   )
     .requiredOption(
       '-r, --repo <name>',
@@ -148,11 +148,11 @@ export function registerConfig(program: Command): void {
         .description('Show or set which agent config runs when a session names none'),
       'defaults',
     ),
-    'GET /v1/defaults',
+    'GET /defaults',
   )
     .option('--json', 'output raw JSON')
     // Bare `agent config default`: the effective default for the repo you're
-    // standing in, computed locally from GET /v1/defaults + the origin remote
+    // standing in, computed locally from GET /defaults + the origin remote
     // (the same ladder session start resolves server-side).
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
@@ -189,7 +189,7 @@ export function registerConfig(program: Command): void {
         .description('List every default that is set, account rung and per-repo rungs'),
       'ls',
     ),
-    'GET /v1/defaults',
+    'GET /defaults',
   )
     .option('--json', 'output raw JSON')
     // The group also defines --json (for the bare view), and commander parses
@@ -223,7 +223,7 @@ export function registerConfig(program: Command): void {
     defaults
       .command('set <config-id>')
       .description('Set the account default agent config, or a repo default with --repo'),
-    'PUT /v1/defaults',
+    'PUT /defaults',
   )
     .option(
       '-r, --repo [repository]',
@@ -256,7 +256,7 @@ export function registerConfig(program: Command): void {
       'rm',
       'delete',
     ),
-    'DELETE /v1/defaults',
+    'DELETE /defaults',
   )
     .option(
       '-r, --repo [repository]',
@@ -278,7 +278,7 @@ export function registerConfig(program: Command): void {
       .description(
         `Scaffold a starter agent config YAML locally (default: ${DEFAULT_CONFIG_PATH})`,
       ),
-    'POST /v1/configs with --template',
+    'POST /configs with --template',
   )
     // No `-f` short: CLI-wide, `-f` means an input file (see `config create`).
     .option('--force', 'overwrite the file if it already exists')

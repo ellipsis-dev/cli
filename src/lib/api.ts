@@ -65,7 +65,7 @@ import type {
   GetSessionLogResponse,
 } from './types'
 
-// Thin REST client over the public `/v1` API. The session-stream surface
+// Thin REST client over the public API. The session-stream surface
 // types come from @ellipsis-dev/sdk (generated from the backend's schema, via
 // lib/types re-exports); the rest of the typed surface remains a hand-rolled
 // mirror of ellipsis/src/public_api/routers/v1/v1_router.py until the SDK's
@@ -128,17 +128,17 @@ export class ApiClient {
   // ------------------------------- identity -------------------------------
 
   whoami(): Promise<WhoAmI> {
-    return this.request('GET', '/v1/me')
+    return this.request('GET', '/me')
   }
 
   // ----------------------------- usage / budget ---------------------------
 
   getBudget(): Promise<BudgetSummary> {
-    return this.request('GET', '/v1/budget')
+    return this.request('GET', '/budget')
   }
 
   getUsage(): Promise<UsageDashboard> {
-    return this.request('GET', '/v1/usage')
+    return this.request('GET', '/usage')
   }
 
   // ------------------------------- analytics ------------------------------
@@ -151,7 +151,7 @@ export class ApiClient {
   ): Promise<GetAnalyticsMetricsResponse> {
     return this.request(
       'GET',
-      '/v1/analytics/metrics',
+      '/analytics/metrics',
       undefined,
       query as Record<string, unknown> | undefined,
     )
@@ -162,7 +162,7 @@ export class ApiClient {
   ): Promise<GetAnalyticsPullRequestsResponse> {
     return this.request(
       'GET',
-      '/v1/analytics/pull-requests',
+      '/analytics/pull-requests',
       undefined,
       query as Record<string, unknown> | undefined,
     )
@@ -173,7 +173,7 @@ export class ApiClient {
   ): Promise<GetAnalyticsReviewsResponse> {
     return this.request(
       'GET',
-      '/v1/analytics/reviews',
+      '/analytics/reviews',
       undefined,
       query as Record<string, unknown> | undefined,
     )
@@ -182,13 +182,13 @@ export class ApiClient {
   // ---------------------------- agent sessions -----------------------------
 
   startAgentSession(req: StartAgentSessionRequest): Promise<AgentSession> {
-    return this.request('POST', '/v1/sessions', req)
+    return this.request('POST', '/sessions', req)
   }
 
   async listAgentSessions(query?: ListAgentSessionsQuery): Promise<AgentSession[]> {
     const res = await this.request<ListAgentSessionsResponse>(
       'GET',
-      '/v1/sessions',
+      '/sessions',
       undefined,
       query as Record<string, unknown> | undefined,
     )
@@ -196,7 +196,7 @@ export class ApiClient {
   }
 
   getAgentSession(sessionId: string): Promise<AgentSession> {
-    return this.request('GET', `/v1/sessions/${encodeURIComponent(sessionId)}`)
+    return this.request('GET', `/sessions/${encodeURIComponent(sessionId)}`)
   }
 
   // Session-grouped search over step text, recap text, created PRs, and
@@ -204,7 +204,7 @@ export class ApiClient {
   searchSessions(query: SearchSessionsQuery): Promise<SearchSessionsResponse> {
     return this.request(
       'GET',
-      '/v1/sessions/search',
+      '/sessions/search',
       undefined,
       query as unknown as Record<string, unknown>,
     )
@@ -229,37 +229,37 @@ export class ApiClient {
   ): Promise<ListSessionRecordsResponse> {
     const query =
       options.afterSeq != null && options.afterSeq > 0 ? `?after_seq=${options.afterSeq}` : ''
-    return this.request('GET', `/v1/sessions/${encodeURIComponent(sessionId)}/records${query}`)
+    return this.request('GET', `/sessions/${encodeURIComponent(sessionId)}/records${query}`)
   }
 
   // The session's conversation structure — turns and inbox messages, each
   // message carrying its pending/delivered status (the server-side "queued"
   // truth). Empty lists for single-shot sessions.
   getAgentSessionTurns(sessionId: string): Promise<ListSessionTurnsResponse> {
-    return this.request('GET', `/v1/sessions/${encodeURIComponent(sessionId)}/turns`)
+    return this.request('GET', `/sessions/${encodeURIComponent(sessionId)}/turns`)
   }
 
   // The session-log manifest: the complete history archived into seq-ranged
   // .jsonl.gz segments, each with a short-lived presigned download URL. Fetch
   // the URLs immediately; the JSON API never carries the bytes.
   getSessionLog(sessionId: string): Promise<GetSessionLogResponse> {
-    return this.request('GET', `/v1/sessions/${encodeURIComponent(sessionId)}/log`)
+    return this.request('GET', `/sessions/${encodeURIComponent(sessionId)}/log`)
   }
 
   syncAgentSession(req: SyncAgentSessionRequest): Promise<SyncAgentSessionResponse> {
-    return this.request('POST', '/v1/sessions/sync', req)
+    return this.request('POST', '/sessions/sync', req)
   }
 
   replayAgentSession(sessionId: string, req: ReplayAgentSessionRequest): Promise<AgentSession> {
     return this.request(
       'POST',
-      `/v1/sessions/${encodeURIComponent(sessionId)}/replay`,
+      `/sessions/${encodeURIComponent(sessionId)}/replay`,
       req,
     )
   }
 
   stopAgentSession(sessionId: string): Promise<AgentSession> {
-    return this.request('POST', `/v1/sessions/${encodeURIComponent(sessionId)}/stop`)
+    return this.request('POST', `/sessions/${encodeURIComponent(sessionId)}/stop`)
   }
 
   // Post a human message into a durable (keyed) session's conversation. The
@@ -274,7 +274,7 @@ export class ApiClient {
     message: string,
     idempotencyKey?: string,
   ): Promise<SessionMessage> {
-    return this.request('POST', `/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
+    return this.request('POST', `/sessions/${encodeURIComponent(sessionId)}/messages`, {
       message,
       idempotency_key: idempotencyKey ?? null,
     } satisfies SendSessionMessageRequest)
@@ -286,7 +286,7 @@ export class ApiClient {
   // no credential and is safe to share with any org member. 409 when the
   // sandbox isn't running (send the session a message to wake it first).
   getSessionIde(sessionId: string): Promise<GetSessionIdeResponse> {
-    return this.request('GET', `/v1/sessions/${encodeURIComponent(sessionId)}/ide`)
+    return this.request('GET', `/sessions/${encodeURIComponent(sessionId)}/ide`)
   }
 
   // A preview port's link (a dev server running in the sandbox): the same
@@ -294,7 +294,7 @@ export class ApiClient {
   getSessionPort(sessionId: string, port: number): Promise<GetSessionPortResponse> {
     return this.request(
       'GET',
-      `/v1/sessions/${encodeURIComponent(sessionId)}/ports/${port}`,
+      `/sessions/${encodeURIComponent(sessionId)}/ports/${port}`,
     )
   }
 
@@ -304,7 +304,7 @@ export class ApiClient {
   // ellipsis repo). v1 is PNG-only with a 10 MiB cap, enforced server-side.
 
   uploadAsset(req: CreateAssetRequest): Promise<CreateAssetResponse> {
-    return this.request('POST', '/v1/assets', req)
+    return this.request('POST', '/assets', req)
   }
 
   // Newest-first metadata for the credential's customer's assets. Metadata
@@ -312,7 +312,7 @@ export class ApiClient {
   async listAssets(query?: ListAssetsQuery): Promise<AssetView[]> {
     const res = await this.request<ListAssetsResponse>(
       'GET',
-      '/v1/assets',
+      '/assets',
       undefined,
       query as Record<string, unknown> | undefined,
     )
@@ -323,7 +323,7 @@ export class ApiClient {
   // the bytes locally, GET download_url immediately (it expires in ~60s; if it
   // lapses, just call this again for a fresh one).
   getAsset(assetId: string): Promise<GetAssetResponse> {
-    return this.request('GET', `/v1/assets/${encodeURIComponent(assetId)}`)
+    return this.request('GET', `/assets/${encodeURIComponent(assetId)}`)
   }
 
   // Delete an asset: it disappears from every read path and its gated link
@@ -333,7 +333,7 @@ export class ApiClient {
   // unknown to the credential's customer, 403 when the token isn't allowed to
   // delete (e.g. a sandbox token).
   deleteAsset(assetId: string): Promise<void> {
-    return this.request('DELETE', `/v1/assets/${encodeURIComponent(assetId)}`)
+    return this.request('DELETE', `/assets/${encodeURIComponent(assetId)}`)
   }
 
   // -------------------------------- reviews --------------------------------
@@ -343,14 +343,14 @@ export class ApiClient {
   // (scope, findings, posting outcome) need endpoints of their own.
 
   createReview(request: CreateReviewRequest): Promise<Review> {
-    return this.request('POST', '/v1/reviews', request)
+    return this.request('POST', '/reviews', request)
   }
 
   // The findings only exist once the review finalizes (they're collected from
   // the sandbox at teardown), so a running review returns findings: [] — hence
   // the stream-then-re-GET two-step the command uses.
   getReview(reviewId: string): Promise<Review> {
-    return this.request('GET', `/v1/reviews/${encodeURIComponent(reviewId)}`)
+    return this.request('GET', `/reviews/${encodeURIComponent(reviewId)}`)
   }
 
   // Newest first, findings omitted (counters only). Includes webhook-triggered
@@ -358,7 +358,7 @@ export class ApiClient {
   async listReviews(query: ListReviewsQuery = {}): Promise<Review[]> {
     const res = await this.request<ListReviewsResponse>(
       'GET',
-      '/v1/reviews',
+      '/reviews',
       undefined,
       query,
     )
@@ -367,45 +367,45 @@ export class ApiClient {
 
   // --------------------------- review defaults -----------------------------
   // The default code review pipeline ladder (repo default -> account default),
-  // the code_review twin of the /v1/defaults methods below and addressed the
+  // the code_review twin of the /defaults methods below and addressed the
   // same way: `repository` is "owner/name" for a repo rung and null/omitted
-  // for the account rung — never a row id. Read by POST /v1/reviews when no
+  // for the account rung — never a row id. Read by POST /reviews when no
   // config is named; webhook reviews are unaffected. Mutations are refused
   // for sandbox tokens (403).
 
   async listReviewDefaults(): Promise<CodeReviewDefaultView[]> {
     const res = await this.request<ListCodeReviewDefaultsResponse>(
       'GET',
-      '/v1/reviews/defaults',
+      '/reviews/defaults',
     )
     return res.defaults
   }
 
   putReviewDefault(req: PutCodeReviewDefaultRequest): Promise<CodeReviewDefaultView> {
-    return this.request('PUT', '/v1/reviews/defaults', req)
+    return this.request('PUT', '/reviews/defaults', req)
   }
 
   // Clears a rung: the account default when `repository` is omitted, that
   // repo's default otherwise. 404 when the rung isn't set.
   deleteReviewDefault(repository?: string): Promise<void> {
-    return this.request('DELETE', '/v1/reviews/defaults', undefined, { repository })
+    return this.request('DELETE', '/reviews/defaults', undefined, { repository })
   }
 
   // ----------------------------- agent configs ----------------------------
 
   async listAgentConfigs(): Promise<SavedAgentConfig[]> {
-    const res = await this.request<ListAgentConfigsResponse>('GET', '/v1/configs')
+    const res = await this.request<ListAgentConfigsResponse>('GET', '/configs')
     return res.configs
   }
 
   // Opens a pull request that adds the config's YAML to the repo's agents/
   // directory; the agent goes live once it merges and syncs.
   createAgentConfig(req: CreateAgentConfigRequest): Promise<CreatedAgentConfig> {
-    return this.request('POST', '/v1/configs', req)
+    return this.request('POST', '/configs', req)
   }
 
   getAgentConfig(configId: string): Promise<SavedAgentConfig> {
-    return this.request('GET', `/v1/configs/${encodeURIComponent(configId)}`)
+    return this.request('GET', `/configs/${encodeURIComponent(configId)}`)
   }
 
   // ------------------------------ defaults --------------------------------
@@ -415,18 +415,18 @@ export class ApiClient {
   // refused for sandbox tokens (403).
 
   async listAgentDefaults(): Promise<AgentDefaultView[]> {
-    const res = await this.request<ListAgentDefaultsResponse>('GET', '/v1/defaults')
+    const res = await this.request<ListAgentDefaultsResponse>('GET', '/defaults')
     return res.defaults
   }
 
   putAgentDefault(req: PutAgentDefaultRequest): Promise<AgentDefaultView> {
-    return this.request('PUT', '/v1/defaults', req)
+    return this.request('PUT', '/defaults', req)
   }
 
   // Clears a rung: the account default when `repository` is omitted, that
   // repo's default otherwise. 404 when the rung isn't set.
   deleteAgentDefault(repository?: string): Promise<void> {
-    return this.request('DELETE', '/v1/defaults', undefined, { repository })
+    return this.request('DELETE', '/defaults', undefined, { repository })
   }
 
   // ------------------------------- variables --------------------------------
@@ -434,14 +434,14 @@ export class ApiClient {
   // mutation), so callers can render the resulting state.
 
   async listSandboxVariables(): Promise<SandboxVariableSummary[]> {
-    const res = await this.request<GetSandboxVariablesResponse>('GET', '/v1/variables')
+    const res = await this.request<GetSandboxVariablesResponse>('GET', '/variables')
     return res.variables
   }
 
   async putSandboxVariables(
     variables: SandboxVariableInput[],
   ): Promise<SandboxVariableSummary[]> {
-    const res = await this.request<GetSandboxVariablesResponse>('PUT', '/v1/variables', {
+    const res = await this.request<GetSandboxVariablesResponse>('PUT', '/variables', {
       variables,
     })
     return res.variables
@@ -450,29 +450,29 @@ export class ApiClient {
   async deleteSandboxVariable(name: string): Promise<SandboxVariableSummary[]> {
     const res = await this.request<GetSandboxVariablesResponse>(
       'DELETE',
-      `/v1/variables/${encodeURIComponent(name)}`,
+      `/variables/${encodeURIComponent(name)}`,
     )
     return res.variables
   }
 
   // ------------------------------- models ---------------------------------
 
-  // The models a customer may select for their agent (GET /v1/models) — the
+  // The models a customer may select for their agent (GET /models) — the
   // registry behind the dashboard's rate table, most expensive first.
   async listSupportedModels(): Promise<SupportedModel[]> {
-    const res = await this.request<GetSupportedModelsResponse>('GET', '/v1/models')
+    const res = await this.request<GetSupportedModelsResponse>('GET', '/models')
     return res.models
   }
 
   // ---------------------------- agent templates ---------------------------
 
   async listAgentTemplates(): Promise<AgentTemplate[]> {
-    const res = await this.request<ListAgentTemplatesResponse>('GET', '/v1/templates')
+    const res = await this.request<ListAgentTemplatesResponse>('GET', '/templates')
     return res.templates
   }
 
   getAgentTemplate(slug: string): Promise<AgentTemplate> {
-    return this.request('GET', `/v1/templates/${encodeURIComponent(slug)}`)
+    return this.request('GET', `/templates/${encodeURIComponent(slug)}`)
   }
 
   // ------------------------ integration discovery -------------------------
@@ -481,42 +481,42 @@ export class ApiClient {
   // (an Ellipsis account is a GitHub account) and Sentry returns an empty list.
 
   getIntegrations(): Promise<GetIntegrationsResponse> {
-    return this.request('GET', '/v1/integrations')
+    return this.request('GET', '/integrations')
   }
 
   listGithubRepositories(): Promise<ListGithubRepositoriesResponse> {
-    return this.request('GET', '/v1/github/repos')
+    return this.request('GET', '/github/repos')
   }
 
   listGithubMembers(): Promise<ListGithubMembersResponse> {
-    return this.request('GET', '/v1/github/members')
+    return this.request('GET', '/github/members')
   }
 
   listSlackChannels(): Promise<ListSlackChannelsResponse> {
-    return this.request('GET', '/v1/slack/channels')
+    return this.request('GET', '/slack/channels')
   }
 
   listSlackMembers(): Promise<ListSlackMembersResponse> {
-    return this.request('GET', '/v1/slack/members')
+    return this.request('GET', '/slack/members')
   }
 
   listLinearTeams(): Promise<ListLinearTeamsResponse> {
-    return this.request('GET', '/v1/linear/teams')
+    return this.request('GET', '/linear/teams')
   }
 
   listSentryOrganizations(): Promise<ListSentryOrganizationsResponse> {
-    return this.request('GET', '/v1/sentry/organizations')
+    return this.request('GET', '/sentry/organizations')
   }
 
   // --------------------------- device-code auth ---------------------------
   // Unauthenticated: the CLI has no credential yet — that's what it's obtaining.
 
   startCliAuth(): Promise<CliAuthStart> {
-    return this.request('POST', '/v1/cli-auth/start')
+    return this.request('POST', '/cli-auth/start')
   }
 
   pollCliAuth(deviceCode: string): Promise<CliAuthPoll> {
-    return this.request('POST', '/v1/cli-auth/poll', { device_code: deviceCode })
+    return this.request('POST', '/cli-auth/poll', { device_code: deviceCode })
   }
 }
 

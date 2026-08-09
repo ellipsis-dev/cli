@@ -14,13 +14,13 @@ describe('integration discovery endpoints', () => {
 
   it('hits the provider-namespaced paths', async () => {
     const cases: Array<[(api: ApiClient) => Promise<unknown>, string, unknown]> = [
-      [(api) => api.getIntegrations(), '/v1/integrations', { sentry: [] }],
-      [(api) => api.listGithubRepositories(), '/v1/github/repos', { repositories: [] }],
-      [(api) => api.listGithubMembers(), '/v1/github/members', { members: [] }],
-      [(api) => api.listSlackChannels(), '/v1/slack/channels', { channels: [] }],
-      [(api) => api.listSlackMembers(), '/v1/slack/members', { members: [] }],
-      [(api) => api.listLinearTeams(), '/v1/linear/teams', { teams: [] }],
-      [(api) => api.listSentryOrganizations(), '/v1/sentry/organizations', { organizations: [] }],
+      [(api) => api.getIntegrations(), '/integrations', { sentry: [] }],
+      [(api) => api.listGithubRepositories(), '/github/repos', { repositories: [] }],
+      [(api) => api.listGithubMembers(), '/github/members', { members: [] }],
+      [(api) => api.listSlackChannels(), '/slack/channels', { channels: [] }],
+      [(api) => api.listSlackMembers(), '/slack/members', { members: [] }],
+      [(api) => api.listLinearTeams(), '/linear/teams', { teams: [] }],
+      [(api) => api.listSentryOrganizations(), '/sentry/organizations', { organizations: [] }],
     ]
     for (const [call, path, body] of cases) {
       const fetchMock = stub(body)

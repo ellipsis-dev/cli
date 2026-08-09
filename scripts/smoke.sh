@@ -2,7 +2,7 @@
 #
 # Manual end-to-end smoke test of the Ellipsis CLI against a backend.
 #
-# Drives the device-code login flow and then exercises the authenticated /v1
+# Drives the device-code login flow and then exercises the authenticated public API
 # surface. Uses an isolated config dir so it never touches your real token.
 #
 # Usage:
@@ -39,7 +39,7 @@ echo
 echo "== Logging in (approve the printed request, then this continues) =="
 npx tsx src/cli.tsx login --no-browser
 
-echo "== Authenticated /v1 calls =="
+echo "== Authenticated API calls =="
 run me
 run budget
 run usage

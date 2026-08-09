@@ -16,7 +16,7 @@ export function registerTemplate(program: Command): void {
         .description('List the built-in agent templates and the slugs --template takes'),
       'ls',
     ),
-    'GET /v1/templates',
+    'GET /templates',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {

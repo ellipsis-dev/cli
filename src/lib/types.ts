@@ -1,4 +1,4 @@
-// TypeScript types for the backend `/v1` request/response models.
+// TypeScript types for the backend public API request/response models.
 //
 // The session-stream surface (records, inbox messages, turns, the enriched
 // session wire shape, and their request/response DTOs) comes from
@@ -6,7 +6,8 @@
 // re-exported below under the CLI's historical names. Everything else (the
 // endpoints outside the SDK's REST surface: session list/start, configs,
 // sandboxes, integrations, …) remains a hand-rolled mirror of the Pydantic
-// models in ellipsis's v1_router until the SDK's OpenAPI surface widens.
+// models in ellipsis's public API router (v1_router.py) until the SDK's
+// OpenAPI surface widens.
 // Nested config/input/output payloads are typed loosely (the CLI only
 // displays summary fields).
 
@@ -157,7 +158,7 @@ export interface AgentSession {
   cost_fee: number
   tokens_total: number
   metadata: Record<string, string>
-  // Present on the POST /v1/sessions response only (StartAgentSessionResponse):
+  // Present on the POST /sessions response only (StartAgentSessionResponse):
   // which config the session runs under and which rung of the defaults ladder
   // chose it (null when an explicit config/template bypassed resolution).
   resolved_config_name?: string | null
@@ -179,7 +180,7 @@ export interface SavedAgentConfig {
   [key: string]: unknown
 }
 
-// Inline agent config payload accepted by POST /v1/sessions. Opaque to the
+// Inline agent config payload accepted by POST /sessions. Opaque to the
 // CLI — passed straight through from a user-supplied JSON file.
 export type AgentConfig = Record<string, unknown>
 
@@ -235,7 +236,7 @@ export interface StartAgentSessionRequest {
   force_rebuild?: boolean
 }
 
-// Replay payload for POST /v1/sessions/{id}/replay. Re-runs an existing
+// Replay payload for POST /sessions/{id}/replay. Re-runs an existing
 // session's trigger input. Reuses the original session's frozen config
 // snapshot unless config_id is given. The override fields behave exactly as on
 // StartAgentSessionRequest (mapping or string, not both). `prompt` is omitted
@@ -247,7 +248,7 @@ export interface ReplayAgentSessionRequest {
   prompt?: string
 }
 
-// One hook-driven transcript sync from this laptop (POST /v1/sessions/sync).
+// One hook-driven transcript sync from this laptop (POST /sessions/sync).
 // The transcript is redacted client-side, gzipped, then base64-encoded.
 export interface SyncAgentSessionRequest {
   cc_session_id: string
@@ -279,7 +280,7 @@ export interface ListAgentConfigsResponse {
   configs: SavedAgentConfig[]
 }
 
-// One rung of the default-config ladder (GET /v1/defaults). Rungs are
+// One rung of the default-config ladder (GET /defaults). Rungs are
 // addressed by `repository`: "owner/name" for a repo default, null for the
 // account-wide default — never by row id.
 export interface AgentDefaultView {
@@ -298,7 +299,7 @@ export interface ListAgentDefaultsResponse {
   defaults: AgentDefaultView[]
 }
 
-// Body of PUT /v1/defaults: point a rung at a config. `repository` omitted
+// Body of PUT /defaults: point a rung at a config. `repository` omitted
 // sets the account default; "owner/name" sets that repo's default.
 export interface PutAgentDefaultRequest {
   repository?: string
@@ -306,9 +307,9 @@ export interface PutAgentDefaultRequest {
 }
 
 // One rung of the default code review pipeline ladder (GET
-// /v1/reviews/defaults) — the code_review twin of AgentDefaultView, pointing
+// /reviews/defaults) — the code_review twin of AgentDefaultView, pointing
 // at a synced `kind: code_review` pipeline (crcfg_…) instead of an agent
-// config. Read by POST /v1/reviews when no config is named: repo default ->
+// config. Read by POST /reviews when no config is named: repo default ->
 // account default -> the oldest synced pipeline -> the platform defaults.
 export interface CodeReviewDefaultView {
   id: string
@@ -326,14 +327,14 @@ export interface ListCodeReviewDefaultsResponse {
   defaults: CodeReviewDefaultView[]
 }
 
-// Body of PUT /v1/reviews/defaults: point a rung at a pipeline. `repository`
+// Body of PUT /reviews/defaults: point a rung at a pipeline. `repository`
 // omitted sets the account default; "owner/name" sets that repo's default.
 export interface PutCodeReviewDefaultRequest {
   repository?: string
   config_id: string
 }
 
-// Create-config payload for POST /v1/configs. Exactly one of `config` (inline)
+// Create-config payload for POST /configs. Exactly one of `config` (inline)
 // or `template_id` (a gallery template slug). `repository` is a bare repo name
 // in the caller's account — the owner is always the account.
 export interface CreateAgentConfigRequest {
@@ -354,7 +355,7 @@ export interface CreatedAgentConfig {
   pull_request_url: string
 }
 
-// A built-in starter template served by GET /v1/templates. `yaml` is the
+// A built-in starter template served by GET /templates. `yaml` is the
 // schema-valid agent config the CLI writes to disk; the rest is display copy.
 export interface AgentTemplate {
   slug: string
@@ -412,14 +413,14 @@ export interface ListAgentSessionsQuery {
   start?: string
   end?: string
   limit?: number
-  // A GitHub account id (GET /v1/github/members); scopes the list to sessions
+  // A GitHub account id (GET /github/members); scopes the list to sessions
   // attributed to that developer. The CLI resolves it from a --author login.
   author_id?: number
 }
 
 // ----------------------------- session records ---------------------------
 
-// One immutable archived segment of the session log (GET /v1/sessions/{id}/log):
+// One immutable archived segment of the session log (GET /sessions/{id}/log):
 // its feed_seq range plus a short-lived presigned S3 GET. Segments are gzip
 // members — download them in order and concatenate for the whole log.
 export interface SessionLogSegment {
@@ -449,14 +450,14 @@ export interface GetSessionLogResponse {
   segments: SessionLogSegment[]
 }
 
-// GET /v1/sessions/{id}/ide (`agent session ide`): the live sandbox's
+// GET /sessions/{id}/ide (`agent session ide`): the live sandbox's
 // code-server tunnel URL. Unguessable, customer-scoped at discovery, and dead
 // once the sandbox is torn down — fetch it fresh on every open, never store it.
 export interface GetSessionIdeResponse {
   url: string
 }
 
-// GET /v1/sessions/{id}/ports/{port} (`agent session port`): the tunnel URL
+// GET /sessions/{id}/ports/{port} (`agent session port`): the tunnel URL
 // for one of the sandbox's preview ports (a dev server the agent or the IDE
 // user started). Same lifetime/gating as the IDE URL.
 export interface GetSessionPortResponse {
@@ -522,7 +523,7 @@ export interface SearchSessionsResponse {
 }
 
 // -------------------------- integration discovery ------------------------
-// Read-only views of what's connected for the account (GET /v1/integrations
+// Read-only views of what's connected for the account (GET /integrations
 // and the per-provider listings). Responses never include secrets.
 
 export interface GithubIntegrationSummary {
@@ -572,7 +573,7 @@ export interface GetIntegrationsResponse {
 }
 
 // A repository connected to the installation: a valid `repository` for
-// POST /v1/configs and for repository lists in an agent config.
+// POST /configs and for repository lists in an agent config.
 export interface RepositorySummary {
   id: number
   name: string
@@ -674,7 +675,7 @@ export interface PutSandboxVariablesRequest {
 }
 
 // ------------------------------- analytics -------------------------------
-// Mirrors of the /v1/analytics/* responses (analytics_service.py) — the same
+// Mirrors of the /analytics/* responses (analytics_service.py) — the same
 // aggregation behind the app's /analytics dashboard, token-authed. The CLI
 // renders the leaderboards and totals; feed items and day buckets it only
 // passes through to --json are typed loosely.

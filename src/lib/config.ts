@@ -26,7 +26,7 @@ function legacyConfigFile(): string {
 }
 
 // One Ellipsis instance the CLI can target (prod, beta, or a self-hosted
-// deployment). `apiBase` is the /v1 host; `appBase` is the dashboard host used
+// deployment). `apiBase` is the API host; `appBase` is the dashboard host used
 // to build clickable links and the login verification URL — derived from
 // `apiBase` by default (api. -> app.), but stored explicitly so a self-hosted
 // instance whose dashboard host isn't a mechanical swap can set it directly
