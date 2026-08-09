@@ -82,11 +82,11 @@ describe('ApiClient.request', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const api = new ApiClient('http://api.test', 'tok_123')
-    const out = await api.request<{ ok: boolean }>('GET', '/v1/me')
+    const out = await api.request<{ ok: boolean }>('GET', '/me')
 
     expect(out).toEqual({ ok: true })
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/v1/me')
+    expect(url).toBe('http://api.test/me')
     expect((init as RequestInit).headers).toMatchObject({ authorization: 'Bearer tok_123' })
   })
 
@@ -97,7 +97,7 @@ describe('ApiClient.request', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await new ApiClient('http://api.test', 't').listAgentSessions({ limit: 5, source: ['cli'] })
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/sessions?limit=5&source=cli')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/sessions?limit=5&source=cli')
   })
 
   it('throws ApiError carrying status + server detail on non-2xx', async () => {
@@ -136,7 +136,7 @@ describe('ApiClient.request', () => {
   it('tolerates empty response bodies', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })))
     const api = new ApiClient('http://api.test', 't')
-    await expect(api.request('DELETE', '/v1/whatever')).resolves.toBeUndefined()
+    await expect(api.request('DELETE', '/whatever')).resolves.toBeUndefined()
   })
 
   it('exposes ApiError as an Error subclass', () => {
@@ -160,7 +160,7 @@ describe('ApiClient sandbox variables', () => {
 
     const out = await new ApiClient('http://api.test', 't').listSandboxVariables()
     expect(out).toEqual([{ name: 'A', created_at: '', updated_at: '' }])
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/variables')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/variables')
     expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
   })
 
@@ -172,7 +172,7 @@ describe('ApiClient sandbox variables', () => {
 
     await new ApiClient('http://api.test', 't').putSandboxVariables([{ name: 'TOKEN', value: 'x' }])
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/v1/variables')
+    expect(url).toBe('http://api.test/variables')
     expect((init as RequestInit).method).toBe('PUT')
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({
       variables: [{ name: 'TOKEN', value: 'x' }],
@@ -187,7 +187,7 @@ describe('ApiClient sandbox variables', () => {
 
     await new ApiClient('http://api.test', 't').deleteSandboxVariable('MY/VAR')
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/v1/variables/MY%2FVAR')
+    expect(url).toBe('http://api.test/variables/MY%2FVAR')
     expect((init as RequestInit).method).toBe('DELETE')
   })
 })
@@ -212,7 +212,7 @@ describe('ApiClient review defaults', () => {
 
     const out = await new ApiClient('http://api.test', 't').listReviewDefaults()
     expect(out).toEqual([rung])
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/reviews/defaults')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/reviews/defaults')
     expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
   })
 
@@ -222,7 +222,7 @@ describe('ApiClient review defaults', () => {
 
     await new ApiClient('http://api.test', 't').putReviewDefault({ config_id: 'crcfg_1' })
     let [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/v1/reviews/defaults')
+    expect(url).toBe('http://api.test/reviews/defaults')
     expect((init as RequestInit).method).toBe('PUT')
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({ config_id: 'crcfg_1' })
 
@@ -243,12 +243,12 @@ describe('ApiClient review defaults', () => {
 
     const api = new ApiClient('http://api.test', 't')
     await api.deleteReviewDefault()
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/reviews/defaults')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/reviews/defaults')
     expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('DELETE')
 
     await api.deleteReviewDefault('acme/api')
     expect(fetchMock.mock.calls[1][0]).toBe(
-      'http://api.test/v1/reviews/defaults?repository=acme%2Fapi',
+      'http://api.test/reviews/defaults?repository=acme%2Fapi',
     )
   })
 })
@@ -271,7 +271,7 @@ describe('getSessionLog', () => {
 
     const out = await new ApiClient('http://api.test', 't').getSessionLog('session_1')
     expect(out).toEqual(body)
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/sessions/session_1/log')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/sessions/session_1/log')
   })
 })
 
@@ -289,7 +289,7 @@ describe('replayAgentSession', () => {
     })
     expect(out.id).toBe('session_2')
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/v1/sessions/session%2F1/replay')
+    expect(url).toBe('http://api.test/sessions/session%2F1/replay')
     expect((init as RequestInit).method).toBe('POST')
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({
       config_override: { claude: { model: 'claude-opus-4-8' } },
@@ -309,7 +309,7 @@ describe('stopAgentSession', () => {
     const out = await new ApiClient('http://api.test', 't').stopAgentSession('session/1')
     expect(out).toEqual({ id: 'session_1', status: 'stopped' })
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/v1/sessions/session%2F1/stop')
+    expect(url).toBe('http://api.test/sessions/session%2F1/stop')
     expect((init as RequestInit).method).toBe('POST')
   })
 })
@@ -328,7 +328,7 @@ describe('agent templates', () => {
 
     const out = await new ApiClient('http://api.test', 't').listAgentTemplates()
     expect(out.map((t) => t.slug)).toEqual(['a', 'b'])
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/templates')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/templates')
   })
 
   it('fetches a single template by slug (encoded)', async () => {
@@ -340,7 +340,7 @@ describe('agent templates', () => {
 
     const out = await new ApiClient('http://api.test', 't').getAgentTemplate('ci-failure-triager')
     expect(out.yaml).toBe('x')
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/templates/ci-failure-triager')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/templates/ci-failure-triager')
   })
 })
 
@@ -363,7 +363,7 @@ describe('supported models', () => {
 
     const out = await new ApiClient('http://api.test', 't').listSupportedModels()
     expect(out.map((m) => m.id)).toEqual(['claude-opus-5'])
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/models')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/models')
   })
 })
 
@@ -390,7 +390,7 @@ describe('createAgentConfig', () => {
     })
     expect(out.pull_request_url).toBe('https://github.com/octocat/api/pull/7')
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/v1/configs')
+    expect(url).toBe('http://api.test/configs')
     expect((init as RequestInit).method).toBe('POST')
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({
       template_id: 'ci-failure-triager',
@@ -422,7 +422,7 @@ describe('ApiClient assets', () => {
     })
     expect(out.url).toBe('https://app.ellipsis.dev/assets/a1')
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/v1/assets')
+    expect(url).toBe('http://api.test/assets')
     expect((init as RequestInit).method).toBe('POST')
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({
       filename: 'shot.png',
@@ -443,7 +443,7 @@ describe('ApiClient assets', () => {
     })
     expect(out).toEqual([{ id: 'a1' }])
     expect(fetchMock.mock.calls[0][0]).toBe(
-      'http://api.test/v1/assets?agent_session_id=session_1&limit=5',
+      'http://api.test/assets?agent_session_id=session_1&limit=5',
     )
   })
 
@@ -459,7 +459,7 @@ describe('ApiClient assets', () => {
 
     const out = await new ApiClient('http://api.test', 't').getAsset('a/1')
     expect(out.download_url).toBe('d')
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/assets/a%2F1')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/assets/a%2F1')
   })
 
   it('DELETEs the asset id (encoded) and tolerates a 204 empty body', async () => {
@@ -469,7 +469,7 @@ describe('ApiClient assets', () => {
     const out = await new ApiClient('http://api.test', 't').deleteAsset('a/1')
     expect(out).toBeUndefined()
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/v1/assets/a%2F1')
+    expect(url).toBe('http://api.test/assets/a%2F1')
     expect((init as RequestInit).method).toBe('DELETE')
   })
 })
@@ -486,7 +486,7 @@ describe('ApiClient session IDE and ports', () => {
 
     const out = await new ApiClient('http://api.test', 't').getSessionIde('session_1')
     expect(out.url).toBe('https://ide.modal.host')
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/sessions/session_1/ide')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/sessions/session_1/ide')
     expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
   })
 
@@ -502,7 +502,7 @@ describe('ApiClient session IDE and ports', () => {
     const out = await new ApiClient('http://api.test', 't').getSessionPort('session_1', 3000)
     expect(out).toEqual({ url: 'https://p3000.modal.host', port: 3000 })
     expect(fetchMock.mock.calls[0][0]).toBe(
-      'http://api.test/v1/sessions/session_1/ports/3000',
+      'http://api.test/sessions/session_1/ports/3000',
     )
   })
 })

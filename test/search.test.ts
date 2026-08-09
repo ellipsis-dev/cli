@@ -35,7 +35,7 @@ function session(overrides: Partial<AgentSession> = {}): AgentSession {
 describe('searchSessions', () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it('GETs /v1/sessions/search with repeated facet keys', async () => {
+  it('GETs /sessions/search with repeated facet keys', async () => {
     const fetchMock = vi.fn(
       async () =>
         new Response(JSON.stringify({ results: [], attributed_users: {} }), { status: 200 }),
@@ -51,7 +51,7 @@ describe('searchSessions', () => {
       limit: 20,
     })
     const url = fetchMock.mock.calls[0][0] as string
-    expect(url).toContain('http://api.test/v1/sessions/search?')
+    expect(url).toContain('http://api.test/sessions/search?')
     expect(url).toContain('q=shift+trade+webhook')
     expect(url).toContain('scope=both')
     expect(url).toContain('author_id=5201153')
@@ -72,7 +72,7 @@ describe('getAgentSessionRecords', () => {
 
     const out = await new ApiClient('http://api.test', 't').getAgentSessionRecords('session/1')
     expect(out.map((s) => s.id)).toEqual(['rec_1'])
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/v1/sessions/session%2F1/records')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/sessions/session%2F1/records')
   })
 })
 

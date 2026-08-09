@@ -294,7 +294,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   // The composer's picker options, fetched once when the new-session pane
   // first opens: the dashboard composer's three choices — saved agent
   // configs, the account's repositories, and the selectable models. A models
-  // failure (an older server without GET /v1/models) leaves the list empty
+  // failure (an older server without GET /models) leaves the list empty
   // and the composer falls back to its built-in set.
   const [configs, setConfigs] = useState<SavedAgentConfig[] | null>(null)
   const [repos, setRepos] = useState<string[] | null>(null)
@@ -833,7 +833,7 @@ function NewSessionPane({
     ],
     [configs],
   )
-  // The server's selectable set (GET /v1/models); before it lands — and on an
+  // The server's selectable set (GET /models); before it lands — and on an
   // older server that has no such route — the built-in fallback list.
   const modelOptions = useMemo(() => composerModelOptions(models ?? []), [models])
   // When the cwd names a repo there is no "Default" row: the detected repo

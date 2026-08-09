@@ -58,7 +58,7 @@ describe('friendlyErrorMessage', () => {
   })
 
   it('maps a 401 to a re-login hint instead of the raw HTTP failure', () => {
-    const err = new ApiError(401, 'GET', '/v1/me', 'Unauthorized', 'req_1')
+    const err = new ApiError(401, 'GET', '/me', 'Unauthorized', 'req_1')
     expect(friendlyErrorMessage(err)).toBe(
       'Your login is invalid or has expired. Run `agent login` to re-authenticate.',
     )
@@ -66,7 +66,7 @@ describe('friendlyErrorMessage', () => {
 
   it('blames ELLIPSIS_API_TOKEN when the rejected credential came from the env', () => {
     process.env.ELLIPSIS_API_TOKEN = 'stale_tok'
-    const err = new ApiError(401, 'GET', '/v1/me', 'Unauthorized')
+    const err = new ApiError(401, 'GET', '/me', 'Unauthorized')
     expect(friendlyErrorMessage(err)).toMatch(/ELLIPSIS_API_TOKEN/)
   })
 
@@ -74,7 +74,7 @@ describe('friendlyErrorMessage', () => {
     const err = new ApiError(
       429,
       'POST',
-      '/v1/assets',
+      '/assets',
       'Asset limit reached: your organization is storing 50 of 50 assets. ' +
         'Delete assets you no longer need, or email team@ellipsis.dev to raise the limit.',
     )
@@ -85,9 +85,9 @@ describe('friendlyErrorMessage', () => {
   })
 
   it('passes other ApiErrors through with the server detail intact', () => {
-    const err = new ApiError(409, 'POST', '/v1/sessions/s_1/messages', 'Session is closed')
+    const err = new ApiError(409, 'POST', '/sessions/s_1/messages', 'Session is closed')
     expect(friendlyErrorMessage(err)).toBe(
-      'POST /v1/sessions/s_1/messages failed: 409 Session is closed',
+      'POST /sessions/s_1/messages failed: 409 Session is closed',
     )
   })
 

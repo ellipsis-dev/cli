@@ -50,9 +50,9 @@ export function registerReview(program: Command): void {
     review
       .command('start [pull-request]', { isDefault: true })
       .description('Review a pull request by number, or your working tree if you omit one'),
-    'POST /v1/reviews',
-    'WS /v1/sessions/{id}/stream',
-    'GET /v1/reviews/{id}',
+    'POST /reviews',
+    'WS /sessions/{id}/stream',
+    'GET /reviews/{id}',
   )
     .option('--repo <owner/name>', 'repository to review (default: this git remote)')
     .option(
@@ -121,7 +121,7 @@ export function registerReview(program: Command): void {
     review
       .command('get <review-id>')
       .description("Print a review's findings, scope, and whether it posted"),
-    'GET /v1/reviews/{id}',
+    'GET /reviews/{id}',
   )
     .option('--json', 'output raw JSON')
     .action(async (reviewId: string, opts: { json?: boolean }) => {
@@ -137,7 +137,7 @@ export function registerReview(program: Command): void {
       review.command('list').description("List a pull request's reviews, newest first"),
       'ls',
     ),
-    'GET /v1/reviews',
+    'GET /reviews',
   )
     .option('--repo <owner/name>', 'only reviews of this repository')
     .option('--pr <number>', 'only reviews of this pull request', parsePositiveInt)
@@ -285,11 +285,11 @@ function registerReviewDefaults(review: Command): void {
         .description('Show or set which code review pipeline runs when a review names none'),
       'defaults',
     ),
-    'GET /v1/reviews/defaults',
+    'GET /reviews/defaults',
   )
     .option('--json', 'output raw JSON')
     // Bare `agent review default`: the effective default for the repo you're
-    // standing in, computed locally from GET /v1/reviews/defaults + the origin
+    // standing in, computed locally from GET /reviews/defaults + the origin
     // remote (the same ladder the server resolves at review start).
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
@@ -328,7 +328,7 @@ function registerReviewDefaults(review: Command): void {
         .description('List every default that is set, account rung and per-repo rungs'),
       'ls',
     ),
-    'GET /v1/reviews/defaults',
+    'GET /reviews/defaults',
   )
     .option('--json', 'output raw JSON')
     // The group also defines --json (for the bare view), and commander parses
@@ -364,7 +364,7 @@ function registerReviewDefaults(review: Command): void {
     defaults
       .command('set <config-id>')
       .description('Set the account default code review pipeline, or a repo default with --repo'),
-    'PUT /v1/reviews/defaults',
+    'PUT /reviews/defaults',
   )
     .option(
       '-r, --repo [repository]',
@@ -397,7 +397,7 @@ function registerReviewDefaults(review: Command): void {
       'rm',
       'delete',
     ),
-    'DELETE /v1/reviews/defaults',
+    'DELETE /reviews/defaults',
   )
     .option(
       '-r, --repo [repository]',

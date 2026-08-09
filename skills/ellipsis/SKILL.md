@@ -55,7 +55,7 @@ the logs of a session they do not own.
   YAML.
 
 Surfaces: the dashboard at app.ellipsis.dev, the REST API at
-api.ellipsis.dev/v1, and the `agent` CLI. All three drive the same `/v1` API.
+api.ellipsis.dev, and the `agent` CLI. All three drive the same API.
 Pricing is usage based, the tokens and compute a session spent plus a platform
 fee. There are no seats.
 
@@ -72,7 +72,7 @@ fee. There are no seats.
 - **A task that should not block the laptop**: `agent session handoff` pushes a
   snapshot of the working tree and continues the work in a cloud session.
 - **Delegation from scripts or CI**: `agent session start` or
-  `POST /v1/sessions`. With `--watch` it streams into the log and exits nonzero
+  `POST /sessions`. With `--watch` it streams into the log and exits nonzero
   unless the session completes, so it works as a gate.
 
 Things teams actually build: screenshot every pull request that touches the
@@ -359,7 +359,7 @@ cost and latency.
 
 ## The agent CLI
 
-One open-source binary named `agent`, a terminal client for the same `/v1` API
+One open-source binary named `agent`, a terminal client for the same API
 the dashboard uses. Most commands accept `--json` for the raw API response,
 which makes it as comfortable for a coding agent as for a human.
 

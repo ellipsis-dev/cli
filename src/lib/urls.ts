@@ -1,6 +1,6 @@
 // Builders for clickable dashboard (web app) links. Pure string functions so
 // they're unit-testable; callers pass the resolved app base (resolveAppBase)
-// and the customer's account login (from GET /v1/me — the routes are scoped by
+// and the customer's account login (from GET /me — the routes are scoped by
 // login). Mirrors the backend's link format in github_brand.py.
 
 // Sessions open on the account page with the session picked out by query
@@ -15,7 +15,7 @@ export function configUrl(appBase: string, accountLogin: string, configId: strin
 }
 
 // The device-code approval page for `agent login`. `userCode` is the user_code
-// minted by POST /v1/cli-auth/start. Built client-side from the active host's
+// minted by POST /cli-auth/start. Built client-side from the active host's
 // app base (not the server's verification_uri_complete) so the host always
 // matches the instance the CLI is pointed at: the backend fills its own copy
 // from an env var that defaults to prod, so a beta / self-hosted login would

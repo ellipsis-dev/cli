@@ -45,7 +45,7 @@ const asset = alsoKnownAs(
 
 apiRoutes(
   alsoKnownAs(asset.command('delete <asset-id>').description('...'), 'rm'),
-  'DELETE /v1/assets/{id}',
+  'DELETE /assets/{id}',
 )
 ```
 
@@ -93,8 +93,8 @@ Other rules:
 One line, imperative verb first, no trailing period.
 
 - **Say what the caller gets, not which endpoint answers.** `List your stored
-  assets, newest first` — not `List assets (GET /v1/assets)`.
-- **Routes go in the long help**, last, via `apiRoutes(cmd, 'GET /v1/...')`.
+  assets, newest first` — not `List assets (GET /assets)`.
+- **Routes go in the long help**, last, via `apiRoutes(cmd, 'GET /...')`.
   When a command also has an `addHelpText('after', ...)` usage note, chain the
   note *inside* the `apiRoutes()` call so the route line still lands last.
 - **Name the concept the same way every time.** The object under `agent

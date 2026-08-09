@@ -6,7 +6,7 @@
 # this drives the whole device-code flow itself: it starts `agent login`,
 # scrapes the user code, and approves it headlessly by calling the cli_auth
 # service inside the running `public_api` container — then exercises the
-# authenticated /v1 surface. Uses a throwaway config dir, so your real token is
+# authenticated API surface. Uses a throwaway config dir, so your real token is
 # never touched.
 #
 # Prereqs: docker compose up (public_api reachable at $ELLIPSIS_API_BASE).
@@ -99,7 +99,7 @@ LOGIN_PID=""
 cat "$LOGIN_OUT"
 echo
 
-echo "== Authenticated /v1 calls =="
+echo "== Authenticated API calls =="
 run me
 run budget
 run usage

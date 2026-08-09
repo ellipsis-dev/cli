@@ -7,11 +7,11 @@ export function registerPing(program: Command): void {
     program
       .command('ping')
       .description('Check that the API is reachable and the credential is valid'),
-    'GET /v1/me',
+    'GET /me',
   )
     .action(async () => {
       // There's no unauthenticated health route on the public API, so we probe
-      // the lightest authenticated endpoint (/v1/me): a 200 proves the API is
+      // the lightest authenticated endpoint (/me): a 200 proves the API is
       // reachable AND the stored token is valid.
       const api = new ApiClient()
       try {

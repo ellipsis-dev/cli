@@ -5,15 +5,15 @@
 
 ## 1. Background
 
-The CLI can start runs and read their state over the public `/v1` REST API, but
+The CLI can start runs and read their state over the public REST API, but
 it cannot stream a run's output. `agent run get --watch` exists today and gives a
-**status-level** live view by polling `GET /v1/agents/runs/{id}` until the run
+**status-level** live view by polling `GET /agents/runs/{id}` until the run
 reaches a terminal status (`completed`/`error`/`cancelled`/`stopped`). It shows
 status transitions and the final summary — not the step-by-step output.
 
-**Crucially, the backend already streams steps live — just not over `/v1`.** The
+**Crucially, the backend already streams steps live — just not over the public API.** The
 dashboard consumes a WebSocket stream; this work is about re-exposing that same
-stream under `/v1` for bearer-authenticated CLI clients. The bulk of the
+stream on the public API for bearer-authenticated CLI clients. The bulk of the
 machinery (step model, persistence, event bus) already exists and must be reused,
 not reinvented.
 
@@ -56,14 +56,14 @@ not reinvented.
 back to REST status-polling when streaming is unavailable. The same flag covers
 both modes — no new top-level command.
 
-## 3. Server-side requirements (`/v1`)
+## 3. Server-side requirements (public API)
 
 **Re-export the existing stream; do not build a parallel one.** Reuse
 `agent_steps`, `CCStep`, and the `AgentEventBus` exactly as the frontend stream
-does. The `/v1` endpoint is a thin re-auth + re-encode of `_stream_run_loop`.
+does. The public endpoint is a thin re-auth + re-encode of `_stream_run_loop`.
 
-1. **Endpoint:** `GET /v1/agents/runs/{run_id}/stream`, upgraded to WebSocket.
-2. **Auth — bearer, not ticket.** The CLI holds a `/v1` bearer token, so resolve
+1. **Endpoint:** `GET /agents/runs/{run_id}/stream`, upgraded to WebSocket.
+2. **Auth — bearer, not ticket.** The CLI holds a public API bearer token, so resolve
    it with the same `V1Auth` path as the REST API (Authorization header on the
    handshake, which non-browser clients *can* set), authorizing the run's
    customer. The 60s `?ticket=` dance is a browser workaround the CLI doesn't
@@ -85,7 +85,7 @@ does. The `/v1` endpoint is a thin re-auth + re-encode of `_stream_run_loop`.
 
 ## 4. Client-side requirements (this repo)
 
-1. `agent run get <id> --watch` opens the `/v1` stream and renders frames:
+1. `agent run get <id> --watch` opens the public API stream and renders frames:
    `snapshot`/`steps_append` → render each `CCStep` (assistant text + tool calls,
    tool stdout/stderr, thinking if `--verbose`); `run` → status transitions;
    terminal close → final summary. Exit 0 on a successful terminal status,
@@ -121,7 +121,7 @@ Mirror the backend's existing codes where possible:
   time, sharing the `AgentStep`/`CCStep` schema with the dashboard.
 - Killing the socket mid-run and reconnecting with `?since=<last step_index>`
   resumes with no lost or duplicated steps and without a full re-snapshot.
-- `--watch` against a backend without the `/v1` endpoint transparently falls back
+- `--watch` against a backend without the stream endpoint transparently falls back
   to REST status-polling and still completes.
 - `--json --watch` emits valid NDJSON, one frame per line.
 - Unit tests for the client frame handler, the `since` resume cursor, and the
@@ -132,7 +132,7 @@ Mirror the backend's existing codes where possible:
 ## 7. Out of scope
 
 - Bidirectional control (stop/input). `run stop` is tracked separately and also
-  has no `/v1` endpoint yet.
+  has no stream endpoint yet.
 - Re-architecting the transport (NOTIFY + DB-as-source-of-truth stays).
 - Multiplexing multiple runs over one socket.
 

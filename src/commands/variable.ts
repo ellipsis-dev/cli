@@ -20,7 +20,7 @@ export function registerVariable(program: Command): void {
       variable.command('list').description('List the variable names (never their values)'),
       'ls',
     ),
-    'GET /v1/variables',
+    'GET /variables',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
@@ -34,7 +34,7 @@ export function registerVariable(program: Command): void {
     variable
       .command('set [assignments...]')
       .description('Create or update variables, e.g. `set A=1 B=2`'),
-    'PUT /v1/variables',
+    'PUT /variables',
   )
     .option('-f, --from-file <path>', 'load variables from a .env or .json file')
     .option('--json', 'output raw JSON')
@@ -52,7 +52,7 @@ export function registerVariable(program: Command): void {
 
   apiRoutes(
     alsoKnownAs(variable.command('delete <name>').description('Delete a variable'), 'rm'),
-    'DELETE /v1/variables/{name}',
+    'DELETE /variables/{name}',
   )
     .option('--json', 'output raw JSON')
     .action(async (name: string, opts: { json?: boolean }) => {

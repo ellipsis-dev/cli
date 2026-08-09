@@ -21,10 +21,10 @@ export function resolveWsBase(apiBase?: string): string {
   return DEFAULT_WS_BASE
 }
 
-// The bearer door's stream URL: /v1/sessions/{id}/stream plus the SDK's
+// The bearer door's stream URL: /sessions/{id}/stream plus the SDK's
 // handshake query (`protocol=2`, `after_seq` when resuming).
 export function buildStreamUrl(wsBase: string, sessionId: string, query: string): string {
-  return `${wsBase}/v1/sessions/${encodeURIComponent(sessionId)}/stream?${query}`
+  return `${wsBase}/sessions/${encodeURIComponent(sessionId)}/stream?${query}`
 }
 
 // An OpenSocket over the `ws` package with bearer auth — what every CLI
