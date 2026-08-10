@@ -1305,8 +1305,17 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           transcript, in-flight sends, the live activity lines — so nothing
           can render past the frame and every line on screen is scrollable.
           Dim markers count what is out of frame above/below, and they sit
-          inside the budget so they never push a row out. */}
-      <Box flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden">
+          inside the budget so they never push a row out. justify-end puts a
+          short transcript's slack ABOVE the rows, so a new session's messages
+          hug the composer and grow upward; a full window is unaffected —
+          rowViewport already emits exactly the rows that fit. */}
+      <Box
+        flexDirection="column"
+        flexGrow={1}
+        flexShrink={1}
+        overflow="hidden"
+        justifyContent="flex-end"
+      >
         {view.showAbove && (
           <Text color={theme.muted} wrap="truncate">
             {`   ↑ ${view.hiddenAbove} more line${view.hiddenAbove === 1 ? '' : 's'} above`}

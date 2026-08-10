@@ -4,6 +4,7 @@
 import { stringify as stringifyYaml } from 'yaml'
 import { ApiError } from './api'
 import { envToken } from './config'
+import { VERSION } from './constants'
 
 export function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2))
@@ -84,7 +85,40 @@ export function friendlyErrorMessage(err: unknown): string {
   // get it raised), so print it alone — the `METHOD /path failed: 429` prefix
   // buries the remedy.
   if (err instanceof ApiError && err.status === 429) return err.detail
+  if (err instanceof ApiError && !UPGRADE_HINT_EXEMPT.has(err.status)) {
+    return `${err.message}\n${upgradeHint()}`
+  }
   return (err as Error).message
+}
+
+// Statuses where "update your CLI" is the wrong remedy, so the upgrade hint
+// is suppressed: the failure has its own meaning (a rejected credential, a
+// permission the token lacks, a resource that doesn't exist, a billing or
+// storage limit, a documented conflict like messaging a closed session) or is
+// transient server trouble a newer binary can't fix (timeouts, gateway
+// errors, the API being down). Everything else — 400/405/410/422 from a
+// changed route or schema, a 500 from a payload the server no longer
+// expects — plausibly means the CLI is behind the API.
+const UPGRADE_HINT_EXEMPT = new Set([
+  401, // handled above: re-login, not re-install
+  402, // billing
+  403, // permissions
+  404, // missing resource / integration not connected (mapped per-command)
+  408, // transient timeout
+  409, // documented conflicts (closed session, sandbox not running)
+  413, // payload over a server-enforced cap (e.g. the 10 MiB asset limit)
+  429, // handled above: rate limit detail printed bare
+  502, // gateway trouble
+  503, // API down or overloaded
+  504, // gateway timeout
+])
+
+function upgradeHint(): string {
+  return (
+    `It's possible we shipped a breaking change to our API. ` +
+    `You are currently on version ${VERSION}. ` +
+    'Check if there is a newer CLI version available by running: brew upgrade ellipsis-dev/cli/agent'
+  )
 }
 
 // Wraps a command body so API/network failures print a clean message and set a

@@ -84,11 +84,28 @@ describe('friendlyErrorMessage', () => {
     )
   })
 
-  it('passes other ApiErrors through with the server detail intact', () => {
+  it('passes exempt ApiErrors through with the server detail intact', () => {
     const err = new ApiError(409, 'POST', '/sessions/s_1/messages', 'Session is closed')
     expect(friendlyErrorMessage(err)).toBe(
       'POST /sessions/s_1/messages failed: 409 Session is closed',
     )
+  })
+
+  it('appends the upgrade hint to statuses that may mean a stale CLI', () => {
+    for (const status of [400, 405, 410, 422, 500]) {
+      const msg = friendlyErrorMessage(new ApiError(status, 'GET', '/sessions', 'nope'))
+      expect(msg).toContain(`GET /sessions failed: ${status} nope`)
+      expect(msg).toContain("It's possible we shipped a breaking change to our API.")
+      expect(msg).toContain('You are currently on version')
+      expect(msg).toContain('brew upgrade ellipsis-dev/cli/agent')
+    }
+  })
+
+  it('suppresses the upgrade hint where updating is the wrong remedy', () => {
+    for (const status of [402, 403, 404, 408, 409, 413, 502, 503, 504]) {
+      const msg = friendlyErrorMessage(new ApiError(status, 'GET', '/sessions', 'nope'))
+      expect(msg).not.toContain('brew upgrade')
+    }
   })
 
   it('passes plain errors through unchanged', () => {
