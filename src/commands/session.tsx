@@ -1111,10 +1111,10 @@ export function buildStartOverride(opts: {
   if (opts.cpu !== undefined) compute.cpu = opts.cpu
   if (opts.memory !== undefined) compute.memory = opts.memory
   if (opts.timeout !== undefined) compute.timeout = opts.timeout
-  const sandbox: Record<string, unknown> = {}
-  if (Object.keys(compute).length) sandbox.compute = compute
-  if (opts.repo && opts.repo.length) sandbox.repositories = opts.repo.map(parseRepo)
-  if (Object.keys(sandbox).length) sugar.sandbox = sandbox
+  const environment: Record<string, unknown> = {}
+  if (Object.keys(compute).length) environment.compute = compute
+  if (opts.repo && opts.repo.length) environment.repositories = opts.repo.map(parseRepo)
+  if (Object.keys(environment).length) sugar.environment = environment
 
   if (opts.budget !== undefined) sugar.budget = { session: opts.budget }
 
@@ -1122,7 +1122,7 @@ export function buildStartOverride(opts: {
   return Object.keys(merged).length ? merged : undefined
 }
 
-// Parse a --repo value into a sandbox.repositories entry. "owner/name" sets
+// Parse a --repo value into an environment.repositories entry. "owner/name" sets
 // both; a bare "name" omits owner so the server defaults it to the account.
 function parseRepo(value: string): { name: string; owner?: string } {
   const parts = value.split('/')
