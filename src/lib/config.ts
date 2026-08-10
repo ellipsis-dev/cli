@@ -18,13 +18,6 @@ function configFile(): string {
   return join(configDir(), 'config.json')
 }
 
-// Where pre-0.17 installs kept the config. Read-only fallback so the move to
-// ~/.ellipsis doesn't log anyone out; the first saveConfig writes the new
-// location and it wins from then on.
-function legacyConfigFile(): string {
-  return join(homedir(), '.config', 'ellipsis', 'config.json')
-}
-
 // One Ellipsis instance the CLI can target (prod, beta, or a self-hosted
 // deployment). `apiBase` is the API host; `appBase` is the dashboard host used
 // to build clickable links and the login verification URL — derived from
@@ -41,10 +34,15 @@ export interface Host {
 
 // The config file (v2): a named set of hosts plus which one is active. Commands
 // resolve against the active host unless an env var / explicit arg overrides.
+// UI preferences live at the top level, not per host: they describe the
+// terminal in front of the user, which is the same whichever host is active.
 export interface CliConfig {
   version: 2
   activeHost?: string
   hosts: Record<string, Host>
+  // Hide the session bar (the nav under the text input) in the multi-session
+  // UI, giving its rows to the chat window.
+  hideSessionBar?: boolean
 }
 
 // The pre-hosts (v1) file shape — a single flat instance. Kept only so
@@ -100,20 +98,6 @@ function migrate(raw: unknown): CliConfig {
 export function loadConfig(): CliConfig {
   const file = configFile()
   if (existsSync(file)) return migrate(JSON.parse(readFileSync(file, 'utf8')))
-  // No config at the current path: fall back to the legacy XDG location, but
-  // only for the default dir — an explicit ELLIPSIS_CONFIG_DIR must resolve
-  // exactly (tests and sandboxes rely on that isolation).
-  if (!process.env.ELLIPSIS_CONFIG_DIR) {
-    const legacy = legacyConfigFile()
-    if (existsSync(legacy)) {
-      try {
-        return migrate(JSON.parse(readFileSync(legacy, 'utf8')))
-      } catch {
-        // Unreadable legacy file (often a root-owned ~/.config from an old
-        // sudo run — the problem ~/.ellipsis exists to avoid). Start fresh.
-      }
-    }
-  }
   return { version: 2, hosts: {} }
 }
 
@@ -230,6 +214,12 @@ export function clearAllTokens(): void {
   const cfg = loadConfig()
   for (const host of Object.values(cfg.hosts)) delete host.token
   saveConfig(cfg)
+}
+
+// Whether the multi-session UI should hide the session bar. Read from the
+// config file only — set `"hideSessionBar": true` in ~/.ellipsis/config.json.
+export function hideSessionBar(): boolean {
+  return loadConfig().hideSessionBar === true
 }
 
 export function getEnrolledRepos(): string[] {

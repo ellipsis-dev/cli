@@ -1,7 +1,7 @@
 import React from 'react'
 import { render } from 'ink'
 import { ApiClient } from '../lib/api'
-import { requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
+import { hideSessionBar, requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
 import { repoFromCwd } from '../lib/laptop'
 import { makeOpenSocket, resolveWsBase } from '../lib/stream'
 import type { StartAgentSessionRequest } from '../lib/types'
@@ -70,6 +70,7 @@ export async function runSessionsUi(options: SessionsUiOptions): Promise<void> {
       initialSessionId: options.initialSessionId,
       initialConfigName: options.initialConfigName,
       initialNotice: options.initialNotice,
+      hideSessionBar: hideSessionBar(),
       buildStartRequest: options.buildStartRequest,
     }),
   )
