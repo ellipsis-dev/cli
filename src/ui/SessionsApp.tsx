@@ -23,12 +23,13 @@ import { applyEditShortcut } from '../lib/editing'
 import { hyperlink, sessionUrl } from '../lib/urls'
 import { usdNumberFromMillicents } from '../lib/output'
 import {
+  applyComposerChoices,
   attentionFlip,
   compactTokens,
   composerModelOptions,
   configDisplayName,
   connectability,
-  repoOverrideEntry,
+  type ComposerChoices,
   rowDescription,
   rowGlyph,
   rowMeta,
@@ -318,27 +319,11 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   }, [mainPane.type, api])
 
   const startSession = useCallback(
-    async (
-      prompt: string,
-      choices: { configId: string | null; model: string | null; repos: string[] },
-    ): Promise<void> => {
+    async (prompt: string, choices: ComposerChoices): Promise<void> => {
       setStarting(true)
       setStartError(null)
       try {
-        // The entry point's base request (prompt + detected repository),
-        // with the composer's picks layered on: a saved config as the
-        // source, the model + repositories as a per-run override (the
-        // dashboard composer's shape — lists replace wholesale, so the
-        // checked repos become the run's whole checkout set).
-        const req = props.buildStartRequest(prompt)
-        if (choices.configId) req.config_id = choices.configId
-        const override: Record<string, unknown> = {}
-        if (choices.model) override.claude = { model: choices.model }
-        const repoEntries = choices.repos
-          .map(repoOverrideEntry)
-          .filter((e): e is { owner: string; name: string } => e !== null)
-        if (repoEntries.length > 0) override.sandbox = { repositories: repoEntries }
-        if (Object.keys(override).length > 0) req.config_override = override
+        const req = applyComposerChoices(props.buildStartRequest(prompt), choices)
         const session = await api.startAgentSession(req)
         lastWords.current.set(session.id, rowStatusWord(session))
         setLocalSessions((prev) => [session, ...prev])
@@ -771,8 +756,10 @@ const PICKER_ROWS: readonly PickerRow[] = [
 // enter/space) activates the
 // highlighted option, ← (or esc) backs out unchanged. "Default" everywhere
 // means the server resolves it (defaults ladder, DEFAULT_AGENT_MODEL, the
-// detected repo). Esc — or ↓ / ← at the prompt's left edge — hands focus to
-// the session nav.
+// detected repo). Repository is the one multi-select, and a sandbox takes any
+// number of repos: check several to clone them all, or uncheck every one for a
+// sandbox with no checkout (the row then reads "none"). Esc — or ↓ / ← at the
+// prompt's left edge — hands focus to the session nav.
 function NewSessionPane({
   width,
   height,
@@ -799,10 +786,7 @@ function NewSessionPane({
   // The cwd's repo ("owner/name") — what the server's default resolution
   // checks out; named on the Repository row instead of a bare "Default".
   detectedRepo: string | null
-  onSubmit: (
-    text: string,
-    choices: { configId: string | null; model: string | null; repos: string[] },
-  ) => void
+  onSubmit: (text: string, choices: ComposerChoices) => void
   onLeave: () => void
   rawMode: boolean
 }): React.ReactElement {
@@ -817,9 +801,12 @@ function NewSessionPane({
   // Single-pick indices; 0 is always "Default" (server-resolved).
   const [configIdx, setConfigIdx] = useState(0)
   const [modelIdx, setModelIdx] = useState(0)
-  // The multi-select repository set ("owner/name" full names). Empty =
-  // Default (the detected repo, server-resolved).
-  const [repoSel, setRepoSel] = useState<ReadonlySet<string>>(new Set())
+  // The multi-select repository set ("owner/name" full names). null = the
+  // picker is untouched: the run inherits the server's resolution (the
+  // detected repo + whatever the resolved config declares). The first toggle
+  // materializes an explicit set — zero, one, or many repos are all valid —
+  // seeded with the detected repo, since that is what the [x] showed.
+  const [repoSel, setRepoSel] = useState<ReadonlySet<string> | null>(null)
   // The open row's dropdown state: which picker is open and where its
   // highlight sits. null = no subtree open.
   const [openPicker, setOpenPicker] = useState<{ key: PickerRow['key']; hover: number } | null>(
@@ -838,10 +825,10 @@ function NewSessionPane({
   const modelOptions = useMemo(() => composerModelOptions(models ?? []), [models])
   // When the cwd names a repo there is no "Default" row: the detected repo
   // heads the list as a normal checkable entry — it reads [x] while the
-  // selection is empty (the server checks it out by default) and can be
-  // checked alongside any others (repositories multi-select). Only with no
-  // detection does the null Default row appear (the server still resolves
-  // one, but there's no name to show).
+  // selection is untouched (the server checks it out by default) and can be
+  // unchecked, or checked alongside any others (repositories multi-select).
+  // Only with no detection does the null Default row appear (the server still
+  // resolves the checkout, but there's no name to show).
   const repoOptions = useMemo(() => {
     const listed = (repos ?? []).filter((r) => r !== detectedRepo)
     return detectedRepo
@@ -853,22 +840,28 @@ function NewSessionPane({
   }, [repos, detectedRepo])
   const optionsFor = (key: PickerRow['key']) =>
     key === 'config' ? configOptions : key === 'model' ? modelOptions : repoOptions
-  // Whether an option is currently picked. Repo is a multi-select: an empty
-  // selection means the server's default checkout, so the detected repo (or
-  // the null Default row) reads [x] while nothing is explicitly checked; the
+  // The set a toggle starts from: an explicit selection once one exists, else
+  // what the untouched row was already showing as checked (the detected repo).
+  // Without this seed, checking a SECOND repo would silently drop the first.
+  const repoBaseSet = (prev: ReadonlySet<string> | null): Set<string> =>
+    new Set(prev ?? (detectedRepo ? [detectedRepo] : []))
+  // Whether an option is currently picked. Repo is a multi-select: an
+  // untouched selection is the server's default checkout, so the detected repo
+  // (or the null Default row) reads [x] until you touch the list; the
   // single-pickers match their index.
   const isPicked = (key: PickerRow['key'], at: number): boolean => {
     if (key === 'repo') {
       const id = repoOptions[at]?.id
-      if (repoSel.size === 0) return id === null || id === detectedRepo
+      if (repoSel === null) return id === null || id === detectedRepo
       return id !== null && repoSel.has(id)
     }
     const idx = key === 'config' ? configIdx : modelIdx
     return at === Math.min(idx, optionsFor(key).length - 1)
   }
   // Activating an option: single-pickers pick and close; the repo list
-  // TOGGLES the entry ([x]↔[ ]) and stays open so several can be checked
-  // (the null Default row, shown only with no detected repo, clears the set).
+  // TOGGLES the entry ([x]↔[ ]) and stays open so several can be checked, or
+  // all of them unchecked for a sandbox with no checkout. The null Default row
+  // (shown only with no detected repo) hands resolution back to the server.
   const activate = (key: PickerRow['key'], at: number): void => {
     if (key === 'config') {
       setConfigIdx(at)
@@ -878,10 +871,10 @@ function NewSessionPane({
       setOpenPicker(null)
     } else {
       const id = repoOptions[at]?.id
-      if (id == null) setRepoSel(new Set())
+      if (id == null) setRepoSel(null)
       else {
         setRepoSel((prev) => {
-          const next = new Set(prev)
+          const next = repoBaseSet(prev)
           if (next.has(id)) next.delete(id)
           else next.add(id)
           return next
@@ -897,7 +890,7 @@ function NewSessionPane({
     onSubmit(text.trim(), {
       configId: configOptions[Math.min(configIdx, configOptions.length - 1)]?.id ?? null,
       model: modelOptions[Math.min(modelIdx, modelOptions.length - 1)]?.id ?? null,
-      repos: [...repoSel],
+      repos: repoSel === null ? null : [...repoSel],
     })
   }
 
@@ -1012,12 +1005,15 @@ function NewSessionPane({
     { isActive: focused && rawMode },
   )
 
-  // The summary shown on a row: the single pick's label, or the checked
-  // repo set joined (the detected repo when nothing is checked).
+  // The summary shown on a row: the single pick's label, or the checked repo
+  // set joined (the detected repo while the list is untouched, "none" once you
+  // have explicitly unchecked everything — a sandbox with no checkout).
   const rowValue = (key: PickerRow['key']): string => {
     if (key === 'repo') {
       if (repos === null) return 'loading…'
-      return repoSel.size === 0 ? (detectedRepo ?? 'Default') : [...repoSel].join(', ')
+      if (repoSel === null) return detectedRepo ?? 'Default'
+      if (repoSel.size === 0) return 'none'
+      return [...repoSel].join(', ')
     }
     if (key === 'config' && configs === null) return 'loading…'
     const options = optionsFor(key)

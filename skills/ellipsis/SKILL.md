@@ -115,10 +115,12 @@ trigger:
   type: cron
   schedule: "0 9 * * 1"
 
-sandbox:
+environment:
   repositories:
     - name: api
     - name: web
+
+permissions:
   github:
     permissions: read_only
 
@@ -200,9 +202,11 @@ trigger:
     base: [default]
     paths: ["migrations/**"]
 
-sandbox:
+environment:
   repositories:
     - name: api
+
+permissions:
   github:
     permissions:
       contents: read
@@ -224,7 +228,7 @@ budget:
 - `for` gates the author. The default is `users: true, bots: false`, so
   bot-authored events never trigger an agent unless you opt in.
 - Trigger `repositories` is the watch set and is independent of
-  `sandbox.repositories`, the clone set. The triggering repository is always
+  `environment.repositories`, the clone set. The triggering repository is always
   cloned.
 - Sentry re-fires inside a 6 hour per-issue window append to the existing
   conversation, so an alert storm produces one investigation, not dozens of
@@ -345,7 +349,7 @@ Merge rules that catch people out:
   entries. At most 8 reviewers, each with a unique name. Reviewers run in
   parallel, and a reviewer whose own `pull_requests` filters exclude a pull
   request costs nothing.
-- `sandbox:` and `budget:` merge field by field.
+- `environment:` and `budget:` merge field by field.
 - `budget.run` (default $10) caps one whole review across every stage, divided
   among its agents. `budget.day` and `budget.week` are trailing caps checked
   before a review starts, which is the guard against a push storm.
@@ -489,7 +493,8 @@ Top-level keys, all optional except `ellipsis`:
 | `claude` | `system`, `model`, `effort`, `fallback_model`, `max_turns`, `settings`. |
 | `codex` | Run on OpenAI's Codex CLI instead. Declaring the block selects the harness. |
 | `trigger` | One trigger, or omit for a manual-only agent. |
-| `sandbox` | `repositories`, `variables`, `ports`, `compute`, `image`, `hooks`, `github`. |
+| `environment` | Where the agent runs: `repositories`, `variables`, `ports`, `compute`, `image`, `hooks`. |
+| `permissions` | What it may do: `github` scopes its GitHub token, `ellipsis` its API token. |
 | `skills` | Claude Code skills beyond what the cloned repositories provide. |
 | `structured_output` | A JSON Schema contract, so downstream automation gets typed data. |
 | `budget` | `session`, `day`, `week`, `month`, in US dollars. |
@@ -532,7 +537,7 @@ repositories already cloned and destroyed when the session ends. The base image
 carries Python 3.13, Node.js 22, `git`, the `gh` CLI, `curl`, and a C/C++
 toolchain. Your agents can build and test your product, not just read it.
 
-Three `sandbox` fields define the environment, each with a different lifetime:
+Three `environment` fields define the sandbox, each with a different lifetime:
 
 - `image.dockerfile_append`: `RUN` layers on the managed base image, before any
   repository exists. Use it for toolchain installs. Only `RUN` is accepted.
@@ -551,7 +556,7 @@ dependencies. `agent session start --config-file <path> --rebuild --watch`
 provisions through a fresh full build and streams every phase, which is how you
 prove an environment before merging.
 
-`sandbox.compute` sizes the machine: `cpu` 0.125 to 16, `memory` 512MB to 64GB,
+`environment.compute` sizes the machine: `cpu` 0.125 to 16, `memory` 512MB to 64GB,
 `timeout` 60s to 1h. Defaults are 1 vCPU, 4GB, and 1h. One hour is also the
 maximum, because a sandbox never outlives its GitHub token. Compute bills on the
 requested allocation over the sandbox's lifetime, so size up only when the
@@ -561,15 +566,15 @@ Credentials are scoped and short-lived:
 
 - Each sandbox gets its own `GH_TOKEN`, minted from the GitHub App installation,
   living one hour, covering only the sandbox's repositories, and dying with the
-  sandbox. `sandbox.github.permissions` narrows it further, either the string
+  sandbox. `permissions.github.permissions` narrows it further, either the string
   `read_only` (read on contents, issues, metadata, pull requests) or a map such
   as `{contents: read, pull_requests: write}`. GitHub mints the reduced token, so
   nothing in the sandbox can exceed it, not a misbehaving tool and not a prompt
-  injection in a pull request description. `sandbox.github.repositories` narrows
+  injection in a pull request description. `permissions.github.repositories` narrows
   which repositories the token may touch, independently of what is cloned.
   Because permissions are YAML in git, every agent's blast radius is explicit
   and reviewed.
-- Other credentials enter as `sandbox.variables`. Store the value once with
+- Other credentials enter as `environment.variables`. Store the value once with
   `agent variable set`, then name it in the config. The name list is the scope,
   so only agents that name a variable receive it, and a compromised agent never
   sees the inventory. Stored values are write-only and never readable back

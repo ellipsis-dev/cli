@@ -210,7 +210,7 @@ describe('buildStartOverride', () => {
       }),
     ).toEqual({
       claude: { model: 'claude-opus-4-8', system: 'do the thing' },
-      sandbox: {
+      environment: {
         compute: { cpu: 2, memory: '8GB', timeout: '30m' },
         repositories: [{ owner: 'ellipsis-dev', name: 'ellipsis' }, { name: 'solo' }],
       },

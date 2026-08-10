@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  applyComposerChoices,
   attentionFlip,
   compactTokens,
   COMPOSER_MODELS,
@@ -382,5 +383,82 @@ describe('composerModelOptions', () => {
     ])
     expect(options[0].label).toBe('Default')
     expect(options[1].label).toBe('claude-opus-5')
+  })
+})
+
+describe('applyComposerChoices', () => {
+  const untouched = { configId: null, model: null, repos: null }
+
+  it('leaves the base request alone when nothing was picked', () => {
+    expect(applyComposerChoices({ prompt: 'hi', repository: 'acme/api' }, untouched)).toEqual({
+      prompt: 'hi',
+      repository: 'acme/api',
+    })
+  })
+
+  it('sends no repository override while the picker is untouched', () => {
+    const req = applyComposerChoices({ repository: 'acme/api' }, { ...untouched, model: 'claude-opus-5' })
+    expect(req.config_override).toEqual({ claude: { model: 'claude-opus-5' } })
+    expect(req.repository).toBe('acme/api')
+  })
+
+  // The whole point of the fix: a sandbox takes zero, one, or many repos.
+  it('checks out many repositories at once', () => {
+    const req = applyComposerChoices(
+      { repository: 'acme/api' },
+      { ...untouched, repos: ['acme/api', 'acme/web', 'acme/infra'] },
+    )
+    expect(req.config_override).toEqual({
+      environment: {
+        repositories: [
+          { owner: 'acme', name: 'api' },
+          { owner: 'acme', name: 'web' },
+          { owner: 'acme', name: 'infra' },
+        ],
+      },
+    })
+    // Still in the set, so the context repo stays (it also picks the repo rung
+    // of the defaults ladder).
+    expect(req.repository).toBe('acme/api')
+  })
+
+  it('checks out no repository at all when every box is unchecked', () => {
+    const req = applyComposerChoices({ repository: 'acme/api' }, { ...untouched, repos: [] })
+    expect(req.config_override).toEqual({ environment: { repositories: [] } })
+    // The server merges `repository` into the checkout unconditionally, so an
+    // empty set only holds if the context repo goes too.
+    expect(req.repository).toBeUndefined()
+  })
+
+  it('drops the context repo when the selection excludes it', () => {
+    const req = applyComposerChoices({ repository: 'acme/api' }, { ...untouched, repos: ['acme/web'] })
+    expect(req.config_override).toEqual({
+      environment: { repositories: [{ owner: 'acme', name: 'web' }] },
+    })
+    expect(req.repository).toBeUndefined()
+  })
+
+  it('overrides under the environment key the config schema uses, not the old sandbox one', () => {
+    const req = applyComposerChoices({}, { ...untouched, repos: ['acme/web'] })
+    expect(req.config_override).not.toHaveProperty('sandbox')
+    expect(req.config_override).toHaveProperty('environment')
+  })
+
+  it('carries a chosen agent config and model through', () => {
+    const req = applyComposerChoices(
+      { prompt: 'ship it' },
+      { configId: 'cfg_1', model: 'claude-fable-5', repos: null },
+    )
+    expect(req).toEqual({
+      prompt: 'ship it',
+      config_id: 'cfg_1',
+      config_override: { claude: { model: 'claude-fable-5' } },
+    })
+  })
+
+  it('does not mutate the request it was given', () => {
+    const base = { repository: 'acme/api' }
+    applyComposerChoices(base, { ...untouched, repos: [] })
+    expect(base).toEqual({ repository: 'acme/api' })
   })
 })

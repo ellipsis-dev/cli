@@ -1,7 +1,7 @@
 import { sessionStatusWord } from '@ellipsis-dev/sdk/stream'
 import type { AgentSessionWire } from '@ellipsis-dev/sdk'
 import { theme } from './theme'
-import type { AgentSession, SupportedModel } from './types'
+import type { AgentSession, StartAgentSessionRequest, SupportedModel } from './types'
 
 // Pure session-model helpers shared by the connect command and the
 // multi-session UI (SessionsApp). No I/O here — everything is testable.
@@ -282,6 +282,49 @@ export function repoOverrideEntry(fullName: string): { owner: string; name: stri
   const [owner, name] = fullName.split('/')
   if (!owner || !name) return null
   return { owner, name }
+}
+
+// The composer's picks, as the new-session pane reports them. `repos` null =
+// the Repository row was never touched, so the server's own resolution stands;
+// an array is an explicit checkout set, and [] is the legitimate "no repository
+// at all" sandbox.
+export interface ComposerChoices {
+  configId: string | null
+  model: string | null
+  repos: string[] | null
+}
+
+// The entry point's base request with the composer's picks layered on: a saved
+// config as the source, the model + repositories as a per-run config override
+// (the dashboard composer's shape).
+export function applyComposerChoices(
+  base: StartAgentSessionRequest,
+  choices: ComposerChoices,
+): StartAgentSessionRequest {
+  const req: StartAgentSessionRequest = { ...base }
+  if (choices.configId) req.config_id = choices.configId
+  const override: Record<string, unknown> = {}
+  if (choices.model) override.claude = { model: choices.model }
+  if (choices.repos !== null) {
+    // Lists replace wholesale in a config override, so this set becomes the
+    // run's entire checkout — including the empty set, which a sandbox
+    // supports (zero, one, or many repositories are all valid).
+    override.environment = {
+      repositories: choices.repos
+        .map(repoOverrideEntry)
+        .filter((e): e is { owner: string; name: string } => e !== null),
+    }
+    // The server merges the request's `repository` context into the checkout
+    // unconditionally, even under an explicit config, so leaving it on would
+    // re-add a repo the user just unchecked. Dropping it also moves default-
+    // config resolution off that repo's rung, which is the honest reading of
+    // "not this one".
+    if (req.repository !== undefined && !choices.repos.includes(req.repository)) {
+      delete req.repository
+    }
+  }
+  if (Object.keys(override).length > 0) req.config_override = override
+  return req
 }
 
 // ------------------------------- layout ---------------------------------
