@@ -113,6 +113,10 @@ export interface SessionsAppProps {
   // caveat to show in its chat (watch-only reasons ride connectability).
   initialConfigName?: string
   initialNotice?: string
+  // Drop the session nav (band 4) entirely, giving its rows to the chat.
+  // Focus never leaves the chat: esc and ↓ at the bottom edge do nothing.
+  // Set via "hideSessionBar": true in the config file.
+  hideSessionBar?: boolean
   // Builds the start request for a composer-spawned session (the entry point
   // owns repository detection and defaults).
   buildStartRequest: (prompt: string) => StartAgentSessionRequest
@@ -132,6 +136,7 @@ type MainPane = { type: 'new' } | { type: 'chat'; sessionId: string }
 
 export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   const { api, openSocket, appBase, customerLogin, authorId } = props
+  const hideNav = props.hideSessionBar === true
   const { exit } = useApp()
   const { isRawModeSupported } = useStdin()
   const { stdout } = useStdout()
@@ -191,11 +196,14 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     }
   }, [api, authorId])
 
+  // The poll only feeds the nav's rows and attention dots; with the bar
+  // hidden there is nothing on screen it could update.
   useEffect(() => {
+    if (hideNav) return
     void poll()
     const t = setInterval(() => void poll(), SIDEBAR_POLL_MS)
     return () => clearInterval(t)
-  }, [poll])
+  }, [poll, hideNav])
 
   // The age lines tick on their own clock (nothing else re-renders idle rows).
   const [, setAgeTick] = useState(0)
@@ -418,7 +426,11 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     { isActive: focus === 'nav' && isRawModeSupported },
   )
 
-  const focusNav = useCallback((): void => setFocus('nav'), [])
+  // With the session bar hidden there is nothing to hand focus to: esc and ↓
+  // at the chat's bottom edge land where they started.
+  const focusNav = useCallback((): void => {
+    if (!hideNav) setFocus('nav')
+  }, [hideNav])
   const refreshOnDone = useCallback((): void => {
     void poll()
   }, [poll])
@@ -426,12 +438,12 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   // ------------------------------- rendering --------------------------------
 
   // Band heights: header = blank + title line + rule (3); nav = rule + the
-  // new-session row + five session rows + hint (8). The chat band gets the
-  // rest, and a terminal too short for both drops session rows rather than
-  // growing the frame past the screen.
+  // new-session row + five session rows + hint (8), or nothing when hidden.
+  // The chat band gets the rest, and a terminal too short for both drops
+  // session rows rather than growing the frame past the screen.
   const headerRows = 3
   const navSessionRows = Math.max(1, Math.min(NAV_SESSION_ROWS, contentRows - 10))
-  const navRows = 3 + navSessionRows
+  const navRows = hideNav ? 0 : 3 + navSessionRows
   const chatRows = Math.max(4, contentRows - headerRows - navRows)
 
   // ---- band 1: the header ----
@@ -670,7 +682,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     >
       {header}
       {main}
-      {nav}
+      {!hideNav && nav}
     </Box>
   )
 }

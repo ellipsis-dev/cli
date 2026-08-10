@@ -161,8 +161,11 @@ at that host's dashboard.
 Hosts and tokens live in `~/.ellipsis/config.json` (mode 0600); set
 `ELLIPSIS_CONFIG_DIR` to relocate it. A config file from before hosts existed
 is migrated on first use — your existing login becomes a host named for its API
-base — and a config left at the old `~/.config/ellipsis` location is still read
-until the next write lands it in `~/.ellipsis`, so nothing needs re-doing.
+base.
+
+The config file also carries UI preferences. Set `"hideSessionBar": true` at
+the top level to drop the session list from the bottom of the interactive UI
+and give its rows to the chat window.
 
 ## Develop
 

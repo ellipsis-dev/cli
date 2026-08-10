@@ -9,6 +9,7 @@ import {
   clearActiveHostToken,
   deleteHost,
   getEnrolledRepos,
+  hideSessionBar,
   listHosts,
   loadConfig,
   requireToken,
@@ -216,6 +217,28 @@ describe('host management', () => {
     expect(getEnrolledRepos()).toEqual([])
     useHost('beta')
     expect(getEnrolledRepos()).toEqual(['acme/api'])
+  })
+})
+
+describe('hideSessionBar', () => {
+  it('defaults to false with no config file', () => {
+    expect(hideSessionBar()).toBe(false)
+  })
+
+  it('reads true from the config file', () => {
+    writeConfig({ version: 2, hosts: {}, hideSessionBar: true })
+    expect(hideSessionBar()).toBe(true)
+  })
+
+  it('treats a non-boolean value as false', () => {
+    writeConfig({ version: 2, hosts: {}, hideSessionBar: 'yes' })
+    expect(hideSessionBar()).toBe(false)
+  })
+
+  it('survives a host write', () => {
+    writeConfig({ version: 2, hosts: {}, hideSessionBar: true })
+    addHost('beta', 'https://beta-api.ellipsis.dev')
+    expect(hideSessionBar()).toBe(true)
   })
 })
 
