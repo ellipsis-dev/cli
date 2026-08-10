@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { FACTS, randomFact } from '../src/lib/facts'
 
 describe('FACTS', () => {
-  it('holds exactly 100 facts', () => {
-    expect(FACTS).toHaveLength(100)
+  it('holds exactly 200 facts', () => {
+    expect(FACTS).toHaveLength(200)
   })
 
   it('has no duplicates or blank entries', () => {
