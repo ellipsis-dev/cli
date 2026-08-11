@@ -18,40 +18,45 @@ route text.
 Singular nouns, one verb per action.
 
 ```
-agent asset list          agent asset delete <asset-id>
+agent file list           agent file delete <file-id>
 agent session start       agent config default set <config-id>
 ```
 
-- **The noun is singular, always.** `asset`, not `assets`. `hook`, not
+- **The noun is singular, always.** `file`, not `files`. `hook`, not
   `hooks`. `analytics` is the sole exception: it is a mass noun with no
   singular form.
 - **The plural still works, hidden.** Register it with `alsoKnownAs`, which
-  keeps it callable but strips it from every help surface. `agent assets list`
+  keeps it callable but strips it from every help surface. `agent files list`
   runs and prints nothing extra.
+- **A renamed command keeps its old name, hidden.** `agent file` was `agent
+  asset`, so it registers `asset` and `assets` alongside `files`. A caller who
+  learned the old spelling is never told it is wrong.
 - **Read-only integration browsers use a bare plural leaf**: `github repos`,
   `slack channels`, `linear teams`, `sentry orgs`. They have no
   get/create/delete to disambiguate against, so the extra `list` is noise.
-  Anything with more than one verb gets `<noun> <verb>`: `asset list`,
-  `asset get`, `asset upload`, `asset delete`.
+  Anything with more than one verb gets `<noun> <verb>`: `file list`,
+  `file get`, `file upload`, `file delete`.
 - **`delete` is the shown verb**, with `rm` as a hidden alias. Never the
   reverse.
 - **`list` is the shown verb**, with `ls` hidden.
 
 ```ts
-const asset = alsoKnownAs(
-  program.command('asset').description('...'),
+const file = alsoKnownAs(
+  program.command('file').description('...'),
+  'files',
+  'asset',
   'assets',
 )
 
 apiRoutes(
-  alsoKnownAs(asset.command('delete <asset-id>').description('...'), 'rm'),
-  'DELETE /assets/{id}',
+  alsoKnownAs(file.command('delete <file-id>').description('...'), 'rm'),
+  'DELETE /files/{id}',
 )
 ```
 
 ## Arguments
 
-Kebab-case placeholders: `<session-id>`, `<config-id>`, `<asset-id>`,
+Kebab-case placeholders: `<session-id>`, `<config-id>`, `<file-id>`,
 `<api-url>`, `<owner/name>`. Never camelCase, and never a bare `<id>` when the
 type matters.
 
@@ -93,7 +98,7 @@ Other rules:
 One line, imperative verb first, no trailing period.
 
 - **Say what the caller gets, not which endpoint answers.** `List your stored
-  assets, newest first` — not `List assets (GET /assets)`.
+  files, newest first` — not `List files (GET /files)`.
 - **Routes go in the long help**, last, via `apiRoutes(cmd, 'GET /...')`.
   When a command also has an `addHelpText('after', ...)` usage note, chain the
   note *inside* the `apiRoutes()` call so the route line still lands last.
