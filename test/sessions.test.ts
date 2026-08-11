@@ -13,6 +13,8 @@ import {
   rowGlyph,
   rowMeta,
   rowStatusWord,
+  SESSION_BAR_FETCH,
+  sessionBarQuery,
   sessionSource,
   shortAge,
   sidebarSlice,
@@ -243,6 +245,64 @@ describe('sessionSource', () => {
     expect(sessionSource(session({ source: 'laptop' }))).toBe('laptop')
     expect(sessionSource(session({ input: { source: 'react' } } as never))).toBe('cloud')
     expect(sessionSource(session({}))).toBe('cloud')
+  })
+})
+
+describe('sessionBarQuery', () => {
+  const bar = {
+    rows: 5,
+    days: 7,
+    repo: 'cwd' as const,
+    statuses: 'all' as const,
+    sources: undefined,
+  }
+  const context = { authorId: 42, detectedRepo: 'acme/api' }
+
+  it('scopes to the author, the cwd repo, and the age cutoff', () => {
+    expect(sessionBarQuery(bar, context)).toEqual({
+      author_id: 42,
+      limit: SESSION_BAR_FETCH,
+      days: 7,
+      repo: 'acme/api',
+    })
+  })
+
+  // Outside a repository, asking for repo "" would empty the bar; the whole
+  // account is the useful answer instead.
+  it('drops the repo filter when the cwd is not a repository', () => {
+    expect(sessionBarQuery(bar, { authorId: 42, detectedRepo: null }).repo).toBeUndefined()
+  })
+
+  it('drops the repo filter under repo "any" even inside one', () => {
+    expect(sessionBarQuery({ ...bar, repo: 'any' }, context).repo).toBeUndefined()
+  })
+
+  it('omits days entirely at 0, rather than asking for a zero-day window', () => {
+    expect(sessionBarQuery({ ...bar, days: 0 }, context).days).toBeUndefined()
+  })
+
+  it('asks for unfinished sessions only when configured to', () => {
+    expect(sessionBarQuery(bar, context).unfinished).toBeUndefined()
+    expect(sessionBarQuery({ ...bar, statuses: 'unfinished' }, context).unfinished).toBe(true)
+  })
+
+  it('passes sources through and omits them when unset', () => {
+    expect(sessionBarQuery(bar, context).source).toBeUndefined()
+    expect(sessionBarQuery({ ...bar, sources: ['cli', 'manual'] }, context).source).toEqual([
+      'cli',
+      'manual',
+    ])
+  })
+
+  // An API-key credential has no GitHub user behind it: list the account's.
+  it('omits the author filter without one', () => {
+    expect(
+      sessionBarQuery(bar, { authorId: null, detectedRepo: 'acme/api' }).author_id,
+    ).toBeUndefined()
+  })
+
+  it('fetches at least as many rows as the bar displays', () => {
+    expect(sessionBarQuery({ ...bar, rows: 200 }, context).limit).toBe(200)
   })
 })
 

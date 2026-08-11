@@ -32,6 +32,7 @@ import { ApiClient, ApiError } from '../lib/api'
 import { hyperlink } from '../lib/urls'
 import { usdNumberFromMillicents } from '../lib/output'
 import { applyEditShortcut } from '../lib/editing'
+import { CTRL_C_QUIT_HINT, useCtrlCQuit } from './ctrlC'
 import { fitLines } from '../lib/markdown'
 import { SELECTION_GLYPH } from '../lib/sessions'
 import { SURFACE_ACTIVE, SURFACE_ELEVATED, theme } from '../lib/theme'
@@ -717,6 +718,19 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // smears stale rows up the terminal. So the window's budget is whatever is
   // left AFTER the footer, never a floor that could exceed the pane, and the
   // window itself renders exactly that many rows (see rowViewport).
+  // ctrl+c interrupts the turn, then quits: the first press sends the same
+  // /stop the composer's command does, the second exits. Active whenever this
+  // pane owns the keyboard, watch-only follows included (nothing to stop there,
+  // but ctrl+c still has to be the way out).
+  const ctrlCArmed = useCtrlCQuit(
+    isRawModeSupported && focused && (composerVisible || hosted || !hasHost),
+    () => {
+      if (working && canSend) submit('/stop')
+    },
+  )
+  // The notice bar doubles as the ctrl+c prompt: armed, it says what a second
+  // press does, so the quit is never a surprise.
+  const shownNotice = ctrlCArmed ? CTRL_C_QUIT_HINT : notice
   const { viewBudget, padRows, composerRows, noticeRows } = useMemo(() => {
     // Both wrapping parts of the footer are measured as the rows they will
     // actually OCCUPY, not as the newlines they contain: a notice ("stream
@@ -730,8 +744,8 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     let free = rows - bottomSlack - fixed
     // A pane with no room for chat + composer + notice drops the notice
     // entirely: overflowing the frame would smear the whole app.
-    const noticeRows = notice
-      ? Math.max(0, Math.min(fitLines(`· ${notice}`, cols).length, free - 2))
+    const noticeRows = shownNotice
+      ? Math.max(0, Math.min(fitLines(`· ${shownNotice}`, cols).length, free - 2))
       : 0
     free -= noticeRows
     // The composer panel: its interior grows with the input, plus the 1-cell
@@ -752,7 +766,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     topPad,
     composerVisible,
     composer.text,
-    notice,
+    shownNotice,
     props.hideMetaLine,
   ])
 
@@ -1351,9 +1365,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         {/* The notice is budgeted at its wrapped height (noticeRows) and
             pinned to it, so an unbounded one (a stream error, an API error
             detail) can't grow the frame past the pane. */}
-        {notice && noticeRows > 0 && (
+        {shownNotice && noticeRows > 0 && (
           <Box height={noticeRows} flexShrink={0} overflow="hidden">
-            <Text color={theme.muted}>· {notice}</Text>
+            <Text color={theme.muted}>· {shownNotice}</Text>
           </Box>
         )}
         {/* The composer: the input area on the elevated surface — one step

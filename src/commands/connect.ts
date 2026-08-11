@@ -163,7 +163,9 @@ export async function runConnect(
     // buffer and emit only the final frame off-TTY, which would silence the
     // documented headless path (`--no-input` piped into a script or an agent)
     // for the entire life of the session.
-    { interactive: true },
+    // exitOnCtrlC off: the app handles ctrl+c itself (first press interrupts a
+    // running turn, second quits), which ink's default teardown would preempt.
+    { interactive: true, exitOnCtrlC: false },
   )
   // Guard against the revoked-TTY spin. When the controlling terminal is torn
   // down abruptly (terminal app force-quit/crash, SSH drop, login-session
