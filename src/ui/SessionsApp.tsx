@@ -174,6 +174,15 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   // lag, or attributed differently); merged into the list until it does.
   const [localSessions, setLocalSessions] = useState<AgentSession[]>([])
 
+  // The last API failure from any background call (the poll, the composer's
+  // pickers). Those calls have no output of their own, so without this a broken
+  // route or a dead token just shows an empty list. Rendered in the nav hint
+  // row, which is the one line always on screen.
+  const [apiError, setApiError] = useState<string | null>(null)
+  const reportApiError = useCallback((label: string, err: unknown): void => {
+    setApiError(`${label}: ${err instanceof ApiError ? err.detail : (err as Error).message}`)
+  }, [])
+
   const poll = useCallback(async (): Promise<void> => {
     try {
       const listed = await api.listAgentSessions({
@@ -192,10 +201,13 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       setSessions(listed)
       setLocalSessions((prev) => prev.filter((l) => !listed.some((s) => s.id === l.id)))
       setPolledOnce(true)
-    } catch {
-      // Transient poll failure — keep the previous list; the next tick retries.
+      setApiError(null)
+    } catch (err) {
+      // Keep the previous list (the next tick retries), but say so: a poll that
+      // fails every tick is a broken session list, not a blip.
+      reportApiError('sessions', err)
     }
-  }, [api, authorId])
+  }, [api, authorId, reportApiError])
 
   // The poll only feeds the nav's rows and attention dots; with the bar
   // hidden there is nothing on screen it could update.
@@ -315,16 +327,25 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     void api
       .listAgentConfigs()
       .then((rows) => setConfigs(rows.filter((c) => !c.deleted)))
-      .catch(() => setConfigs([]))
+      .catch((err) => {
+        setConfigs([])
+        reportApiError('agent configs', err)
+      })
     void api
       .listGithubRepositories()
       .then((r) => setRepos(r.repositories.map((repo) => repo.full_name)))
-      .catch(() => setRepos([]))
+      .catch((err) => {
+        setRepos([])
+        reportApiError('repositories', err)
+      })
     void api
       .listSupportedModels()
       .then(setModels)
-      .catch(() => setModels([]))
-  }, [mainPane.type, api])
+      .catch((err) => {
+        setModels([])
+        reportApiError('models', err)
+      })
+  }, [mainPane.type, api, reportApiError])
 
   const startSession = useCallback(
     async (prompt: string, choices: ComposerChoices): Promise<void> => {
@@ -643,13 +664,22 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       {/* Absorbs the rows a short list leaves empty, keeping the hint on the
           band's bottom edge. */}
       <Box flexGrow={1} />
-      <Text wrap="truncate" color={theme.muted}>
-        {navFocused
-          ? `↑↓ move · enter open · n new · esc chat · q quit${
-              win.end < rows.length ? ` · ${rows.length - win.end} more below` : ''
-            }`
-          : '↓/esc: sessions'}
-      </Text>
+      {/* An API failure replaces the key hints rather than sharing the line:
+          the hints are always recoverable from muscle memory, a swallowed error
+          is not. */}
+      {apiError ? (
+        <Text wrap="truncate" color={theme.error}>
+          {`✗ ${apiError}`}
+        </Text>
+      ) : (
+        <Text wrap="truncate" color={theme.muted}>
+          {navFocused
+            ? `↑↓ move · enter open · n new · esc chat · q quit${
+                win.end < rows.length ? ` · ${rows.length - win.end} more below` : ''
+              }`
+            : '↓/esc: sessions'}
+        </Text>
+      )}
     </Box>
   )
 

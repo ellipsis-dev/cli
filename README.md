@@ -68,11 +68,9 @@ agent session connect                 # inside an Ellipsis sandbox: connects to 
 agent session stop <session-id>       # stop an in-flight session
 
 agent review 123                  # review a pull request now, instead of waiting for a push
-agent review                      # review the work in your tree; findings print here
+agent review get <review-id>      # a review's findings, scope, and whether it posted
 agent review list --repo api      # list a repository's reviews, newest first
-agent review init [path]          # scaffold a starter review pipeline (default: agents/code_review.yaml)
-agent review default              # the effective review pipeline for the repo you are standing in
-agent review default set <config-id>   # set the account default pipeline (--repo [owner/name] for one repo)
+agent review init                 # scaffold a starter review pipeline (code_review.yaml)
 
 agent config list                 # list saved agent configs
 agent config get <config-id>      # show one config as YAML (--json for JSON)
@@ -92,10 +90,10 @@ agent slack members               # workspace members, with linked GitHub identi
 agent linear teams                # teams in the connected Linear organization
 agent sentry orgs                 # connected Sentry organizations
 
-agent asset upload shot.png       # store a PNG; prints an org-gated link to paste into a PR comment
-agent asset list                  # list stored assets (--session <id> scopes to one run's uploads)
-agent asset get <asset-id> -o shot.png   # show one asset, or download its bytes with -o
-agent asset delete <asset-id>     # delete an asset (it disappears from list/get and its link stops resolving)
+agent file upload shot.png        # store a PNG; prints an org-gated link to paste into a PR comment
+agent file list                   # list stored files (--session <id> scopes to one run's uploads)
+agent file get <file-id> -o shot.png     # show one file, or download its bytes with -o
+agent file delete <file-id>       # delete a file (it disappears from list/get and its link stops resolving)
 
 agent variable list               # list sandbox env variable names (values are write-only)
 agent variable set A=1 B=2        # create/update variables (or --from-file .env/.json)
@@ -110,7 +108,7 @@ agent analytics review --repo my-service      # review totals + top reviewers
 agent ping                        # check authenticated API connectivity
 ```
 
-Every command shown is singular. The plural spelling of each (`agent assets`,
+Every command shown is singular. The plural spelling of each (`agent files`,
 `agent sessions`, `agent analytics prs`) is a hidden alias that works but is
 left out of `--help`. See
 [`skills/cli-conventions`](skills/cli-conventions/SKILL.md) for the full

@@ -7,17 +7,16 @@ import type {
   AnalyticsMetricsQuery,
   AnalyticsPullRequestsQuery,
   AnalyticsReviewsQuery,
-  AssetView,
   BudgetSummary,
   CliAuthPoll,
   CliAuthStart,
-  CodeReviewDefaultView,
   CreateAgentConfigRequest,
-  CreateAssetRequest,
-  CreateAssetResponse,
+  CreateFileRequest,
+  CreateFileResponse,
   CreateReviewRequest,
   CreatedAgentConfig,
-  GetAssetResponse,
+  FileView,
+  GetFileResponse,
   GetAnalyticsMetricsResponse,
   GetAnalyticsPullRequestsResponse,
   GetAnalyticsReviewsResponse,
@@ -31,9 +30,8 @@ import type {
   ListAgentSessionsQuery,
   ListAgentSessionsResponse,
   ListAgentTemplatesResponse,
-  ListAssetsQuery,
-  ListAssetsResponse,
-  ListCodeReviewDefaultsResponse,
+  ListFilesQuery,
+  ListFilesResponse,
   ListGithubMembersResponse,
   ListGithubRepositoriesResponse,
   ListLinearTeamsResponse,
@@ -45,7 +43,6 @@ import type {
   ListSlackChannelsResponse,
   ListSlackMembersResponse,
   PutAgentDefaultRequest,
-  PutCodeReviewDefaultRequest,
   ReplayAgentSessionRequest,
   Review,
   SendSessionMessageRequest,
@@ -298,42 +295,42 @@ export class ApiClient {
     )
   }
 
-  // --------------------------------- assets --------------------------------
-  // Agent asset storage: persist a file to the platform and get back an
-  // org-membership-gated link (documents/eng/AGENT_ASSET_STORAGE.md in the
-  // ellipsis repo). v1 is PNG-only with a 10 MiB cap, enforced server-side.
+  // --------------------------------- files ---------------------------------
+  // Agent file storage: persist a file to the platform and get back an
+  // org-membership-gated link. v1 is PNG-only with a 10 MiB cap, enforced
+  // server-side.
 
-  uploadAsset(req: CreateAssetRequest): Promise<CreateAssetResponse> {
-    return this.request('POST', '/assets', req)
+  uploadFile(req: CreateFileRequest): Promise<CreateFileResponse> {
+    return this.request('POST', '/files', req)
   }
 
-  // Newest-first metadata for the credential's customer's assets. Metadata
-  // only — presigned download URLs are minted per explicit getAsset.
-  async listAssets(query?: ListAssetsQuery): Promise<AssetView[]> {
-    const res = await this.request<ListAssetsResponse>(
+  // Newest-first metadata for the credential's customer's files. Metadata
+  // only — presigned download URLs are minted per explicit getFile.
+  async listFiles(query?: ListFilesQuery): Promise<FileView[]> {
+    const res = await this.request<ListFilesResponse>(
       'GET',
-      '/assets',
+      '/files',
       undefined,
       query as Record<string, unknown> | undefined,
     )
-    return res.assets
+    return res.files
   }
 
   // Metadata + the gated URL + a short-lived presigned `download_url`. To pull
   // the bytes locally, GET download_url immediately (it expires in ~60s; if it
   // lapses, just call this again for a fresh one).
-  getAsset(assetId: string): Promise<GetAssetResponse> {
-    return this.request('GET', `/assets/${encodeURIComponent(assetId)}`)
+  getFile(fileId: string): Promise<GetFileResponse> {
+    return this.request('GET', `/files/${encodeURIComponent(fileId)}`)
   }
 
-  // Delete an asset: it disappears from every read path and its gated link
+  // Delete a file: it disappears from every read path and its gated link
   // stops resolving (the server soft-deletes; storage accounting keeps
   // charging for everything ever written). The
   // server returns 204 with an empty body on success; 404 when the id is
   // unknown to the credential's customer, 403 when the token isn't allowed to
   // delete (e.g. a sandbox token).
-  deleteAsset(assetId: string): Promise<void> {
-    return this.request('DELETE', `/assets/${encodeURIComponent(assetId)}`)
+  deleteFile(fileId: string): Promise<void> {
+    return this.request('DELETE', `/files/${encodeURIComponent(fileId)}`)
   }
 
   // -------------------------------- reviews --------------------------------
@@ -365,47 +362,21 @@ export class ApiClient {
     return res.reviews
   }
 
-  // --------------------------- review defaults -----------------------------
-  // The default code review pipeline ladder (repo default -> account default),
-  // the code_review twin of the /defaults methods below and addressed the
-  // same way: `repository` is "owner/name" for a repo rung and null/omitted
-  // for the account rung — never a row id. Read by POST /reviews when no
-  // config is named; webhook reviews are unaffected. Mutations are refused
-  // for sandbox tokens (403).
-
-  async listReviewDefaults(): Promise<CodeReviewDefaultView[]> {
-    const res = await this.request<ListCodeReviewDefaultsResponse>(
-      'GET',
-      '/reviews/defaults',
-    )
-    return res.defaults
-  }
-
-  putReviewDefault(req: PutCodeReviewDefaultRequest): Promise<CodeReviewDefaultView> {
-    return this.request('PUT', '/reviews/defaults', req)
-  }
-
-  // Clears a rung: the account default when `repository` is omitted, that
-  // repo's default otherwise. 404 when the rung isn't set.
-  deleteReviewDefault(repository?: string): Promise<void> {
-    return this.request('DELETE', '/reviews/defaults', undefined, { repository })
-  }
-
   // ----------------------------- agent configs ----------------------------
 
   async listAgentConfigs(): Promise<SavedAgentConfig[]> {
-    const res = await this.request<ListAgentConfigsResponse>('GET', '/configs')
+    const res = await this.request<ListAgentConfigsResponse>('GET', '/agents/configs')
     return res.configs
   }
 
   // Opens a pull request that adds the config's YAML to the repo's agents/
   // directory; the agent goes live once it merges and syncs.
   createAgentConfig(req: CreateAgentConfigRequest): Promise<CreatedAgentConfig> {
-    return this.request('POST', '/configs', req)
+    return this.request('POST', '/agents/configs', req)
   }
 
   getAgentConfig(configId: string): Promise<SavedAgentConfig> {
-    return this.request('GET', `/configs/${encodeURIComponent(configId)}`)
+    return this.request('GET', `/agents/configs/${encodeURIComponent(configId)}`)
   }
 
   // ------------------------------ defaults --------------------------------
@@ -415,18 +386,18 @@ export class ApiClient {
   // refused for sandbox tokens (403).
 
   async listAgentDefaults(): Promise<AgentDefaultView[]> {
-    const res = await this.request<ListAgentDefaultsResponse>('GET', '/defaults')
+    const res = await this.request<ListAgentDefaultsResponse>('GET', '/agents/defaults')
     return res.defaults
   }
 
   putAgentDefault(req: PutAgentDefaultRequest): Promise<AgentDefaultView> {
-    return this.request('PUT', '/defaults', req)
+    return this.request('PUT', '/agents/defaults', req)
   }
 
   // Clears a rung: the account default when `repository` is omitted, that
   // repo's default otherwise. 404 when the rung isn't set.
   deleteAgentDefault(repository?: string): Promise<void> {
-    return this.request('DELETE', '/defaults', undefined, { repository })
+    return this.request('DELETE', '/agents/defaults', undefined, { repository })
   }
 
   // ------------------------------- variables --------------------------------
@@ -434,14 +405,14 @@ export class ApiClient {
   // mutation), so callers can render the resulting state.
 
   async listSandboxVariables(): Promise<SandboxVariableSummary[]> {
-    const res = await this.request<GetSandboxVariablesResponse>('GET', '/variables')
+    const res = await this.request<GetSandboxVariablesResponse>('GET', '/secrets')
     return res.variables
   }
 
   async putSandboxVariables(
     variables: SandboxVariableInput[],
   ): Promise<SandboxVariableSummary[]> {
-    const res = await this.request<GetSandboxVariablesResponse>('PUT', '/variables', {
+    const res = await this.request<GetSandboxVariablesResponse>('PUT', '/secrets', {
       variables,
     })
     return res.variables
@@ -450,7 +421,7 @@ export class ApiClient {
   async deleteSandboxVariable(name: string): Promise<SandboxVariableSummary[]> {
     const res = await this.request<GetSandboxVariablesResponse>(
       'DELETE',
-      `/variables/${encodeURIComponent(name)}`,
+      `/secrets/${encodeURIComponent(name)}`,
     )
     return res.variables
   }
@@ -467,12 +438,12 @@ export class ApiClient {
   // ---------------------------- agent templates ---------------------------
 
   async listAgentTemplates(): Promise<AgentTemplate[]> {
-    const res = await this.request<ListAgentTemplatesResponse>('GET', '/templates')
+    const res = await this.request<ListAgentTemplatesResponse>('GET', '/agents/templates')
     return res.templates
   }
 
   getAgentTemplate(slug: string): Promise<AgentTemplate> {
-    return this.request('GET', `/templates/${encodeURIComponent(slug)}`)
+    return this.request('GET', `/agents/templates/${encodeURIComponent(slug)}`)
   }
 
   // ------------------------ integration discovery -------------------------
@@ -485,38 +456,38 @@ export class ApiClient {
   }
 
   listGithubRepositories(): Promise<ListGithubRepositoriesResponse> {
-    return this.request('GET', '/github/repos')
+    return this.request('GET', '/integrations/github/repos')
   }
 
   listGithubMembers(): Promise<ListGithubMembersResponse> {
-    return this.request('GET', '/github/members')
+    return this.request('GET', '/integrations/github/members')
   }
 
   listSlackChannels(): Promise<ListSlackChannelsResponse> {
-    return this.request('GET', '/slack/channels')
+    return this.request('GET', '/integrations/slack/channels')
   }
 
   listSlackMembers(): Promise<ListSlackMembersResponse> {
-    return this.request('GET', '/slack/members')
+    return this.request('GET', '/integrations/slack/members')
   }
 
   listLinearTeams(): Promise<ListLinearTeamsResponse> {
-    return this.request('GET', '/linear/teams')
+    return this.request('GET', '/integrations/linear/teams')
   }
 
   listSentryOrganizations(): Promise<ListSentryOrganizationsResponse> {
-    return this.request('GET', '/sentry/organizations')
+    return this.request('GET', '/integrations/sentry/organizations')
   }
 
   // --------------------------- device-code auth ---------------------------
   // Unauthenticated: the CLI has no credential yet — that's what it's obtaining.
 
   startCliAuth(): Promise<CliAuthStart> {
-    return this.request('POST', '/cli-auth/start')
+    return this.request('POST', '/auth/cli/start')
   }
 
   pollCliAuth(deviceCode: string): Promise<CliAuthPoll> {
-    return this.request('POST', '/cli-auth/poll', { device_code: deviceCode })
+    return this.request('POST', '/auth/cli/poll', { device_code: deviceCode })
   }
 }
 
@@ -552,20 +523,30 @@ export function buildQuery(query?: Record<string, unknown>): string {
   return qs ? `?${qs}` : ''
 }
 
-// Pull the server's `{"detail": ...}` message and request id off a non-2xx
-// response. The detail keeps `agent` error output actionable instead of bare
-// codes; the id comes from the `X-Request-ID` header (set on every API response)
-// and falls back to the `request_id` field the server's 500 handler includes in
-// its body, so an error carries something we can grep our logs for.
+// Pull the server's message and request id off a non-2xx response. The message
+// keeps `agent` error output actionable instead of bare codes; the id comes from
+// the `X-Request-ID` header (set on every API response) and falls back to the
+// body, so an error carries something we can grep our logs for.
+//
+// The public API answers with `{"error": {code, message, request_id}}`. FastAPI's
+// own validation and auth rejections still use `{"detail": ...}`, so both shapes
+// are read: an unrecognized body would otherwise degrade to a bare status line.
 export async function parseErrorResponse(
   res: Response,
 ): Promise<{ detail: string; requestId?: string }> {
   const headerRequestId = res.headers.get('x-request-id') ?? undefined
   try {
-    const body = (await res.json()) as { detail?: unknown; request_id?: unknown }
+    const body = (await res.json()) as {
+      error?: { code?: unknown; message?: unknown; request_id?: unknown }
+      detail?: unknown
+      request_id?: unknown
+    }
+    const bodyRequestId = body.error?.request_id ?? body.request_id
     const requestId =
-      headerRequestId ??
-      (typeof body.request_id === 'string' ? body.request_id : undefined)
+      headerRequestId ?? (typeof bodyRequestId === 'string' ? bodyRequestId : undefined)
+    if (typeof body.error?.message === 'string') {
+      return { detail: body.error.message, requestId }
+    }
     if (typeof body.detail === 'string') return { detail: body.detail, requestId }
     if (body.detail) return { detail: JSON.stringify(body.detail), requestId }
     return { detail: res.statusText, requestId }

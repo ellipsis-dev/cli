@@ -443,28 +443,3 @@ export function pushHandoffRef(cwd: string, sha: string): string {
   return ref
 }
 
-// ---------------------------------------------------------------------------
-// Local review: the same snapshot trick, but pushed to a real BRANCH.
-// ---------------------------------------------------------------------------
-
-export function currentBranch(cwd: string): string | null {
-  const branch = gitOrThrow(cwd, 'rev-parse', '--abbrev-ref', 'HEAD')
-  // Detached HEAD has no branch to derive a sidecar name from.
-  return branch && branch !== 'HEAD' ? branch : null
-}
-
-// The sidecar branch a local review is pushed to. Your real branch is never
-// touched, so a stash-quality WIP commit never lands on the work you're doing.
-export function reviewBranchName(branch: string): string {
-  return `ellipsis/review/${branch}`
-}
-
-// Force-push the WIP snapshot to the sidecar branch. A BRANCH, not the hidden
-// ref handoff uses: GitHub cannot open a pull request from a non-branch ref,
-// and the platform needs a PR to review (it finds-or-creates a draft one).
-// Force because each review replaces the previous snapshot of the same work.
-export function pushReviewBranch(cwd: string, sha: string, branch: string): string {
-  const target = reviewBranchName(branch)
-  gitOrThrow(cwd, 'push', '--force', 'origin', `${sha}:refs/heads/${target}`)
-  return target
-}

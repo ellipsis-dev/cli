@@ -326,7 +326,7 @@ export function registerSession(program: Command): void {
         '--since/--until accept ISO 8601 or "today", "yesterday", "N days ago".',
     ),
     'GET /sessions',
-    'GET /github/members to resolve --author',
+    'GET /integrations/github/members to resolve --author',
   )
     .option('-c, --config <config-id>', 'only sessions run by this saved agent config')
     .option(
@@ -402,7 +402,7 @@ export function registerSession(program: Command): void {
           '--since/--until accept ISO 8601 or "today", "yesterday", "N days ago".',
       ),
     'GET /sessions/search',
-    'GET /github/members to resolve --author',
+    'GET /integrations/github/members to resolve --author',
   )
     .option(
       '-a, --author <login>',

@@ -11,7 +11,6 @@ import {
   splitRepo,
   starterPipeline,
 } from '../src/commands/review'
-import { currentBranch, reviewBranchName } from '../src/lib/laptop'
 import type { Finding } from '../src/lib/types'
 
 // A throwaway repo with an origin remote, so the local path's git work runs for
@@ -72,19 +71,6 @@ describe('buildCreateRequest — an existing pull request', () => {
     expect(req.scope.head).toBe('bbbb222')
   })
 
-  it('forwards the config, model, and budget overrides', () => {
-    const req = buildCreateRequest('1', {
-      ...START_DEFAULTS,
-      repo: 'o/r',
-      config: 'agent_abc',
-      model: 'claude-opus-4-8',
-      budget: 5,
-    })
-    expect(req.config_id).toBe('agent_abc')
-    expect(req.model).toBe('claude-opus-4-8')
-    expect(req.budget).toBe(5)
-  })
-
   it('posts by default, and --no-post turns it off', () => {
     expect(buildCreateRequest('1', { ...START_DEFAULTS, repo: 'o/r' }).post).toBe(true)
     expect(
@@ -93,73 +79,11 @@ describe('buildCreateRequest — an existing pull request', () => {
   })
 })
 
-describe('buildCreateRequest — the local path', () => {
-  it('pushes a sidecar branch and pins the range end to the pushed commit', () => {
-    const { work: cwd, remote } = scratchRepo('feature/thing')
-    writeFileSync(join(cwd, 'a.txt'), 'dirty\n')
-
-    const req = buildCreateRequest(undefined, { ...START_DEFAULTS, cwd })
-
-    // The sidecar, never the branch you're working on.
-    expect(req.branch).toBe('ellipsis/review/feature/thing')
-    expect(currentBranch(cwd)).toBe('feature/thing')
-    // The pushed snapshot pins the head: GitHub's reported PR head lags a
-    // force-push to the sidecar.
-    expect(req.sha).toMatch(/^[0-9a-f]{40}$/)
-    expect(req.pull_request_number).toBeUndefined()
-    // The commit really landed on the remote (read the bare repo directly —
-    // the fetch URL is a real GitHub URL this test can't reach).
-    const pushed = execFileSync('git', ['-C', remote, 'show-ref'], {
-      encoding: 'utf8',
-    })
-    expect(pushed).toContain('refs/heads/ellipsis/review/feature/thing')
-  })
-
-  it('never posts a local review, even without --no-post', () => {
-    const { work: cwd } = scratchRepo()
-    // Reviewing unfinished work must not leave comments on a pull request, so
-    // the terminal-only default does not depend on the caller remembering.
-    expect(buildCreateRequest(undefined, { ...START_DEFAULTS, cwd }).post).toBe(false)
-  })
-
-  it('snapshots a clean tree too (HEAD), so a review needs no dirty edit', () => {
-    const { work: cwd } = scratchRepo()
-    const head = execFileSync('git', ['-C', cwd, 'rev-parse', 'HEAD'], {
-      encoding: 'utf8',
-    }).trim()
-    expect(buildCreateRequest(undefined, { ...START_DEFAULTS, cwd }).sha).toBe(head)
-  })
-
-  it('reviews an already-pushed branch without touching git', () => {
-    const { work: cwd } = scratchRepo()
-    const req = buildCreateRequest(undefined, {
-      ...START_DEFAULTS,
-      cwd,
-      branch: 'someone/elses-branch',
-    })
-    expect(req.branch).toBe('someone/elses-branch')
-    // Nothing was pushed, so there is no snapshot SHA to pin.
-    expect(req.sha).toBeUndefined()
-  })
-
-  it('explains itself on a detached HEAD instead of guessing a branch', () => {
-    const { work: cwd } = scratchRepo()
-    execFileSync('git', ['-C', cwd, 'checkout', '--detach'], { stdio: 'ignore' })
-    expect(() => buildCreateRequest(undefined, { ...START_DEFAULTS, cwd })).toThrow(
-      /detached HEAD/,
-    )
-  })
-
+describe('buildCreateRequest — repository resolution', () => {
   it('needs a repo when there is no git remote to infer one from', () => {
     expect(() =>
-      buildCreateRequest(undefined, { ...START_DEFAULTS, cwd: mkdtempSync(join(tmpdir(), 'bare-')) }),
+      buildCreateRequest('123', { ...START_DEFAULTS, cwd: mkdtempSync(join(tmpdir(), 'bare-')) }),
     ).toThrow(/--repo/)
-  })
-})
-
-describe('reviewBranchName', () => {
-  it('prefixes the sidecar so it is obvious what it is in a branch list', () => {
-    expect(reviewBranchName('hunter/my-feature')).toBe('ellipsis/review/hunter/my-feature')
   })
 })
 
@@ -229,22 +153,37 @@ describe('formatFinding', () => {
 
 describe('starterPipeline', () => {
   it('marks the file as a pipeline, not an agent', () => {
-    expect(starterPipeline('code_review', 'cli')).toContain('kind: code_review')
+    expect(starterPipeline('cli code review')).toContain('kind: code_review')
   })
 
   it('parses as YAML and only sets keys the schema allows', () => {
-    const parsed = parse(starterPipeline('code_review', 'cli')) as Record<string, unknown>
-    expect(Object.keys(parsed).sort()).toEqual(['budget', 'ellipsis', 'pull_requests'])
+    const parsed = parse(starterPipeline('cli code review')) as Record<string, unknown>
+    expect(Object.keys(parsed).sort()).toEqual(['budget', 'ellipsis'])
     expect(parsed.ellipsis).toMatchObject({ version: 'v1', kind: 'code_review' })
-    expect(parsed.pull_requests).toEqual({ repositories: ['cli'] })
   })
 
-  it('names the pipeline after the file, so a second file does not collide', () => {
-    const parsed = parse(starterPipeline('backend', 'cli')) as { ellipsis: { name: string } }
-    expect(parsed.ellipsis.name).toBe('backend')
+  // Location is the scope now, so naming repositories is a sync error anywhere
+  // but the org-wide copy — the scaffold must never emit the key.
+  it('omits pull_requests.repositories, which would be a sync error', () => {
+    expect(starterPipeline('cli code review')).not.toContain('repositories:')
   })
 
-  it('falls back to a placeholder repository outside a git checkout', () => {
-    expect(starterPipeline('code_review', undefined)).toContain('- my-repo')
+  // Deleted from the schema, which forbids unknown keys.
+  it('omits include_default_reviewers', () => {
+    expect(starterPipeline('cli code review')).not.toContain('include_default_reviewers')
+  })
+
+  it('names the pipeline so a reader knows what it covers', () => {
+    const parsed = parse(starterPipeline('backend code review')) as {
+      ellipsis: { name: string }
+    }
+    expect(parsed.ellipsis.name).toBe('backend code review')
+  })
+
+  it('documents both legal paths and no others', () => {
+    const text = starterPipeline('cli code review')
+    expect(text).toContain('code_review.yaml')
+    expect(text).toContain('.ellipsis/code_review.yaml')
+    expect(text).not.toContain('agents/')
   })
 })

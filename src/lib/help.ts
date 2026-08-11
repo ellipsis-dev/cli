@@ -20,7 +20,7 @@ function withoutAliases(term: string, cmd: Command): string {
 const TOP_LEVEL_GROUPS: ReadonlyArray<{ title: string; commands: readonly string[] }> = [
   { title: 'Sessions', commands: ['session', 'review'] },
   { title: 'Agents', commands: ['config', 'model', 'template'] },
-  { title: 'Platform', commands: ['variable', 'asset', 'hook'] },
+  { title: 'Platform', commands: ['variable', 'file', 'hook'] },
   { title: 'Integrations', commands: ['integration', 'github', 'slack', 'linear', 'sentry'] },
   { title: 'Spend', commands: ['budget', 'usage', 'analytics'] },
   { title: 'Account', commands: ['install', 'login', 'logout', 'me', 'host', 'ping'] },

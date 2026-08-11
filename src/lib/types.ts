@@ -306,34 +306,6 @@ export interface PutAgentDefaultRequest {
   config_id: string
 }
 
-// One rung of the default code review pipeline ladder (GET
-// /reviews/defaults) — the code_review twin of AgentDefaultView, pointing
-// at a synced `kind: code_review` pipeline (crcfg_…) instead of an agent
-// config. Read by POST /reviews when no config is named: repo default ->
-// account default -> the oldest synced pipeline -> the platform defaults.
-export interface CodeReviewDefaultView {
-  id: string
-  repository: string | null
-  config_id: string
-  // The pointed-at pipeline's name; null when the pipeline is gone (see broken).
-  config_name: string | null
-  // Why this rung can't serve reviews (config_deleted | config_disabled |
-  // config_sync_error | repo_inaccessible); null when healthy.
-  broken: string | null
-  updated_at: string
-}
-
-export interface ListCodeReviewDefaultsResponse {
-  defaults: CodeReviewDefaultView[]
-}
-
-// Body of PUT /reviews/defaults: point a rung at a pipeline. `repository`
-// omitted sets the account default; "owner/name" sets that repo's default.
-export interface PutCodeReviewDefaultRequest {
-  repository?: string
-  config_id: string
-}
-
 // Create-config payload for POST /configs. Exactly one of `config` (inline)
 // or `template_id` (a gallery template slug). `repository` is a bare repo name
 // in the caller's account — the owner is always the account.
@@ -856,13 +828,13 @@ export interface GetAnalyticsReviewsResponse {
   }
 }
 
-// --------------------------------- assets --------------------------------
-// Agent asset storage (ellipsis: documents/eng/AGENT_ASSET_STORAGE.md): files
-// an agent persists beyond its sandbox's lifetime — v1 is PNG screenshots
-// posted as org-gated links on PRs. Mirrors assets_service.py.
+// --------------------------------- files ---------------------------------
+// Agent file storage: files an agent persists beyond its sandbox's lifetime —
+// v1 is PNG screenshots posted as org-gated links on PRs. Mirrors
+// files_service.py.
 
-// Caller-facing asset metadata — no storage internals (S3 key, sha, owner).
-export interface AssetView {
+// Caller-facing file metadata — no storage internals (S3 key, sha, owner).
+export interface FileView {
   id: string
   filename: string
   content_type: string
@@ -872,9 +844,9 @@ export interface AssetView {
   agent_session_id: string | null
 }
 
-export interface CreateAssetRequest {
+export interface CreateFileRequest {
   // Original basename, display only (the S3 key derives from the server-side
-  // asset id, never from this).
+  // file id, never from this).
   filename: string
   // v1: must be image/png; the server magic-byte-checks the decoded bytes.
   content_type: string
@@ -883,25 +855,25 @@ export interface CreateAssetRequest {
   data_b64: string
 }
 
-export interface CreateAssetResponse {
-  asset: AssetView
-  // The fully-formed org-gated dashboard URL (app.ellipsis.dev/assets/{id}) —
+export interface CreateFileResponse {
+  file: FileView
+  // The fully-formed org-gated dashboard URL (app.ellipsis.dev/files/{id}) —
   // the link an agent pastes into a PR comment.
   url: string
 }
 
-export interface ListAssetsQuery {
+export interface ListFilesQuery {
   // Scope to one run's uploads.
   agent_session_id?: string
   limit?: number
 }
 
-export interface ListAssetsResponse {
-  assets: AssetView[]
+export interface ListFilesResponse {
+  files: FileView[]
 }
 
-export interface GetAssetResponse {
-  asset: AssetView
+export interface GetFileResponse {
+  file: FileView
   // The gated dashboard URL (same link the upload returned).
   url: string
   // Short-lived (60s) presigned S3 GET for the actual bytes — fetch it
