@@ -427,9 +427,10 @@ Review pull requests on demand, without waiting for a push:
 ```sh
 agent review 519                  # review a pull request by number
 agent review 519 --full           # re-review the whole PR, ignoring earlier reviews
-agent review --no-post            # print findings instead of posting to GitHub
+agent review 519 --no-post        # print findings instead of posting to GitHub
 agent review list --repo api      # a repository's reviews, newest first
 agent review get <review-id>      # one review's findings, scope, and whether it posted
+agent review init                 # scaffold code_review.yaml for this repository
 ```
 
 Which pipeline runs is not a parameter. An explicit review resolves the same
@@ -460,7 +461,7 @@ agent variable list                          # names and timestamps only
 agent integration                            # what is connected, in one table
 agent github repos                           # also github members, slack channels,
                                              # linear teams, sentry orgs
-agent asset upload shot.png                  # store a PNG, print an org-gated link
+agent file upload shot.png                   # store a PNG, print an org-gated link
 ```
 
 Sync local Claude Code sessions into the same searchable history, then hand work
@@ -646,11 +647,11 @@ If `ELLIPSIS_SANDBOX_ID` is set in the environment, you are the agent in an
 Ellipsis session. The `agent` CLI is pre-installed and pre-authenticated with a
 session-scoped token, so you can start child sessions, search the team's session
 history, read analytics, and upload screenshots as org-gated links
-(`agent asset upload shot.png`) with no login. `agent session connect` with no
+(`agent file upload shot.png`) with no login. `agent session connect` with no
 id connects to the current session, via `ELLIPSIS_SESSION_ID`.
 
 That token is deliberately narrower than a human's. It can list variable names
-but not set or delete them, cannot delete an asset, and cannot repoint an
+but not set or delete them, cannot delete a file, and cannot repoint an
 account or repository default. An agent cannot overwrite the team's credentials
 or destroy the evidence it posted.
 

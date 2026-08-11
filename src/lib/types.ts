@@ -413,8 +413,9 @@ export interface ListAgentSessionsQuery {
   start?: string
   end?: string
   limit?: number
-  // A GitHub account id (GET /github/members); scopes the list to sessions
-  // attributed to that developer. The CLI resolves it from a --author login.
+  // A GitHub account id (GET /integrations/github/members); scopes the list to
+  // sessions attributed to that developer. The CLI resolves it from a --author
+  // login.
   author_id?: number
 }
 
