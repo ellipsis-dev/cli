@@ -20,6 +20,7 @@ import type {
   SupportedModel,
 } from '../lib/types'
 import { applyEditShortcut } from '../lib/editing'
+import { CTRL_C_QUIT_HINT, useCtrlCQuit } from './ctrlC'
 import { hyperlink, sessionUrl } from '../lib/urls'
 import { usdNumberFromMillicents } from '../lib/output'
 import {
@@ -35,11 +36,13 @@ import {
   rowMeta,
   rowStatusWord,
   navSlice,
+  sessionBarQuery,
   sessionSource,
   SELECTION_GLYPH,
   sidebarSlice,
   mergeSidebarSessions,
 } from '../lib/sessions'
+import type { ResolvedSessionBar } from '../lib/config'
 import { randomFact } from '../lib/facts'
 import { SURFACE_ACTIVE, SURFACE_ELEVATED, theme } from '../lib/theme'
 import { ConnectApp } from './ConnectApp'
@@ -67,7 +70,6 @@ import { ConnectApp } from './ConnectApp'
 // repaints instantly and the stream resumes past the cached cursor.
 
 const SIDEBAR_POLL_MS = 5_000
-const SIDEBAR_LIMIT = 50
 // The nav clock driving the "12s" age tags.
 const AGE_TICK_MS = 5_000
 const NAV_NEW_LABEL = '+ New session'
@@ -75,9 +77,6 @@ const NAV_NEW_LABEL = '+ New session'
 // the right budgets itself against what's left of the row.
 const HEADER_TITLE = 'ellipsis.dev'
 const TITLE_WIDTH = HEADER_TITLE.length
-// The nav shows six rows: the pinned new-session row plus the five most
-// recent sessions, which scroll under the highlight.
-const NAV_SESSION_ROWS = 5
 
 // Blank canvas cells between the frame and the terminal edge, on all four
 // sides. Everything inside lays out against the inset width/height.
@@ -114,10 +113,11 @@ export interface SessionsAppProps {
   // caveat to show in its chat (watch-only reasons ride connectability).
   initialConfigName?: string
   initialNotice?: string
-  // Drop the session nav (band 4) entirely, giving its rows to the chat.
-  // Focus never leaves the chat: esc and ↓ at the bottom edge do nothing.
-  // Set via "hideSessionBar": true in the config file.
-  hideSessionBar?: boolean
+  // How the session nav (band 4) is scoped: how many rows it shows and which
+  // sessions reach it. `hidden` drops the band entirely, giving its rows to
+  // the chat — focus then never leaves the chat, so esc and ↓ at the bottom
+  // edge do nothing. Set under "sessionBar" in the config file.
+  sessionBar: ResolvedSessionBar
   // Builds the start request for a composer-spawned session (the entry point
   // owns repository detection and defaults).
   buildStartRequest: (prompt: string) => StartAgentSessionRequest
@@ -136,8 +136,8 @@ type ChatEntry = {
 type MainPane = { type: 'new' } | { type: 'chat'; sessionId: string }
 
 export function SessionsApp(props: SessionsAppProps): React.ReactElement {
-  const { api, openSocket, appBase, customerLogin, authorId } = props
-  const hideNav = props.hideSessionBar === true
+  const { api, openSocket, appBase, customerLogin, authorId, sessionBar } = props
+  const hideNav = sessionBar.hidden
   const { exit } = useApp()
   const { isRawModeSupported } = useStdin()
   const { stdout } = useStdout()
@@ -185,10 +185,9 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
 
   const poll = useCallback(async (): Promise<void> => {
     try {
-      const listed = await api.listAgentSessions({
-        author_id: authorId ?? undefined,
-        limit: SIDEBAR_LIMIT,
-      })
+      const listed = await api.listAgentSessions(
+        sessionBarQuery(sessionBar, { authorId, detectedRepo: props.detectedRepo }),
+      )
       setAttention((prev) => {
         const next = new Set(prev)
         for (const s of listed) {
@@ -207,7 +206,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       // fails every tick is a broken session list, not a blip.
       reportApiError('sessions', err)
     }
-  }, [api, authorId, reportApiError])
+  }, [api, authorId, reportApiError, sessionBar, props.detectedRepo])
 
   // The poll only feeds the nav's rows and attention dots; with the bar
   // hidden there is nothing on screen it could update.
@@ -227,7 +226,8 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
 
   // Cloud sessions only. A laptop session is a local `claude` run synced up for
   // the record; opening one here has nothing to connect to, so it would be a
-  // dead row taking a slot from the five cloud sessions worth showing.
+  // dead row taking a slot from a session worth showing. Client-side because
+  // it holds whatever `sessionBar.sources` says.
   const rows = useMemo(
     () => mergeSidebarSessions(sessions, localSessions).filter((s) => sessionSource(s) !== 'laptop'),
     [localSessions, sessions],
@@ -432,6 +432,13 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     { isActive: focus === 'nav' && isRawModeSupported },
   )
 
+  // ctrl+c quits from the nav and from the panes that aren't a live chat (the
+  // new-session form, a chat still loading) — the chat pane owns its own, where
+  // the first press also interrupts the running turn.
+  const chatOwnsCtrlC = mainPane.type === 'chat' && entries.has(mainPane.sessionId)
+  const navArmed = useCtrlCQuit(focus === 'nav' && isRawModeSupported)
+  const paneArmed = useCtrlCQuit(focus === 'chat' && !chatOwnsCtrlC && isRawModeSupported)
+
   // With the session bar hidden there is nothing to hand focus to: esc and ↓
   // at the chat's bottom edge land where they started.
   const focusNav = useCallback((): void => {
@@ -444,11 +451,11 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   // ------------------------------- rendering --------------------------------
 
   // Band heights: header = blank + title line + rule (3); nav = rule + the
-  // new-session row + five session rows + hint (8), or nothing when hidden.
-  // The chat band gets the rest, and a terminal too short for both drops
-  // session rows rather than growing the frame past the screen.
+  // new-session row + `sessionBar.rows` session rows + hint, or nothing when
+  // hidden. The chat band gets the rest, and a terminal too short for both
+  // drops session rows rather than growing the frame past the screen.
   const headerRows = 3
-  const navSessionRows = Math.max(1, Math.min(NAV_SESSION_ROWS, contentRows - 10))
+  const navSessionRows = Math.max(1, Math.min(sessionBar.rows, contentRows - 10))
   const navRows = hideNav ? 0 : 3 + navSessionRows
   const chatRows = Math.max(4, contentRows - headerRows - navRows)
 
@@ -492,7 +499,10 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
           {/* truncate, never wrap: the bar is budgeted at exactly one row, and
               a wrapped meta line pushes the rule off the bottom of the band. */}
           <Text color={theme.muted} wrap="truncate">
-            {metaText ?? whoText}
+            {/* Armed, the bar carries the ctrl+c prompt: the nav and the
+                new-session form have no notice line of their own, and the
+                header is the one band always on screen. */}
+            {navArmed || paneArmed ? CTRL_C_QUIT_HINT : (metaText ?? whoText)}
           </Text>
         </Box>
       </Box>
@@ -580,7 +590,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   }
 
   // ---- band 4: the session nav ----
-  // A vertical list of six rows: the pinned new-session row, then five session
+  // A vertical list: the pinned new-session row, then `sessionBar.rows` session
   // rows (status dot + description + a dim age tag) in sortSidebarSessions
   // order — status band, newest-born first — windowed so the highlight parks
   // on the second-to-last row and the list scrolls under it. The band's height

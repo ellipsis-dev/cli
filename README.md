@@ -161,9 +161,37 @@ Hosts and tokens live in `~/.ellipsis/config.json` (mode 0600); set
 is migrated on first use — your existing login becomes a host named for its API
 base.
 
-The config file also carries UI preferences. Set `"hideSessionBar": true` at
-the top level to drop the session list from the bottom of the interactive UI
-and give its rows to the chat window.
+The config file also carries UI preferences. `"sessionBar"` scopes the session
+list at the bottom of the interactive UI:
+
+```json
+{
+  "sessionBar": {
+    "hidden": false,
+    "rows": 5,
+    "days": 7,
+    "repo": "cwd",
+    "statuses": "all",
+    "sources": ["cli", "manual"]
+  }
+}
+```
+
+`hidden` drops the bar entirely and gives its rows to the chat window. `rows` is
+how many sessions it lists (a short terminal shows fewer). `days` hides sessions
+that have not moved in that long; `0` means no age cutoff. `repo` is `"cwd"` to
+list only sessions on the repository your shell is in, or `"any"` for all of
+them. `statuses` is `"unfinished"` to leave out the sessions that finished,
+errored, or were stopped, or `"all"` to keep them. `sources` lists only sessions
+started those ways (`react`, `manual`, `api`, `cli`, `mention`, `cron`); leave it
+out for all of them.
+
+Every field is optional and the defaults above are what you get with no
+`sessionBar` at all. Two caveats on `repo`: a shell outside a repository lists
+every repository rather than nothing, and sessions that name their repository
+only inside their agent config — dashboard starts, cron runs, handoffs — do not
+match a repo filter, so `"repo": "any"` is the way to see those alongside the
+rest.
 
 ## Develop
 

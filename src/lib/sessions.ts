@@ -1,7 +1,13 @@
 import { sessionStatusWord } from '@ellipsis-dev/sdk/stream'
 import type { AgentSessionWire } from '@ellipsis-dev/sdk'
 import { theme } from './theme'
-import type { AgentSession, StartAgentSessionRequest, SupportedModel } from './types'
+import type {
+  AgentSession,
+  AgentSessionSource,
+  ListAgentSessionsQuery,
+  StartAgentSessionRequest,
+  SupportedModel,
+} from './types'
 
 // Pure session-model helpers shared by the connect command and the
 // multi-session UI (SessionsApp). No I/O here — everything is testable.
@@ -220,6 +226,42 @@ export function mergeSidebarSessions(
   for (const s of [...polled, ...local]) if (!byId.has(s.id)) byId.set(s.id, s)
   return sortSidebarSessions([...byId.values()])
 }
+
+// ---------------------------- session bar scope ---------------------------
+
+// The list query behind the session bar, from the user's `sessionBar` settings.
+// Age, repository, status, and source are all server-side filters, so the rows
+// that come back are already the ones worth showing and the page is not spent
+// on sessions the bar would drop.
+//
+// `repo: 'cwd'` outside a repository asks for every repository rather than a
+// repo named "" — the bar is a way back into your work, so a shell in ~ should
+// still show it.
+export function sessionBarQuery(
+  bar: {
+    rows: number
+    days: number
+    repo: 'cwd' | 'any'
+    statuses: 'all' | 'unfinished'
+    sources: string[] | undefined
+  },
+  context: { authorId: number | null; detectedRepo: string | null },
+): ListAgentSessionsQuery {
+  const query: ListAgentSessionsQuery = {
+    author_id: context.authorId ?? undefined,
+    // Enough rows to band and scroll past the visible window, without paying
+    // for a page nobody scrolls to.
+    limit: Math.max(SESSION_BAR_FETCH, bar.rows),
+  }
+  if (bar.days > 0) query.days = bar.days
+  if (bar.repo === 'cwd' && context.detectedRepo) query.repo = context.detectedRepo
+  if (bar.statuses === 'unfinished') query.unfinished = true
+  if (bar.sources) query.source = bar.sources as AgentSessionSource[]
+  return query
+}
+
+// How many rows the bar fetches to fill its window from.
+export const SESSION_BAR_FETCH = 50
 
 // Attention transitions: a session that WAS in flight and now waits for a
 // human (waiting/sleeping/idle) deserves the sidebar dot. Pure step function

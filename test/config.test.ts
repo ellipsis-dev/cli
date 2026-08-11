@@ -9,13 +9,14 @@ import {
   clearActiveHostToken,
   deleteHost,
   getEnrolledRepos,
-  hideSessionBar,
   listHosts,
   loadConfig,
   requireToken,
   resolveApiBase,
   resolveAppBase,
   resolveToken,
+  SESSION_BAR_DEFAULTS,
+  sessionBar,
   setActiveHostToken,
   setEnrolledRepos,
   updateHost,
@@ -220,25 +221,73 @@ describe('host management', () => {
   })
 })
 
-describe('hideSessionBar', () => {
-  it('defaults to false with no config file', () => {
-    expect(hideSessionBar()).toBe(false)
+describe('sessionBar', () => {
+  it('falls back to the defaults with no config file', () => {
+    expect(sessionBar()).toEqual(SESSION_BAR_DEFAULTS)
   })
 
-  it('reads true from the config file', () => {
-    writeConfig({ version: 2, hosts: {}, hideSessionBar: true })
-    expect(hideSessionBar()).toBe(true)
+  it('reads every field from the config file', () => {
+    writeConfig({
+      version: 2,
+      hosts: {},
+      sessionBar: {
+        hidden: true,
+        rows: 8,
+        days: 30,
+        repo: 'any',
+        statuses: 'unfinished',
+        sources: ['cli', 'manual'],
+      },
+    })
+    expect(sessionBar()).toEqual({
+      hidden: true,
+      rows: 8,
+      days: 30,
+      repo: 'any',
+      statuses: 'unfinished',
+      sources: ['cli', 'manual'],
+    })
   })
 
-  it('treats a non-boolean value as false', () => {
-    writeConfig({ version: 2, hosts: {}, hideSessionBar: 'yes' })
-    expect(hideSessionBar()).toBe(false)
+  it('fills in the fields the file leaves out', () => {
+    writeConfig({ version: 2, hosts: {}, sessionBar: { rows: 3 } })
+    expect(sessionBar()).toEqual({ ...SESSION_BAR_DEFAULTS, rows: 3 })
+  })
+
+  // A typo in a preference should not stop the UI from opening.
+  it('ignores values of the wrong type or out of range', () => {
+    writeConfig({
+      version: 2,
+      hosts: {},
+      sessionBar: { hidden: 'yes', rows: 0, days: -3, repo: 'origin', statuses: 'live' },
+    })
+    expect(sessionBar()).toEqual(SESSION_BAR_DEFAULTS)
+  })
+
+  it('drops unknown sources and treats an empty list as every source', () => {
+    writeConfig({ version: 2, hosts: {}, sessionBar: { sources: ['cli', 'carrier-pigeon'] } })
+    expect(sessionBar().sources).toEqual(['cli'])
+    writeConfig({ version: 2, hosts: {}, sessionBar: { sources: [] } })
+    expect(sessionBar().sources).toBeUndefined()
+    writeConfig({ version: 2, hosts: {}, sessionBar: { sources: ['carrier-pigeon'] } })
+    expect(sessionBar().sources).toBeUndefined()
+  })
+
+  it('takes days 0 as "no age cutoff", not as a missing value', () => {
+    writeConfig({ version: 2, hosts: {}, sessionBar: { days: 0 } })
+    expect(sessionBar().days).toBe(0)
   })
 
   it('survives a host write', () => {
-    writeConfig({ version: 2, hosts: {}, hideSessionBar: true })
+    writeConfig({ version: 2, hosts: {}, sessionBar: { hidden: true } })
     addHost('beta', 'https://beta-api.ellipsis.dev')
-    expect(hideSessionBar()).toBe(true)
+    expect(sessionBar().hidden).toBe(true)
+  })
+
+  // hideSessionBar (the flat key sessionBar replaced) is gone, not honored.
+  it('ignores the old hideSessionBar key', () => {
+    writeConfig({ version: 2, hosts: {}, hideSessionBar: true })
+    expect(sessionBar().hidden).toBe(false)
   })
 })
 

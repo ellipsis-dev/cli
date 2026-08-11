@@ -1,7 +1,7 @@
 import React from 'react'
 import { render } from 'ink'
 import { ApiClient } from '../lib/api'
-import { hideSessionBar, requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
+import { requireToken, resolveApiBase, resolveAppBase, sessionBar } from '../lib/config'
 import { repoFromCwd } from '../lib/laptop'
 import { makeOpenSocket, resolveWsBase } from '../lib/stream'
 import type { StartAgentSessionRequest } from '../lib/types'
@@ -70,9 +70,12 @@ export async function runSessionsUi(options: SessionsUiOptions): Promise<void> {
       initialSessionId: options.initialSessionId,
       initialConfigName: options.initialConfigName,
       initialNotice: options.initialNotice,
-      hideSessionBar: hideSessionBar(),
+      sessionBar: sessionBar(),
       buildStartRequest: options.buildStartRequest,
     }),
+    // exitOnCtrlC off: the app handles ctrl+c itself (first press interrupts a
+    // running turn, second quits), which ink's default teardown would preempt.
+    { exitOnCtrlC: false },
   )
   // Same revoked-TTY guard as the solo connect: when the terminal is torn
   // down abruptly, stdin's fd stays open but polls fire forever; unmount on

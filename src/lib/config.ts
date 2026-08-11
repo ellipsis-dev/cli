@@ -32,6 +32,27 @@ export interface Host {
   enrolledRepos?: string[]
 }
 
+// How the interactive UI's session bar is scoped. Every field is optional; a
+// missing one takes the SESSION_BAR_DEFAULTS value below.
+export interface SessionBarConfig {
+  // Drop the bar entirely, giving its rows to the chat window.
+  hidden?: boolean
+  // How many session rows the bar shows (a short terminal shows fewer).
+  rows?: number
+  // Only sessions that moved in the last N days; 0 means no age cutoff.
+  days?: number
+  // "cwd" lists only sessions on the repository the shell is in, falling back
+  // to every repository when the cwd is not one. "any" never scopes by repo.
+  repo?: 'cwd' | 'any'
+  // "unfinished" drops the sessions that completed, errored, or were stopped,
+  // leaving the conversations still going. "all" keeps them.
+  statuses?: 'all' | 'unfinished'
+  // Only sessions started these ways, e.g. ["cli", "manual"]. Omit for all of
+  // them. Laptop sessions never appear whatever this says: there is nothing in
+  // the cloud to open.
+  sources?: string[]
+}
+
 // The config file (v2): a named set of hosts plus which one is active. Commands
 // resolve against the active host unless an env var / explicit arg overrides.
 // UI preferences live at the top level, not per host: they describe the
@@ -40,9 +61,7 @@ export interface CliConfig {
   version: 2
   activeHost?: string
   hosts: Record<string, Host>
-  // Hide the session bar (the nav under the text input) in the multi-session
-  // UI, giving its rows to the chat window.
-  hideSessionBar?: boolean
+  sessionBar?: SessionBarConfig
 }
 
 // The pre-hosts (v1) file shape — a single flat instance. Kept only so
@@ -216,10 +235,54 @@ export function clearAllTokens(): void {
   saveConfig(cfg)
 }
 
-// Whether the multi-session UI should hide the session bar. Read from the
-// config file only — set `"hideSessionBar": true` in ~/.ellipsis/config.json.
-export function hideSessionBar(): boolean {
-  return loadConfig().hideSessionBar === true
+// The session bar with nothing configured: scoped to the repository you are
+// standing in and the last week, which is short enough to read at a glance
+// without hiding a session you are likely to reopen. `repo: 'cwd'` falls back
+// to every repository outside a repo, so the bar is never mysteriously empty.
+export const SESSION_BAR_DEFAULTS: Required<Omit<SessionBarConfig, 'sources'>> & {
+  sources: string[] | undefined
+} = {
+  hidden: false,
+  rows: 5,
+  days: 7,
+  repo: 'cwd',
+  statuses: 'all',
+  sources: undefined,
+}
+
+export type ResolvedSessionBar = typeof SESSION_BAR_DEFAULTS
+
+const SESSION_SOURCES = ['react', 'manual', 'api', 'cli', 'mention', 'cron', 'laptop']
+
+// The session bar's settings, defaults filled in — set them under
+// `"sessionBar"` in ~/.ellipsis/config.json. A value of the wrong type or
+// outside its range takes the default rather than throwing: a typo in a
+// preference should not stop the UI from opening.
+export function sessionBar(): ResolvedSessionBar {
+  const raw = loadConfig().sessionBar
+  if (!raw || typeof raw !== 'object') return { ...SESSION_BAR_DEFAULTS }
+  const sources = Array.isArray(raw.sources)
+    ? raw.sources.filter((s) => SESSION_SOURCES.includes(s))
+    : undefined
+  return {
+    hidden: raw.hidden === true,
+    rows:
+      typeof raw.rows === 'number' && isFinite(raw.rows) && raw.rows >= 1
+        ? Math.floor(raw.rows)
+        : SESSION_BAR_DEFAULTS.rows,
+    days:
+      typeof raw.days === 'number' && isFinite(raw.days) && raw.days >= 0
+        ? Math.floor(raw.days)
+        : SESSION_BAR_DEFAULTS.days,
+    repo: raw.repo === 'any' || raw.repo === 'cwd' ? raw.repo : SESSION_BAR_DEFAULTS.repo,
+    statuses:
+      raw.statuses === 'unfinished' || raw.statuses === 'all'
+        ? raw.statuses
+        : SESSION_BAR_DEFAULTS.statuses,
+    // An explicit [] would list nothing at all, which no one means; treat it
+    // as "every source", the same as leaving the key out.
+    sources: sources && sources.length > 0 ? sources : undefined,
+  }
 }
 
 export function getEnrolledRepos(): string[] {
