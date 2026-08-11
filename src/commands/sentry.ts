@@ -14,7 +14,7 @@ export function registerSentry(program: Command): void {
       'org',
       'organizations',
     ),
-    'GET /sentry/organizations',
+    'GET /integrations/sentry/organizations',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {

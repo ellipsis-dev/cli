@@ -3,44 +3,38 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname } from 'node:path'
 import { ApiClient, ApiError } from '../lib/api'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
-import { createWipCommit, currentBranch, pushReviewBranch, repoFromCwd } from '../lib/laptop'
+import { repoFromCwd } from '../lib/laptop'
 import { formatTs, printJson, printTable, relativeAge, runAction, usdFromMillicents } from '../lib/output'
-import { resolveRepoFlag } from './config'
 import { watchSessionStreaming } from './session'
-import type {
-  CodeReviewDefaultView,
-  CreateReviewRequest,
-  Finding,
-  Review,
-  ReviewScope,
-} from '../lib/types'
+import type { CreateReviewRequest, Finding, Review, ReviewScope } from '../lib/types'
 
 // `agent review`: ask for a code review now, instead of waiting for a push to
-// trigger one. Two targets —
+// trigger one.
 //
-//   agent review 5975                 an existing pull request
-//   agent review                      the work in your tree, right now
+//   agent review 5975                 review that pull request
 //
-// The second is the interesting one: it snapshots your working tree, pushes it
-// to a sidecar branch (never your own), and the platform finds-or-creates a
-// draft PR to review it against — because a code review is structurally a PR
-// review (the range, the checkout, and the delivery all read PR state). Those
-// reviews are terminal-only: nothing is posted to GitHub, findings print here.
+// A review is always of an existing pull request: the range, the checkout, and
+// the delivery all read PR state, so there is nothing to review without one.
 //
-// A review IS a session under the hood, and a review id IS a session id — so
-// `agent session get <review-id>`, `--watch`, records, and stop all work on it.
+// Which pipeline runs is not a parameter. It is resolved from the repository's
+// committed `code_review.yaml` (see `agent review init`), the same way an
+// automatic review resolves it.
+//
+// A review is a pipeline of stage sessions, not a single session: its id is a
+// `crun_…`, and each stage's session id lives in `stages[]`.
 
 // How long to wait between REST polls when the stream isn't available.
 const FALLBACK_POLL_INTERVAL_SECONDS = 3
 
-// The conventional path for a pipeline file. Convention only: `kind:` decides.
-const DEFAULT_PIPELINE_PATH = 'agents/code_review.yaml'
+// The only paths a committed pipeline may live at, in the precedence order the
+// server resolves them (CODE_REVIEW_CONFIG_PATHS). A file anywhere else is a
+// hard sync error, never a silently-unused config.
+const DEFAULT_PIPELINE_PATH = 'code_review.yaml'
+const NESTED_PIPELINE_PATH = '.ellipsis/code_review.yaml'
 
 export function registerReview(program: Command): void {
   const review = alsoKnownAs(
-    program
-      .command('review')
-      .description('Review a pull request, or the work in your tree, on demand'),
+    program.command('review').description('Review a pull request on demand'),
     'reviews',
     'code-review',
     'cr',
@@ -48,35 +42,24 @@ export function registerReview(program: Command): void {
 
   apiRoutes(
     review
-      .command('start [pull-request]', { isDefault: true })
-      .description('Review a pull request by number, or your working tree if you omit one'),
+      .command('start <pull-request>', { isDefault: true })
+      .description('Review a pull request by number'),
     'POST /reviews',
     'WS /sessions/{id}/stream',
     'GET /reviews/{id}',
   )
     .option('--repo <owner/name>', 'repository to review (default: this git remote)')
-    .option(
-      '--branch <name>',
-      'review an already-pushed branch instead of snapshotting your tree',
-    )
     .option('--full', 're-review the whole pull request, not just the new commits')
     .option('--watermark <sha>', 'pin the range start (a commit SHA)')
     .option('--head <sha>', 'pin the range end (a commit SHA)')
-    .option('-c, --config <id>', 'run a saved agent config instead of the built-in reviewer')
-    .option('-m, --model <model>', 'override the reviewer model (see `agent model list`)')
-    .option('-b, --budget <usd>', 'override the budget for this review', parseUsd)
     .option('--no-post', 'do not post to GitHub; print the findings here instead')
     .option('--no-wait', 'print the review id and exit instead of waiting for findings')
     .option('--cwd <path>', 'repository directory (default: current directory)')
     .option('--json', 'output raw JSON')
-    .action(async (pullRequest: string | undefined, opts: StartOptions) => {
+    .action(async (pullRequest: string, opts: StartOptions) => {
       await runAction(async () => {
         const api = new ApiClient()
         const request = buildCreateRequest(pullRequest, opts)
-        const local = request.branch !== undefined
-        if (!opts.json && local) {
-          console.log(`✓ pushed ${request.sha?.slice(0, 12)} to ${request.branch}`)
-        }
         const started = await api.createReview(request)
 
         // Nothing new since the last review of this PR. Not an error — you
@@ -103,7 +86,7 @@ export function registerReview(program: Command): void {
 
         // Block-and-stream, then re-read: the findings are collected from the
         // sandbox at teardown, so they only exist once the review finalizes.
-        // Same two-step `agent asset get` uses.
+        // Same two-step `agent file get` uses.
         if (!opts.json) {
           console.log(
             `✓ reviewing ${request.owner}/${request.repo}#${started.pull_request.number} ` +
@@ -182,7 +165,6 @@ export function registerReview(program: Command): void {
     })
 
   registerReviewInit(review)
-  registerReviewDefaults(review)
 }
 
 // `agent review init`: the code review twin of `agent config init`. Scaffolds a
@@ -199,14 +181,23 @@ function registerReviewInit(review: Command): void {
     .option('--force', 'overwrite the file if it already exists')
     .action((path: string | undefined, opts: { force?: boolean }) => {
       const target = path ?? DEFAULT_PIPELINE_PATH
+      // Refuse a path the server would reject at sync: writing a file that can
+      // never run is worse than not writing one, because it looks like it works.
+      if (target !== DEFAULT_PIPELINE_PATH && target !== NESTED_PIPELINE_PATH) {
+        console.error(
+          `error: a code review pipeline must live at '${DEFAULT_PIPELINE_PATH}' or ` +
+            `'${NESTED_PIPELINE_PATH}'; '${target}' is never used`,
+        )
+        process.exitCode = 1
+        return
+      }
       if (existsSync(target) && !opts.force) {
         console.error(`error: ${target} already exists (use --force to overwrite)`)
         process.exitCode = 1
         return
       }
-      const name = basename(target, extname(target))
       mkdirSync(dirname(target), { recursive: true })
-      writeFileSync(target, starterPipeline(name, repoNameFromCwd()))
+      writeFileSync(target, starterPipeline(pipelineName()))
       console.log(`✓ wrote ${target}`)
       console.log(
         'Commit it to your default branch. Ellipsis syncs code review pipelines from GitHub.',
@@ -214,40 +205,42 @@ function registerReviewInit(review: Command): void {
     })
 }
 
-// The repository this pipeline should watch, as the bare name the schema takes
-// (`repositories:` is scoped to your account, so it never carries the owner).
-function repoNameFromCwd(): string | undefined {
+// Both legal paths share one filename, so the file can't name the pipeline.
+// Use the repository instead, falling back to the filename outside a checkout.
+function pipelineName(): string {
   const repo = repoFromCwd(process.cwd())
-  return repo ? repo.split('/')[1] : undefined
+  return repo ? `${repo.split('/')[1]} code review` : 'code review'
 }
 
 // A minimal valid pipeline. `ellipsis.kind` is the only field the schema
 // requires; every stage left unset runs the platform's default reviewers.
-// Exported for tests.
-export function starterPipeline(name: string, repository: string | undefined): string {
+//
+// Deliberately omits `pull_requests.repositories`: a file's location IS its
+// scope now, so naming repositories is a sync error everywhere except the
+// org-wide copy in the `.ellipsis` repository. Exported for tests.
+export function starterPipeline(name: string): string {
   return `# Ellipsis code review pipeline. Commit this to your default branch; Ellipsis
-# syncs it from GitHub. Valid locations: agents/, .agents/, ellipsis/, .ellipsis/
-# (any depth). The kind line is what makes this a review pipeline, not an agent.
+# syncs it from GitHub. It must live at '${DEFAULT_PIPELINE_PATH}' or
+# '${NESTED_PIPELINE_PATH}'; a pipeline anywhere else is never used.
+#
+# Where it sits decides what it reviews: in a normal repository it reviews that
+# repository, and in your organization's '.ellipsis' repository it reviews every
+# repository. The kind line is what makes this a review pipeline, not an agent.
 ellipsis:
   version: v1
   kind: code_review
   name: ${name}
   description: What this pipeline reviews.
 
-# Which pull requests this pipeline watches. Only one enabled pipeline may watch
-# a given pull request, so name your repositories here. Leaving this out watches
-# every repository in the account.
-pull_requests:
-  repositories:
-    - ${repository ?? 'my-repo'}
-  # base: [main]
-  # draft: false
-  # paths: ["src/**"]
-  # for: { bots: false }
+# Which pull requests to review. Omit this to review every pull request.
+# pull_requests:
+#   base: [main]
+#   draft: false
+#   paths: ["src/**"]
+#   for: { bots: false }
 
 # Every stage is optional. With all of them unset, reviews run the platform
-# default pipeline: three reviewer lenses (correctness, security, regression)
-# and a gatekeeper that judges what they found.
+# default pipeline: a pull request description writer plus one bug reviewer.
 #
 # review:
 #   - name: migration-safety
@@ -257,7 +250,8 @@ pull_requests:
 #     pull_requests:
 #       paths: ["sql/migrations/**"]
 #
-# include_default_reviewers: true   # run the built-in lenses as well
+# Declaring a filter stage adds a gatekeeper that judges what the reviewers
+# found. There is no gatekeeper unless you declare one.
 #
 # filter:
 #   name: gatekeeper
@@ -272,165 +266,11 @@ budget:
 `
 }
 
-// `agent review default`: which code review pipeline runs when an explicit
-// review names none — a two-rung ladder (account default + per-repo defaults,
-// repo wins) mirroring `agent config default`, with the same --repo
-// semantics. Only explicit reviews read it: webhook reviews keep matching the
-// pipelines' own `pull_requests:` filters.
-function registerReviewDefaults(review: Command): void {
-  const defaults = apiRoutes(
-    alsoKnownAs(
-      review
-        .command('default')
-        .description('Show or set which code review pipeline runs when a review names none'),
-      'defaults',
-    ),
-    'GET /reviews/defaults',
-  )
-    .option('--json', 'output raw JSON')
-    // Bare `agent review default`: the effective default for the repo you're
-    // standing in, computed locally from GET /reviews/defaults + the origin
-    // remote (the same ladder the server resolves at review start).
-    .action(async (opts: { json?: boolean }) => {
-      await runAction(async () => {
-        const rungs = await new ApiClient().listReviewDefaults()
-        const repo = repoFromCwd(process.cwd())
-        const repoRung = repo
-          ? rungs.find((d) => d.repository?.toLowerCase() === repo.toLowerCase())
-          : undefined
-        const accountRung = rungs.find((d) => d.repository === null)
-        const effective = repoRung ?? accountRung
-        if (opts.json) {
-          printJson({ repository: repo ?? null, effective: effective ?? null })
-          return
-        }
-        if (!effective) {
-          console.log(
-            repo
-              ? `no default set for ${repo} or the account (reviews run the synced pipeline, or the platform defaults)`
-              : 'no account default set (reviews run the synced pipeline, or the platform defaults)',
-          )
-          return
-        }
-        const rung = effective.repository
-          ? `repo default for ${effective.repository}`
-          : 'account default'
-        console.log(
-          `using pipeline "${defaultName(effective)}" (${rung})${brokenSuffix(effective)}`,
-        )
-      })
-    })
-
-  apiRoutes(
-    alsoKnownAs(
-      defaults
-        .command('list')
-        .description('List every default that is set, account rung and per-repo rungs'),
-      'ls',
-    ),
-    'GET /reviews/defaults',
-  )
-    .option('--json', 'output raw JSON')
-    // The group also defines --json (for the bare view), and commander parses
-    // parent options even when they follow the subcommand name — so read the
-    // merged view, not just this command's own opts.
-    .action(async (_opts: { json?: boolean }, cmd: Command) => {
-      await runAction(async () => {
-        const rungs = await new ApiClient().listReviewDefaults()
-        if (cmd.optsWithGlobals().json) {
-          printJson(rungs)
-          return
-        }
-        if (rungs.length === 0) {
-          console.log(
-            'No defaults set. Reviews run the synced pipeline, or the platform defaults.',
-          )
-          return
-        }
-        printTable(
-          ['RUNG', 'PIPELINE', 'CONFIG ID', 'STATUS', 'UPDATED'],
-          rungs.map((d) => [
-            d.repository ?? 'account',
-            d.config_name ?? '—',
-            d.config_id,
-            d.broken ? `broken: ${d.broken}` : 'ok',
-            formatTs(d.updated_at),
-          ]),
-        )
-      })
-    })
-
-  apiRoutes(
-    defaults
-      .command('set <config-id>')
-      .description('Set the account default code review pipeline, or a repo default with --repo'),
-    'PUT /reviews/defaults',
-  )
-    .option(
-      '-r, --repo [repository]',
-      'target a repo rung: "owner/name", or no value for the repo you are standing in',
-    )
-    .option('--json', 'output raw JSON')
-    .action(
-      async (configId: string, opts: { repo?: string | boolean; json?: boolean }, cmd: Command) => {
-        await runAction(async () => {
-          const repository = resolveRepoFlag(opts.repo)
-          const set = await new ApiClient().putReviewDefault({
-            config_id: configId,
-            ...(repository ? { repository } : {}),
-          })
-          if (cmd.optsWithGlobals().json) {
-            printJson(set)
-            return
-          }
-          const rung = set.repository ? `default for ${set.repository}` : 'account default'
-          console.log(`✓ set ${rung} to "${defaultName(set)}" (${set.config_id})`)
-        })
-      },
-    )
-
-  apiRoutes(
-    alsoKnownAs(
-      defaults
-        .command('clear')
-        .description('Clear the account default code review pipeline, or a repo default with --repo'),
-      'rm',
-      'delete',
-    ),
-    'DELETE /reviews/defaults',
-  )
-    .option(
-      '-r, --repo [repository]',
-      'target a repo rung: "owner/name", or no value for the repo you are standing in',
-    )
-    .action(async (opts: { repo?: string | boolean }) => {
-      await runAction(async () => {
-        const repository = resolveRepoFlag(opts.repo)
-        await new ApiClient().deleteReviewDefault(repository)
-        console.log(`✓ cleared ${repository ? `default for ${repository}` : 'account default'}`)
-      })
-    })
-}
-
-function defaultName(d: CodeReviewDefaultView): string {
-  return d.config_name ?? d.config_id
-}
-
-// A set-but-broken rung fails explicit reviews closed (never a silent run of
-// a different pipeline), so surface it wherever the rung is shown.
-function brokenSuffix(d: CodeReviewDefaultView): string {
-  return d.broken ? ` (broken: ${d.broken})` : ''
-}
-
 interface StartOptions {
   repo?: string
-  branch?: string
   full?: boolean
   watermark?: string
   head?: string
-  config?: string
-  model?: string
-  budget?: number
   // commander sets these false for --no-* flags.
   post: boolean
   wait: boolean
@@ -446,41 +286,20 @@ interface ListOptions {
   json?: boolean
 }
 
-// Assemble the request, doing the local path's git work when no pull request
-// was named. Exported for tests.
+// Assemble the request. Exported for tests.
 export function buildCreateRequest(
-  pullRequest: string | undefined,
+  pullRequest: string,
   opts: StartOptions,
 ): CreateReviewRequest {
   const cwd = opts.cwd ?? process.cwd()
   const repo = splitRepo(opts.repo ?? repoFromCwdOrThrow(cwd))
-  const scope = buildScope(opts)
-
-  const common = {
+  return {
     owner: repo.owner,
     repo: repo.name,
-    scope,
-    // The generated type requires every field the server defaults, so send the
-    // empty default rather than omitting it.
-    metadata: {},
-    ...(opts.config ? { config_id: opts.config } : {}),
-    ...(opts.model ? { model: opts.model } : {}),
-    ...(opts.budget !== undefined ? { budget: opts.budget } : {}),
+    scope: buildScope(opts),
+    pull_request_number: parsePullRequest(pullRequest),
+    post: opts.post,
   }
-
-  if (pullRequest !== undefined) {
-    return { ...common, pull_request_number: parsePullRequest(pullRequest), post: opts.post }
-  }
-
-  // The local path. Snapshot the tree and push it to a sidecar branch, so the
-  // branch you are working on is never touched. ALWAYS terminal-only — the
-  // pull request being reviewed is one the platform manufactured for the
-  // purpose, so commenting on it would be talking to itself. Findings print
-  // here instead. (`post` has no opt-in flag; --no-post only turns it off for
-  // a real pull request.)
-  const branch = opts.branch ?? sidecarFor(cwd)
-  const sha = opts.branch ? undefined : pushSnapshot(cwd, branch)
-  return { ...common, branch, ...(sha ? { sha } : {}), post: false }
 }
 
 // `--full`/`--watermark`/`--head` → the scope model. Default is incremental:
@@ -493,35 +312,15 @@ function buildScope(opts: StartOptions): ReviewScope {
   }
 }
 
-function sidecarFor(cwd: string): string {
-  const branch = currentBranch(cwd)
-  if (!branch) {
-    throw new Error(
-      'detached HEAD: check out a branch, or name a pull request (`agent review 123`)',
-    )
-  }
-  return `ellipsis/review/${branch}`
-}
-
-// Snapshot the working tree and force-push it. Returns the pushed SHA, which
-// pins the review's range end — GitHub's reported PR head lags a force-push.
-function pushSnapshot(cwd: string, branch: string): string {
-  const { sha } = createWipCommit(cwd)
-  const realBranch = currentBranch(cwd)
-  if (!realBranch) throw new Error('detached HEAD: check out a branch first')
-  pushReviewBranch(cwd, sha, realBranch)
-  return sha
-}
-
 async function getReviewOrExplain(api: ApiClient, reviewId: string): Promise<Review> {
   try {
     return await api.getReview(reviewId)
   } catch (err) {
-    // A review id IS a session id, so the most likely mistake is handing this
-    // the id of a session that isn't a review — indistinguishable from an
+    // The likeliest mistake is handing this a stage session id (or any other
+    // session id) instead of the review's own — indistinguishable from an
     // unknown id server-side, on purpose.
     if (err instanceof ApiError && err.status === 404) {
-      throw new Error(`no review with id ${reviewId} (a review id looks like session_…)`)
+      throw new Error(`no review with id ${reviewId} (a review id looks like crun_…)`)
     }
     throw err
   }
@@ -617,9 +416,9 @@ export function parsePullRequest(raw: string): number {
     // `review` reserves the word, so `agent review the auth changes` lands
     // here rather than starting a session with that prompt. Name the fix.
     throw new Error(
-      `'${raw}' is not a pull request number. Pass a number (agent review 123), ` +
-        'or omit it to review your working tree. To run an agent with a prompt ' +
-        `that starts with "review", quote it: agent "review ${raw} …"`,
+      `'${raw}' is not a pull request number. Pass a number (agent review 123). ` +
+        'To run an agent with a prompt that starts with "review", quote it: ' +
+        `agent "review ${raw} …"`,
     )
   }
   return Number.parseInt(match[1], 10)
@@ -628,11 +427,5 @@ export function parsePullRequest(raw: string): number {
 function parsePositiveInt(raw: string): number {
   const n = Number.parseInt(raw, 10)
   if (!Number.isFinite(n) || n <= 0) throw new Error(`invalid count '${raw}'`)
-  return n
-}
-
-function parseUsd(raw: string): number {
-  const n = Number.parseFloat(raw)
-  if (!Number.isFinite(n) || n < 0) throw new Error(`invalid budget '${raw}'`)
   return n
 }

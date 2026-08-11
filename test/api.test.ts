@@ -160,7 +160,7 @@ describe('ApiClient sandbox variables', () => {
 
     const out = await new ApiClient('http://api.test', 't').listSandboxVariables()
     expect(out).toEqual([{ name: 'A', created_at: '', updated_at: '' }])
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/variables')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/secrets')
     expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
   })
 
@@ -172,7 +172,7 @@ describe('ApiClient sandbox variables', () => {
 
     await new ApiClient('http://api.test', 't').putSandboxVariables([{ name: 'TOKEN', value: 'x' }])
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/variables')
+    expect(url).toBe('http://api.test/secrets')
     expect((init as RequestInit).method).toBe('PUT')
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({
       variables: [{ name: 'TOKEN', value: 'x' }],
@@ -187,69 +187,8 @@ describe('ApiClient sandbox variables', () => {
 
     await new ApiClient('http://api.test', 't').deleteSandboxVariable('MY/VAR')
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/variables/MY%2FVAR')
+    expect(url).toBe('http://api.test/secrets/MY%2FVAR')
     expect((init as RequestInit).method).toBe('DELETE')
-  })
-})
-
-describe('ApiClient review defaults', () => {
-  afterEach(() => vi.unstubAllGlobals())
-
-  const rung = {
-    id: 'crdef_1',
-    repository: null,
-    config_id: 'crcfg_1',
-    config_name: 'Team reviewer',
-    broken: null,
-    updated_at: '',
-  }
-
-  it('lists rungs and unwraps the response envelope', async () => {
-    const fetchMock = vi.fn(
-      async () => new Response(JSON.stringify({ defaults: [rung] }), { status: 200 }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const out = await new ApiClient('http://api.test', 't').listReviewDefaults()
-    expect(out).toEqual([rung])
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/reviews/defaults')
-    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
-  })
-
-  it('PUTs the rung: account when repository is omitted, repo when named', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify(rung), { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
-
-    await new ApiClient('http://api.test', 't').putReviewDefault({ config_id: 'crcfg_1' })
-    let [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/reviews/defaults')
-    expect((init as RequestInit).method).toBe('PUT')
-    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ config_id: 'crcfg_1' })
-
-    await new ApiClient('http://api.test', 't').putReviewDefault({
-      config_id: 'crcfg_1',
-      repository: 'acme/api',
-    })
-    ;[url, init] = fetchMock.mock.calls[1]
-    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
-      config_id: 'crcfg_1',
-      repository: 'acme/api',
-    })
-  })
-
-  it('clears a rung via query param, omitted for the account rung', async () => {
-    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }))
-    vi.stubGlobal('fetch', fetchMock)
-
-    const api = new ApiClient('http://api.test', 't')
-    await api.deleteReviewDefault()
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/reviews/defaults')
-    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('DELETE')
-
-    await api.deleteReviewDefault('acme/api')
-    expect(fetchMock.mock.calls[1][0]).toBe(
-      'http://api.test/reviews/defaults?repository=acme%2Fapi',
-    )
   })
 })
 
@@ -328,7 +267,7 @@ describe('agent templates', () => {
 
     const out = await new ApiClient('http://api.test', 't').listAgentTemplates()
     expect(out.map((t) => t.slug)).toEqual(['a', 'b'])
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/templates')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/agents/templates')
   })
 
   it('fetches a single template by slug (encoded)', async () => {
@@ -340,7 +279,7 @@ describe('agent templates', () => {
 
     const out = await new ApiClient('http://api.test', 't').getAgentTemplate('ci-failure-triager')
     expect(out.yaml).toBe('x')
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/templates/ci-failure-triager')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/agents/templates/ci-failure-triager')
   })
 })
 
@@ -390,7 +329,7 @@ describe('createAgentConfig', () => {
     })
     expect(out.pull_request_url).toBe('https://github.com/octocat/api/pull/7')
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/configs')
+    expect(url).toBe('http://api.test/agents/configs')
     expect((init as RequestInit).method).toBe('POST')
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({
       template_id: 'ci-failure-triager',
@@ -399,7 +338,7 @@ describe('createAgentConfig', () => {
   })
 })
 
-describe('ApiClient assets', () => {
+describe('ApiClient files', () => {
   afterEach(() => vi.unstubAllGlobals())
 
   it('POSTs the upload payload and returns the gated URL', async () => {
@@ -407,22 +346,22 @@ describe('ApiClient assets', () => {
       async () =>
         new Response(
           JSON.stringify({
-            asset: { id: 'a1', filename: 'shot.png' },
-            url: 'https://app.ellipsis.dev/assets/a1',
+            file: { id: 'a1', filename: 'shot.png' },
+            url: 'https://app.ellipsis.dev/files/a1',
           }),
           { status: 201 },
         ),
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const out = await new ApiClient('http://api.test', 't').uploadAsset({
+    const out = await new ApiClient('http://api.test', 't').uploadFile({
       filename: 'shot.png',
       content_type: 'image/png',
       data_b64: 'aGk=',
     })
-    expect(out.url).toBe('https://app.ellipsis.dev/assets/a1')
+    expect(out.url).toBe('https://app.ellipsis.dev/files/a1')
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/assets')
+    expect(url).toBe('http://api.test/files')
     expect((init as RequestInit).method).toBe('POST')
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({
       filename: 'shot.png',
@@ -431,45 +370,45 @@ describe('ApiClient assets', () => {
     })
   })
 
-  it('lists assets, unwrapping the envelope and passing filters as query', async () => {
+  it('lists files, unwrapping the envelope and passing filters as query', async () => {
     const fetchMock = vi.fn(
-      async () => new Response(JSON.stringify({ assets: [{ id: 'a1' }] }), { status: 200 }),
+      async () => new Response(JSON.stringify({ files: [{ id: 'a1' }] }), { status: 200 }),
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const out = await new ApiClient('http://api.test', 't').listAssets({
+    const out = await new ApiClient('http://api.test', 't').listFiles({
       agent_session_id: 'session_1',
       limit: 5,
     })
     expect(out).toEqual([{ id: 'a1' }])
     expect(fetchMock.mock.calls[0][0]).toBe(
-      'http://api.test/assets?agent_session_id=session_1&limit=5',
+      'http://api.test/files?agent_session_id=session_1&limit=5',
     )
   })
 
-  it('URL-encodes the asset id on get', async () => {
+  it('URL-encodes the file id on get', async () => {
     const fetchMock = vi.fn(
       async () =>
         new Response(
-          JSON.stringify({ asset: { id: 'a/1' }, url: 'u', download_url: 'd' }),
+          JSON.stringify({ file: { id: 'a/1' }, url: 'u', download_url: 'd' }),
           { status: 200 },
         ),
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const out = await new ApiClient('http://api.test', 't').getAsset('a/1')
+    const out = await new ApiClient('http://api.test', 't').getFile('a/1')
     expect(out.download_url).toBe('d')
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/assets/a%2F1')
+    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/files/a%2F1')
   })
 
-  it('DELETEs the asset id (encoded) and tolerates a 204 empty body', async () => {
+  it('DELETEs the file id (encoded) and tolerates a 204 empty body', async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 204 }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const out = await new ApiClient('http://api.test', 't').deleteAsset('a/1')
+    const out = await new ApiClient('http://api.test', 't').deleteFile('a/1')
     expect(out).toBeUndefined()
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/assets/a%2F1')
+    expect(url).toBe('http://api.test/files/a%2F1')
     expect((init as RequestInit).method).toBe('DELETE')
   })
 })

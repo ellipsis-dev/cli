@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
-  MAX_ASSET_SIZE_BYTES,
+  MAX_FILE_SIZE_BYTES,
   buildUploadRequest,
   formatSize,
-} from '../src/commands/asset'
+} from '../src/commands/file'
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
@@ -31,14 +31,14 @@ describe('buildUploadRequest', () => {
   })
 
   it('rejects files over the 10 MiB cap, with sizes in the message', () => {
-    const big = Buffer.concat([PNG_MAGIC, Buffer.alloc(MAX_ASSET_SIZE_BYTES)])
-    expect(() => buildUploadRequest('big.png', big)).toThrow(/10\.0 MiB per asset/)
+    const big = Buffer.concat([PNG_MAGIC, Buffer.alloc(MAX_FILE_SIZE_BYTES)])
+    expect(() => buildUploadRequest('big.png', big)).toThrow(/10\.0 MiB per file/)
   })
 
   it('accepts a PNG exactly at the cap', () => {
     const atCap = Buffer.concat([
       PNG_MAGIC,
-      Buffer.alloc(MAX_ASSET_SIZE_BYTES - PNG_MAGIC.length),
+      Buffer.alloc(MAX_FILE_SIZE_BYTES - PNG_MAGIC.length),
     ])
     expect(buildUploadRequest('cap.png', atCap).content_type).toBe('image/png')
   })

@@ -74,7 +74,7 @@ describe('friendlyErrorMessage', () => {
     const err = new ApiError(
       429,
       'POST',
-      '/assets',
+      '/files',
       'Asset limit reached: your organization is storing 50 of 50 assets. ' +
         'Delete assets you no longer need, or email team@ellipsis.dev to raise the limit.',
     )

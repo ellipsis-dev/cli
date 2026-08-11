@@ -106,7 +106,7 @@ const UPGRADE_HINT_EXEMPT = new Set([
   404, // missing resource / integration not connected (mapped per-command)
   408, // transient timeout
   409, // documented conflicts (closed session, sandbox not running)
-  413, // payload over a server-enforced cap (e.g. the 10 MiB asset limit)
+  413, // payload over a server-enforced cap (e.g. the 10 MiB file limit)
   429, // handled above: rate limit detail printed bare
   502, // gateway trouble
   503, // API down or overloaded
