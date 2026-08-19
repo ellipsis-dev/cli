@@ -1,5 +1,5 @@
 import type { Command } from 'commander'
-import { ApiClient } from '../lib/api'
+import { api } from '../lib/api'
 import { apiRoutes } from '../lib/help'
 import { printJson, runAction, usd, usdFromMillicents } from '../lib/output'
 
@@ -11,7 +11,7 @@ export function registerUsage(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
-        const b = await new ApiClient().getBudget()
+        const b = await api().budget()
         if (opts.json) {
           printJson(b)
           return
@@ -33,7 +33,7 @@ export function registerUsage(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
-        const u = await new ApiClient().getUsage()
+        const u = await api().usage()
         if (opts.json) {
           printJson(u)
           return

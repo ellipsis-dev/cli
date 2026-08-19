@@ -1,5 +1,5 @@
 import { type Command } from 'commander'
-import { ApiClient } from '../lib/api'
+import { api } from '../lib/api'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { printJson, printTable, runAction } from '../lib/output'
 
@@ -23,7 +23,7 @@ export function registerModel(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
-        const models = await new ApiClient().listSupportedModels()
+        const { models } = await api().models.list()
         if (opts.json) {
           printJson(models)
           return

@@ -1,5 +1,5 @@
 import { type Command } from 'commander'
-import { ApiClient } from '../lib/api'
+import { api } from '../lib/api'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { printJson, printTable, runAction } from '../lib/output'
 
@@ -21,7 +21,7 @@ export function registerTemplate(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
-        const templates = await new ApiClient().listAgentTemplates()
+        const { templates } = await api().agents.templates.list()
         if (opts.json) {
           printJson(templates)
           return

@@ -1,5 +1,5 @@
 import { type Command } from 'commander'
-import { ApiClient, requireConnected } from '../lib/api'
+import { api, requireConnected } from '../lib/api'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { printJson, printTable, runAction } from '../lib/output'
 
@@ -18,7 +18,7 @@ export function registerSlack(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
-        const res = await requireConnected('Slack', new ApiClient().listSlackChannels())
+        const res = await requireConnected('Slack', api().integrations.slack.channels())
         if (opts.json) {
           printJson(res)
           return
@@ -51,7 +51,7 @@ export function registerSlack(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
-        const res = await requireConnected('Slack', new ApiClient().listSlackMembers())
+        const res = await requireConnected('Slack', api().integrations.slack.members())
         if (opts.json) {
           printJson(res)
           return

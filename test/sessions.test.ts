@@ -28,46 +28,40 @@ import type { AgentSession } from '../src/lib/types'
 function session(overrides: Partial<AgentSession>): AgentSession {
   return {
     id: 'session_1',
-    customer_id: 'c1',
     created_at: '2026-07-07T00:00:00Z',
     updated_at: '2026-07-07T00:00:00Z',
     status: 'running',
     status_reason: null,
-    agent_config_id: null,
+    config_id: null,
+    source: 'api',
+    harness: 'claude_code',
+    prompting: { enabled: true },
+    resolved_budget_cents: 0,
+    resolved_budget_source: 'system',
     cost_tokens: 0,
     cost_sandbox_cpu: 0,
     cost_sandbox_memory: 0,
     cost_fee: 0,
     tokens_total: 0,
+    tokens_input: 0,
+    tokens_output: 0,
+    tokens_cache_read: 0,
+    tokens_cache_creation: 0,
+    tokens_model: '',
     metadata: {},
     ...overrides,
   }
 }
 
 describe('connectability', () => {
-  it('opens keyed live sessions for sending', () => {
-    expect(connectability(session({ session_key: 'api:x', session_state: 'running' }))).toEqual({
-      canSend: true,
-    })
+  it('sends when the server says prompting is enabled', () => {
+    expect(connectability(session({ prompting: { enabled: true } }))).toEqual({ canSend: true })
   })
 
-  it('is watch-only for single-shot sessions', () => {
-    const c = connectability(session({ session_key: null }))
-    expect(c.canSend).toBe(false)
-    expect(c.reason).toMatch(/single-shot/)
-  })
-
-  it('is watch-only for closed conversations', () => {
-    const c = connectability(session({ session_key: 'api:x', session_state: 'closed' }))
-    expect(c.canSend).toBe(false)
-    expect(c.reason).toMatch(/closed/)
-  })
-
-  it('honors the server prompting projection over the local keyed read', () => {
-    // A Slack mention session is keyed and live — the old local rule called it
-    // sendable — but its answers post back to the Slack thread, so the server
-    // refuses direct messages and we open watch-only instead of offering a
-    // composer whose first Enter would 409.
+  it('honors the server prompting projection', () => {
+    // A Slack mention session is keyed and live, but its answers post back to
+    // the Slack thread, so the server refuses direct messages and we open
+    // watch-only instead of a composer whose first Enter would 409.
     const c = connectability(
       session({
         session_key: 'slack:D1:1.1',
@@ -84,42 +78,6 @@ describe('connectability', () => {
     // The server's own sentence is shown verbatim, so the reason names Slack.
     expect(c.reason).toContain('This conversation lives on Slack.')
     expect(c.reason).toMatch(/watch-only/)
-  })
-
-  it('sends when the server says prompting is enabled', () => {
-    const c = connectability(
-      session({
-        session_key: 'api:x',
-        session_state: 'idle',
-        prompting: {
-          enabled: true,
-          blocked_reason: null,
-          detail: null,
-          surface_name: null,
-        },
-      }),
-    )
-    expect(c).toEqual({ canSend: true })
-  })
-
-  it('falls back to the local read against servers with no prompting field', () => {
-    // Older deployments omit `prompting`; a keyed live session must still open
-    // with a composer rather than silently going watch-only.
-    expect(connectability(session({ session_key: 'api:x', session_state: 'idle' }))).toEqual({
-      canSend: true,
-    })
-  })
-
-  it('is watch-only with generic copy when the server sends no detail', () => {
-    const c = connectability(
-      session({
-        session_key: 'api:x',
-        session_state: 'idle',
-        prompting: { enabled: false, blocked_reason: 'non_interactive', detail: null },
-      }),
-    )
-    expect(c.canSend).toBe(false)
-    expect(c.reason).toMatch(/does not accept messages/)
   })
 })
 
@@ -167,7 +125,8 @@ describe('rowDescription', () => {
   it('falls back to the prompt, then the source', () => {
     expect(rowDescription(session({ prompt: 'fix the tests' }))).toBe('fix the tests')
     expect(rowDescription(session({ source: 'react' }))).toBe('react session')
-    expect(rowDescription(session({}))).toBe('session')
+    // Every session carries a source, so that is the floor.
+    expect(rowDescription(session({}))).toBe('api session')
   })
 
   it('ignores whitespace-only summaries', () => {
@@ -212,9 +171,8 @@ describe('compactTokens', () => {
 describe('rowMeta', () => {
   const now = new Date('2026-07-23T12:00:00Z')
 
-  it('reads turns, tokens, spend, and age', () => {
+  it('reads tokens, spend, and age', () => {
     const s = session({
-      tokens_info: { num_turns: 12 },
       tokens_total: 84_200,
       cost_tokens: 30_000,
       cost_sandbox_cpu: 10_000,
@@ -222,15 +180,7 @@ describe('rowMeta', () => {
       cost_fee: 0,
       updated_at: '2026-07-23T11:58:00Z',
     } as never)
-    expect(rowMeta(s, now)).toBe('12 turns · 84.2k · $0.42 · 2m ago')
-  })
-
-  it('says "1 turn", not "1 turns"', () => {
-    const s = session({
-      tokens_info: { num_turns: 1 },
-      updated_at: '2026-07-23T11:58:00Z',
-    } as never)
-    expect(rowMeta(s, now)).toBe('1 turn · 2m ago')
+    expect(rowMeta(s, now)).toBe('84.2k · $0.42 · 2m ago')
   })
 
   it('drops the work bits a fresh session has none of', () => {
@@ -240,10 +190,9 @@ describe('rowMeta', () => {
 })
 
 describe('sessionSource', () => {
-  it('reads laptop off the input blob, which is where the list row carries it', () => {
-    expect(sessionSource(session({ input: { source: 'laptop' } } as never))).toBe('laptop')
+  it('reads laptop off the session\'s top-level source', () => {
     expect(sessionSource(session({ source: 'laptop' }))).toBe('laptop')
-    expect(sessionSource(session({ input: { source: 'react' } } as never))).toBe('cloud')
+    expect(sessionSource(session({ source: 'react' }))).toBe('cloud')
     expect(sessionSource(session({}))).toBe('cloud')
   })
 })

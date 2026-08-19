@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ApiError } from '../src/lib/api'
+import { APIError } from '@ellipsis-dev/sdk'
 import {
   friendlyErrorMessage,
   relativeAge,
@@ -7,6 +7,18 @@ import {
   usdFromMillicents,
   usdNumberFromMillicents,
 } from '../src/lib/output'
+
+// The SDK's error, as its transport builds one from a parsed error body: the
+// body is what carries the server's own sentence.
+function apiError(status: number, message: string, requestId: string | null = null): APIError {
+  return new APIError({
+    status,
+    code: null,
+    message,
+    requestId,
+    body: { error: { message, request_id: requestId } },
+  })
+}
 
 describe('usdFromMillicents', () => {
   it('converts millicents to dollars (1 cent = 1000 millicents)', () => {
@@ -58,7 +70,7 @@ describe('friendlyErrorMessage', () => {
   })
 
   it('maps a 401 to a re-login hint instead of the raw HTTP failure', () => {
-    const err = new ApiError(401, 'GET', '/me', 'Unauthorized', 'req_1')
+    const err = apiError(401, 'Unauthorized', 'req_1')
     expect(friendlyErrorMessage(err)).toBe(
       'Your login is invalid or has expired. Run `agent login` to re-authenticate.',
     )
@@ -66,15 +78,13 @@ describe('friendlyErrorMessage', () => {
 
   it('blames ELLIPSIS_API_TOKEN when the rejected credential came from the env', () => {
     process.env.ELLIPSIS_API_TOKEN = 'stale_tok'
-    const err = new ApiError(401, 'GET', '/me', 'Unauthorized')
+    const err = apiError(401, 'Unauthorized')
     expect(friendlyErrorMessage(err)).toMatch(/ELLIPSIS_API_TOKEN/)
   })
 
   it('prints a 429 detail bare, so the remedy is the whole message', () => {
-    const err = new ApiError(
+    const err = apiError(
       429,
-      'POST',
-      '/files',
       'Asset limit reached: your organization is storing 50 of 50 assets. ' +
         'Delete assets you no longer need, or email team@ellipsis.dev to raise the limit.',
     )
@@ -84,17 +94,20 @@ describe('friendlyErrorMessage', () => {
     )
   })
 
-  it('passes exempt ApiErrors through with the server detail intact', () => {
-    const err = new ApiError(409, 'POST', '/sessions/s_1/messages', 'Session is closed')
-    expect(friendlyErrorMessage(err)).toBe(
-      'POST /sessions/s_1/messages failed: 409 Session is closed',
-    )
+  it('passes exempt APIErrors through with the server message intact', () => {
+    const err = apiError(409, 'Session is closed')
+    expect(friendlyErrorMessage(err)).toBe('409 Session is closed')
+  })
+
+  it('quotes the request id when the server stamped one', () => {
+    const err = apiError(500, 'boom', 'request_abc')
+    expect(friendlyErrorMessage(err)).toContain('500 boom (request id: request_abc)')
   })
 
   it('appends the upgrade hint to statuses that may mean a stale CLI', () => {
     for (const status of [400, 405, 410, 422, 500]) {
-      const msg = friendlyErrorMessage(new ApiError(status, 'GET', '/sessions', 'nope'))
-      expect(msg).toContain(`GET /sessions failed: ${status} nope`)
+      const msg = friendlyErrorMessage(apiError(status, 'nope'))
+      expect(msg).toContain(`${status} nope`)
       expect(msg).toContain("It's possible we shipped a breaking change to our API.")
       expect(msg).toContain('You are currently on version')
       expect(msg).toContain('brew upgrade ellipsis-dev/cli/agent')
@@ -103,7 +116,7 @@ describe('friendlyErrorMessage', () => {
 
   it('suppresses the upgrade hint where updating is the wrong remedy', () => {
     for (const status of [402, 403, 404, 408, 409, 413, 502, 503, 504]) {
-      const msg = friendlyErrorMessage(new ApiError(status, 'GET', '/sessions', 'nope'))
+      const msg = friendlyErrorMessage(apiError(status, 'nope'))
       expect(msg).not.toContain('brew upgrade')
     }
   })

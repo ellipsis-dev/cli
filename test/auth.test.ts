@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { deviceLogin } from '../src/lib/auth'
-import type { ApiClient } from '../src/lib/api'
+import type { Ellipsis } from '@ellipsis-dev/sdk'
 import type { CliAuthPoll, CliAuthStart } from '../src/lib/types'
 
 const START: CliAuthStart = {
@@ -14,15 +14,14 @@ const START: CliAuthStart = {
 
 // Minimal fake satisfying the two methods deviceLogin uses.
 function fakeApi(pollResults: CliAuthPoll[]): {
-  api: ApiClient
+  api: Ellipsis
   poll: ReturnType<typeof vi.fn>
 } {
   const poll = vi.fn()
   for (const r of pollResults) poll.mockResolvedValueOnce(r)
   const api = {
-    startCliAuth: vi.fn(async () => START),
-    pollCliAuth: poll,
-  } as unknown as ApiClient
+    auth: { cli: { start: vi.fn(async () => START), poll } },
+  } as unknown as Ellipsis
   return { api, poll }
 }
 
@@ -47,7 +46,7 @@ describe('deviceLogin', () => {
     expect(onPrompt).toHaveBeenCalledWith(START)
     expect(onPending).toHaveBeenCalledTimes(1)
     expect(poll).toHaveBeenCalledTimes(2)
-    expect(poll).toHaveBeenCalledWith('dev_abc')
+    expect(poll).toHaveBeenCalledWith({ device_code: 'dev_abc' })
   })
 
   it('rejects when the request is denied', async () => {
@@ -78,9 +77,8 @@ describe('deviceLogin', () => {
     // Always pending; expires_in is 10s.
     const poll = vi.fn().mockResolvedValue({ status: 'pending' } satisfies CliAuthPoll)
     const api = {
-      startCliAuth: vi.fn(async () => START),
-      pollCliAuth: poll,
-    } as unknown as ApiClient
+      auth: { cli: { start: vi.fn(async () => START), poll } },
+    } as unknown as Ellipsis
 
     const promise = deviceLogin(api, { onPrompt: vi.fn() })
     const assertion = expect(promise).rejects.toThrow(/Timed out/)

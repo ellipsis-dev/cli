@@ -1,6 +1,6 @@
 import type { Command } from 'commander'
 import { InvalidArgumentError } from 'commander'
-import { ApiClient } from '../lib/api'
+import { api } from '../lib/api'
 import { collect, parseWhen, toInt } from '../lib/args'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { printJson, printTable, runAction } from '../lib/output'
@@ -109,7 +109,7 @@ export function registerAnalytics(program: Command): void {
         json?: boolean
       }) => {
         await runAction(async () => {
-          const res = await new ApiClient().getAnalyticsMetrics({
+          const res = await api().analytics.metrics({
             ...windowQuery(opts),
             repo: opts.repo.length > 0 ? opts.repo : undefined,
             account_type: opts.accountType,
@@ -179,7 +179,7 @@ export function registerAnalytics(program: Command): void {
               : opts.accountType === 'bot'
                 ? ['Bot']
                 : undefined
-          const res = await new ApiClient().getAnalyticsPullRequests({
+          const res = await api().analytics.pullRequests({
             ...windowQuery(opts),
             account_type: accountTypes,
             status: opts.status.length > 0 ? opts.status : undefined,
@@ -249,7 +249,7 @@ export function registerAnalytics(program: Command): void {
         json?: boolean
       }) => {
         await runAction(async () => {
-          const res = await new ApiClient().getAnalyticsReviews({
+          const res = await api().analytics.reviews({
             ...windowQuery(opts),
             repo: opts.repo.length > 0 ? opts.repo : undefined,
             author: opts.author.length > 0 ? opts.author : undefined,

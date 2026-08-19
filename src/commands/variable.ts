@@ -1,6 +1,6 @@
 import { type Command } from 'commander'
 import { readFileSync } from 'node:fs'
-import { ApiClient } from '../lib/api'
+import { api } from '../lib/api'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { formatTs, printJson, printTable, runAction } from '../lib/output'
 import type { SandboxVariableInput, SandboxVariableSummary } from '../lib/types'
@@ -25,8 +25,8 @@ export function registerVariable(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
-        const variables = await new ApiClient().listSandboxVariables()
-        printVariables(variables, opts.json)
+        const { secrets } = await api().secrets.list()
+        printVariables(secrets, opts.json)
       })
     })
 
@@ -41,12 +41,12 @@ export function registerVariable(program: Command): void {
     .action(async (assignments: string[], opts: { fromFile?: string; json?: boolean }) => {
       await runAction(async () => {
         const inputs = collectInputs(assignments, opts.fromFile)
-        const variables = await new ApiClient().putSandboxVariables(inputs)
+        const { secrets } = await api().secrets.set({ secrets: inputs })
         if (!opts.json) {
           const names = inputs.map((v) => v.name).join(', ')
           console.log(`✓ stored ${inputs.length} variable(s) (values hidden): ${names}`)
         }
-        printVariables(variables, opts.json)
+        printVariables(secrets, opts.json)
       })
     })
 
@@ -57,9 +57,11 @@ export function registerVariable(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(async (name: string, opts: { json?: boolean }) => {
       await runAction(async () => {
-        const variables = await new ApiClient().deleteSandboxVariable(name)
+        // The delete answers 204, so showing what's left is a second read.
+        const client = api()
+        await client.secrets.delete(name)
         if (!opts.json) console.log(`✓ deleted ${name}`)
-        printVariables(variables, opts.json)
+        printVariables((await client.secrets.list()).secrets, opts.json)
       })
     })
 }

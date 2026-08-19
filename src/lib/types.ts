@@ -1,56 +1,165 @@
-// TypeScript types for the backend public API request/response models.
+// The CLI's names for the API's types.
 //
-// The session-stream surface (records, inbox messages, turns, the enriched
-// session wire shape, and their request/response DTOs) comes from
-// @ellipsis-dev/sdk — generated from the server's schema, never hand-written —
-// re-exported below under the CLI's historical names. Everything else (the
-// endpoints outside the SDK's REST surface: session list/start, configs,
-// sandboxes, integrations, …) remains a hand-rolled mirror of the Pydantic
-// models in ellipsis's public API router (v1_router.py) until the SDK's
-// OpenAPI surface widens.
-// Nested config/input/output payloads are typed loosely (the CLI only
-// displays summary fields).
+// Every wire shape comes from @ellipsis-dev/sdk — generated from the server's
+// OpenAPI spec, never hand-written — and is re-exported here under the name the
+// CLI uses so a rename on the server surfaces as a type error rather than a
+// field that silently reads `undefined`. Only the CLI's own local shapes
+// (query-option bags it assembles before calling, and the loosely-typed GitHub
+// user it caches on disk) are declared here.
 
 import type {
-  AgentSessionSource,
-  AgentSessionStatus,
-  SessionMessageWire,
-  SessionPrompting,
-  SessionRecordWire,
-  SessionState,
-  SessionSurface,
+  components,
+  Ellipsis,
+  SessionRecord as SessionRecordFrame,
+  SessionMessage as SessionMessageFrame,
 } from '@ellipsis-dev/sdk'
 
-export type {
-  AgentSessionSource,
-  AgentSessionStatus,
-  AgentSessionWire,
-  // The reviews surface. A review's `id` IS a session id, so everything above
-  // applies to it unchanged — which is why there is no review-specific
-  // status, stream, or cost type.
-  CreateReviewRequest,
-  Finding,
-  ListReviewsResponse,
-  ListSessionRecordsResponse,
-  ListSessionTurnsResponse,
-  ResolvedReviewScope,
-  Review,
-  ReviewCounters,
-  ReviewScope,
-  SendSessionMessageRequest,
-  SessionPrompting,
-  SessionState,
-  SessionSurface,
-} from '@ellipsis-dev/sdk'
+type S = components['schemas']
 
-// The CLI's historical names for the SDK's wire models.
-export type SessionRecord = SessionRecordWire
-export type SessionMessage = SessionMessageWire
+// --------------------------- sessions & records ---------------------------
 
-// ------------------------------- identity -------------------------------
+export type AgentSession = S['Session']
+export type AgentSessionSource = S['AgentSessionSource']
+export type AgentSessionStatus = S['AgentSessionStatus']
+export type SessionState = S['SessionState']
+export type SessionSurface = S['SessionSurface']
+export type SessionPrompting = S['SessionPrompting']
+// The frames flavor, not `S['SessionRecord']`: the spec marks defaulted fields
+// optional, but on the wire the server always serializes every field, and the
+// SDK's transcript store types its inputs this way. Using it here keeps records
+// flowing from REST straight into the store without a cast at each call site.
+export type SessionRecord = SessionRecordFrame
+export type SessionMessage = SessionMessageFrame
+export type SessionExecution = S['SessionExecution']
+export type ListSessionRecordsResponse = S['SessionRecordsListResponse']
+export type ListAgentSessionsResponse = S['SessionsListResponse']
+export type StartAgentSessionRequest = NonNullable<Parameters<Ellipsis['sessions']['start']>[0]>
+export type StartAgentSessionResponse = S['StartAgentSessionResponse']
+export type ReplayAgentSessionRequest = NonNullable<Parameters<Ellipsis['sessions']['replay']>[1]>
+export type SendSessionMessageRequest = S['SendSessionMessageRequest']
+export type HandoffAgentSessionParams = S['HandoffAgentSessionParams']
+export type SyncAgentSessionRequest = Parameters<Ellipsis['sessions']['sync']>[0]
+export type SyncAgentSessionResponse = S['SyncAgentSessionResponse']
+export type SessionLogSegment = S['SessionLogSegment']
+export type GetSessionLogResponse = S['GetSessionLogResponse']
+export type GetSessionIdeResponse = S['GetSessionIdeResponse']
+export type GetSessionPortResponse = S['GetSessionPortResponse']
 
-// The GitHub user behind a user_id, when we have it cached. Loosely typed: the
-// CLI only reads `login`; the rest of the GithubUser fields are passed through.
+// ------------------------------ session search ----------------------------
+
+export type SessionSearchScope = S['SessionSearchScope']
+export type RecordSearchHit = S['RecordHit']
+export type SessionSearchResult = S['SessionSearchResult']
+export type SearchSessionsResponse = S['SessionSearchResponse']
+export type GithubAccountSnippet = S['GithubAccountSnippet']
+
+// -------------------------- configs / defaults ----------------------------
+
+export type AgentConfig = S['AgentConfig']
+export type SavedAgentConfig = S['Config']
+export type ListAgentConfigsResponse = S['AgentConfigsListResponse']
+export type CreateAgentConfigRequest = Parameters<Ellipsis['agents']['configs']['create']>[0]
+export type CreatedAgentConfig = S['CreateAgentConfigResponse']
+export type AgentDefaultView = S['AgentDefault']
+export type ListAgentDefaultsResponse = S['AgentDefaultsListResponse']
+export type PutAgentDefaultRequest = S['PutAgentDefaultRequest']
+
+// -------------------------------- templates -------------------------------
+
+export type AgentTemplate = S['AgentTemplate']
+export type ListAgentTemplatesResponse = S['AgentTemplatesListResponse']
+
+// --------------------------------- models ---------------------------------
+
+export type ModelManufacturer = S['ModelManufacturer']
+export type ModelRateCard = S['ModelRateCardApi']
+export type SupportedModel = S['Model']
+export type GetSupportedModelsResponse = S['ModelsListResponse']
+
+// -------------------------------- reviews ---------------------------------
+// A review's `id` IS a session id, so the session types above apply to it
+// unchanged — hence no review-specific status, stream, or cost type.
+
+export type Review = S['Review']
+export type ReviewScope = S['ReviewScope']
+export type ResolvedReviewScope = S['ResolvedReviewScope']
+export type ReviewCounters = S['ReviewCounters']
+export type Finding = S['ReviewFinding']
+export type CreateReviewRequest = S['CreateReviewRequest']
+export type ListReviewsResponse = S['ReviewsListResponse']
+export type CodeReviewRunStatus = S['CodeReviewRunStatus']
+
+// --------------------------------- files ----------------------------------
+
+export type FileView = S['File']
+export type CreateFileRequest = Parameters<Ellipsis['files']['create']>[0]
+export type CreateFileResponse = S['CreateFileResponse']
+export type GetFileResponse = S['GetFileResponse']
+export type ListFilesResponse = S['FilesListResponse']
+
+// ------------------------------- secrets ----------------------------------
+// Customer-scoped environment variables injected into a sandbox when an agent
+// config names them. Values are write-only: the API accepts them but never
+// returns them, so the summary carries only the name and timestamps.
+
+export type SandboxVariableSummary = S['Secret']
+export type SandboxVariableInput = S['SecretInput']
+export type GetSandboxVariablesResponse = S['SecretsListResponse']
+export type PutSandboxVariablesRequest = S['PutSecretsRequest']
+
+// ----------------------------- usage / budget -----------------------------
+
+export type BudgetWindow = S['BudgetWindow']
+export type BudgetSummary = S['BudgetSummary']
+export type UsageDailyPoint = S['UsageDailyPoint']
+export type ModelUsageBreakdown = S['ModelUsageBreakdown']
+export type UsageDashboard = S['GetUsageDashboardResponse']
+
+// ------------------------------- analytics --------------------------------
+
+export type AnalyticsAccountType = 'all' | 'user' | 'bot'
+export type AnalyticsMetricsTotals = S['AnalyticsMetricsTotals']
+export type AnalyticsRepoUsage = S['AnalyticsRepoUsage']
+export type ContributorUsage = S['ContributorUsage']
+export type ReviewerUsage = S['ReviewerUsage']
+export type ReviewAuthorFacet = S['ReviewAuthorFacet']
+export type ReviewsDayBucket = S['ReviewsDayBucket']
+export type ReviewsTotals = S['ReviewsTotals']
+export type PullRequestsDayBucket = S['PullRequestsDayBucket']
+export type PullRequestsTotals = S['PullRequestsTotals']
+export type GetAnalyticsMetricsResponse = S['GetAnalyticsMetricsResponse']
+export type GetAnalyticsPullRequestsResponse = S['GetAnalyticsPullRequestsResponse']
+export type GetAnalyticsReviewsResponse = S['GetAnalyticsReviewsResponse']
+
+// -------------------------- integration discovery -------------------------
+
+export type GetIntegrationsResponse = S['GetIntegrationsResponse']
+export type GithubIntegrationSummary = S['GithubIntegrationSummary']
+export type SlackIntegrationSummary = S['SlackIntegrationSummary']
+export type LinearIntegrationSummary = S['LinearIntegrationSummary']
+export type JiraIntegrationSummary = S['JiraIntegrationSummary']
+export type SentryOrganizationSummary = S['SentryOrganizationSummary']
+export type RepositorySummary = S['GithubRepository']
+export type GithubMemberSummary = S['GithubMember']
+export type SlackMemberSummary = S['SlackMember']
+export type SlackChannelSummary = S['SlackChannel']
+export type LinearTeamSummary = S['LinearTeam']
+export type LinkedSlackIdentity = S['LinkedSlackIdentity']
+export type LinkedGithubIdentity = S['LinkedGithubIdentity']
+export type ListGithubRepositoriesResponse = S['GithubRepositoriesListResponse']
+export type ListGithubMembersResponse = S['GithubMembersListResponse']
+export type ListSlackChannelsResponse = S['SlackChannelsListResponse']
+export type ListSlackMembersResponse = S['SlackMembersListResponse']
+export type ListLinearTeamsResponse = S['LinearTeamsListResponse']
+export type ListSentryOrganizationsResponse = S['SentryOrganizationsListResponse']
+
+// -------------------------------- identity --------------------------------
+
+export type WhoAmI = S['WhoAmIResponse']
+
+// The GitHub user behind a user_id. Loosely typed on purpose: the CLI only
+// reads `login`, and this shape is also what it caches to disk, where an older
+// binary's copy must stay readable.
 export interface GhUser {
   id: number
   login: string
@@ -58,325 +167,21 @@ export interface GhUser {
   [key: string]: unknown
 }
 
-export interface WhoAmI {
-  customer_id: string
-  customer_login: string
-  user_id: string | null
-  gh_user: GhUser | null
-  api_key_id: string | null
-  sandbox_id: string | null
-}
+// ------------------------------- cli auth ---------------------------------
 
-// ----------------------------- usage / budget ---------------------------
+export type CliAuthStart = S['StartCliAuthResponse']
+export type CliAuthPoll = S['PollCliAuthResponse']
+export type CliAuthPollStatus =
+  | 'pending'
+  | 'approved'
+  | 'denied'
+  | 'expired'
+  | 'already_claimed'
 
-export interface BudgetWindow {
-  start: string | null
-  end: string | null
-}
-
-export interface BudgetSummary {
-  period: string
-  window: BudgetWindow
-  budget_usd: number
-  spent_usd: number
-  remaining_usd: number
-  fraction_used: number
-  pause_at_limit: boolean
-}
-
-export interface UsageDailyPoint {
-  date: string
-  tokens: number
-  tokens_input: number
-  tokens_output: number
-  tokens_cache_read: number
-  tokens_cache_creation: number
-  cost_tokens_millicents: number
-  cost_sandbox_cpu_millicents: number
-  cost_sandbox_memory_millicents: number
-  cost_fee_millicents: number
-}
-
-export interface ModelUsageBreakdown {
-  model_id: string
-  tokens: number
-  cost_tokens_millicents: number
-  cost_sandbox_cpu_millicents: number
-  cost_sandbox_memory_millicents: number
-  cost_fee_millicents: number
-}
-
-export interface UsageDashboard {
-  period_start: string
-  period_end: string
-  total_tokens: number
-  total_cost_millicents: number
-  prior_total_tokens: number
-  prior_total_cost_millicents: number
-  daily: UsageDailyPoint[]
-  by_model: ModelUsageBreakdown[]
-}
-
-// ----------------------------- agent sessions ----------------------------
-
-// Loosely typed: the CLI reads a handful of summary fields and otherwise treats
-// the session as opaque JSON. See AgentSession in the backend for the full shape.
-export interface AgentSession {
-  id: string
-  customer_id: string
-  created_at: string
-  updated_at: string
-  status: AgentSessionStatus
-  status_reason: string | null
-  // Why the session ended, finer than status; null until terminal.
-  exit_status?: string | null
-  source?: AgentSessionSource
-  agent_config_id: string | null
-  // Durable-conversation identity (stateful sessions): a keyed session runs
-  // the cloud session loop and accepts /messages; null = single-shot.
-  session_key?: string | null
-  session_state?: 'idle' | 'running' | 'closed' | null
-  // Customer-facing status surface (session_surface.py). `status` is the derived
-  // single word to display (working/waiting/sleeping/starting/…); `session` +
-  // `run` are the two raw axes. null for un-keyed (laptop) sessions and on list
-  // rows that don't populate it. Prefer surface.status over the raw `status`.
-  surface?: {
-    session: 'alive' | 'sleeping' | 'closed' | null
-    run: string | null
-    status: string | null
-  } | null
-  // Whether a human may prompt this session, and the curated reason when they
-  // may not — the SAME projection POST /messages enforces, so `connectability`
-  // opens a composer only where a send would succeed. `detail` is server-authored
-  // copy: render it verbatim rather than switching on `blocked_reason`, so a new
-  // refusal reason reads correctly without a CLI release. Optional because
-  // servers predating the field omit it.
-  prompting?: SessionPrompting | null
-  cost_tokens: number
-  cost_sandbox_cpu: number
-  cost_sandbox_memory: number
-  cost_fee: number
-  tokens_total: number
-  metadata: Record<string, string>
-  // Present on the POST /sessions response only (StartAgentSessionResponse):
-  // which config the session runs under and which rung of the defaults ladder
-  // chose it (null when an explicit config/template bypassed resolution).
-  resolved_config_name?: string | null
-  resolution_source?: 'repo_default' | 'account_default' | 'none' | null
-  [key: string]: unknown
-}
-
-export interface SavedAgentConfig {
-  id: string
-  customer_id: string
-  created_at: string
-  updated_at: string
-  deleted: boolean
-  last_agent_session_id: string | null
-  last_agent_session_created_at: string | null
-  last_synced_commit_sha: string | null
-  last_sync_error: string | null
-  agent_config: Record<string, unknown>
-  [key: string]: unknown
-}
-
-// Inline agent config payload accepted by POST /sessions. Opaque to the
-// CLI — passed straight through from a user-supplied JSON file.
-export type AgentConfig = Record<string, unknown>
-
-// --------------------------- request / response -------------------------
-
-// Laptop -> cloud handoff params: start a fresh session on the built-in
-// handoff config, chained to the handed-off session (parent_kind=handoff).
-// Mutually exclusive with config_id / config / template_id.
-export interface HandoffAgentSessionParams {
-  parent_session_id: string
-  repo: string
-  // The WIP commit pushed to refs/ellipsis/handoff/<short> — the sandbox
-  // checkout target.
-  sha: string
-  ref?: string
-}
-
-export interface StartAgentSessionRequest {
-  config_id?: string
-  config?: AgentConfig
-  template_id?: string
-  handoff?: HandoffAgentSessionParams
-  // The "owner/name" repository the CLI is standing in (origin remote). With
-  // no explicit config source it selects the repo rung of the server's
-  // default-config ladder (repo default -> account default -> bare config),
-  // and it is always merged into the sandbox repository set (cloned at the
-  // default branch), even alongside --config. Unknown/foreign repos are
-  // ignored server-side.
-  repository?: string
-  // No `source`: the server derives a session's provenance from the credential
-  // (a user token => `cli`), so it can't be spoofed by the request body.
-  metadata?: Record<string, string>
-  // A partial agent config merged onto the chosen config and re-validated
-  // server-side, e.g. raise just this session's budget. Supply it as a
-  // structured mapping (config_override) or a YAML/JSON string
-  // (config_override_yaml) — not both. Only meaningful with config_id/template_id.
-  config_override?: Record<string, unknown>
-  config_override_yaml?: string
-  // Per-session instructions appended to the initial user query at build time,
-  // after the config's shared `claude.system` system prompt. Distinct from the
-  // system prompt, which is identical for every session of a config.
-  prompt?: string
-  // Start with no initial message: the sandbox spins up, Claude Code sits idle
-  // at the prompt, and the first message sent to the session opens turn 0,
-  // exactly like a local `claude`. Sent for a promptless --connect start (a
-  // bare `agent`). Mutually exclusive with prompt; the server ignores it when
-  // the resolved config is not interactive (that session runs its workflow).
-  idle_start?: boolean
-  // Skip the sandbox image cache for this session's initial provision: a
-  // fresh full build (image layers + clone + image.setup from scratch),
-  // whose snapshot then refreshes the cache for later runs. Wakes of a
-  // durable session provision through the cache as usual. The --rebuild flag.
-  force_rebuild?: boolean
-}
-
-// Replay payload for POST /sessions/{id}/replay. Re-runs an existing
-// session's trigger input. Reuses the original session's frozen config
-// snapshot unless config_id is given. The override fields behave exactly as on
-// StartAgentSessionRequest (mapping or string, not both). `prompt` is omitted
-// to inherit the original session's prompt, set to "" to clear it.
-export interface ReplayAgentSessionRequest {
-  config_id?: string
-  config_override?: Record<string, unknown>
-  config_override_yaml?: string
-  prompt?: string
-}
-
-// One hook-driven transcript sync from this laptop (POST /sessions/sync).
-// The transcript is redacted client-side, gzipped, then base64-encoded.
-export interface SyncAgentSessionRequest {
-  cc_session_id: string
-  transcript_gzip_b64: string
-  // Which Claude Code hook fired the sync: Stop (mid-session, once per turn)
-  // or SessionEnd (the process terminated).
-  reason: 'stop' | 'session_end'
-  // The enrolled repository ("owner/name", from the cwd's git remote), the
-  // cwd, and the checked-out branch — laptop-side context for the session row.
-  repo?: string
-  cwd?: string
-  git_branch?: string
-}
-
-export interface SyncAgentSessionResponse {
-  session_id: string
-  process_id: string
-  event_count: number
-  // False when the server already stored a snapshot at least this long
-  // (longest-snapshot-wins) — acknowledged, nothing written. Still success.
-  accepted: boolean
-}
-
-export interface ListAgentSessionsResponse {
-  sessions: AgentSession[]
-}
-
-export interface ListAgentConfigsResponse {
-  configs: SavedAgentConfig[]
-}
-
-// One rung of the default-config ladder (GET /defaults). Rungs are
-// addressed by `repository`: "owner/name" for a repo default, null for the
-// account-wide default — never by row id.
-export interface AgentDefaultView {
-  id: string
-  repository: string | null
-  config_id: string
-  // The pointed-at config's name; null when the config is gone (see broken).
-  config_name: string | null
-  // Why this rung can't serve sessions (config_deleted | config_disabled |
-  // config_pending_pr | repo_inaccessible); null when healthy.
-  broken: string | null
-  updated_at: string
-}
-
-export interface ListAgentDefaultsResponse {
-  defaults: AgentDefaultView[]
-}
-
-// Body of PUT /defaults: point a rung at a config. `repository` omitted
-// sets the account default; "owner/name" sets that repo's default.
-export interface PutAgentDefaultRequest {
-  repository?: string
-  config_id: string
-}
-
-// Create-config payload for POST /configs. Exactly one of `config` (inline)
-// or `template_id` (a gallery template slug). `repository` is a bare repo name
-// in the caller's account — the owner is always the account.
-export interface CreateAgentConfigRequest {
-  config?: AgentConfig
-  template_id?: string
-  repository: string
-  // File path within the repo. Omit for the default agents/<slug>.yaml; if set
-  // it must be a location Ellipsis syncs (.yaml/.yml under agents/, .agents/,
-  // ellipsis/, or .ellipsis/ at any depth).
-  path?: string
-}
-
-// Result of creating a config: the pending row plus the pull request that adds
-// its YAML file. The agent goes live once that PR merges and syncs.
-export interface CreatedAgentConfig {
-  config: SavedAgentConfig
-  path: string
-  pull_request_url: string
-}
-
-// A built-in starter template served by GET /templates. `yaml` is the
-// schema-valid agent config the CLI writes to disk; the rest is display copy.
-export interface AgentTemplate {
-  slug: string
-  name: string
-  description: string
-  tags: string[]
-  summary: string
-  use_case: string
-  yaml: string
-}
-
-export interface ListAgentTemplatesResponse {
-  templates: AgentTemplate[]
-  // The verbatim config of the run-on-demand template behind the dashboard's
-  // first-run CTA (`recent-work-summary`), served with the gallery so the hero
-  // can show the exact agent it starts.
-  first_run_yaml: string
-}
-
-// USD cents per 1M tokens, one field per pricing lane. A provider without
-// prompt caching reports 0 for the cache lanes.
-export interface ModelRateCard {
-  input_cents_per_1m_tokens: number
-  cache_write_5m_cents_per_1m_tokens: number
-  cache_write_1h_cents_per_1m_tokens: number
-  cache_read_cents_per_1m_tokens: number
-  output_cents_per_1m_tokens: number
-}
-
-// Who built the model, for per-vendor display. Not who serves it: the GPT
-// models reach us through Bedrock, so routing would attribute an OpenAI model
-// to AWS. A union rather than an enum, so an unrecognized value is a type
-// error here instead of silently rendering as a known vendor.
-export type ModelManufacturer = 'anthropic' | 'openai' | 'zai'
-
-// One model a customer may select for their agent, from the registry behind
-// the dashboard's rate table. `is_default_agent_model` marks what the server
-// resolves "Default" to.
-export interface SupportedModel {
-  id: string
-  display_name: string
-  manufacturer: ModelManufacturer
-  is_default_agent_model: boolean
-  rate_card: ModelRateCard
-}
-
-export interface GetSupportedModelsResponse {
-  models: SupportedModel[]
-}
+// ------------------------- CLI-local query shapes -------------------------
+// The option bags the CLI assembles before calling the SDK. They mirror the
+// generated methods' parameter objects; they exist so command modules can name
+// and pass around a query without importing the SDK's inline parameter types.
 
 export interface ListAgentSessionsQuery {
   config_id?: string
@@ -385,9 +190,8 @@ export interface ListAgentSessionsQuery {
   start?: string
   end?: string
   limit?: number
-  // A GitHub account id (GET /integrations/github/members); scopes the list to
-  // sessions attributed to that developer. The CLI resolves it from a --author
-  // login.
+  // A GitHub account id (`agent github members`); scopes the list to sessions
+  // attributed to that developer. The CLI resolves it from a --author login.
   author_id?: number
   // "owner/name" or a bare repository name. Sessions that name their
   // repository only inside their agent config — dashboard starts, cron runs,
@@ -399,63 +203,12 @@ export interface ListAgentSessionsQuery {
   unfinished?: boolean
 }
 
-// ----------------------------- session records ---------------------------
-
-// One immutable archived segment of the session log (GET /sessions/{id}/log):
-// its feed_seq range plus a short-lived presigned S3 GET. Segments are gzip
-// members — download them in order and concatenate for the whole log.
-export interface SessionLogSegment {
-  start_feed_seq: number
-  end_feed_seq: number
-  record_count: number
-  bytes: number
-  download_url: string
-  expires_in: number
-}
-
-// The session-log manifest: the complete, ordered, downloadable history of a
-// session, archived into seq-ranged .jsonl.gz segments. For a running session
-// `latest_feed_seq` may exceed `archived_through_feed_seq`; `caught_up` says
-// whether the manifest is the whole story yet.
-export interface GetSessionLogResponse {
-  format: string
-  session_id: string
-  // The retention head: the first feed_seq still available (null = nothing
-  // recorded yet).
-  earliest_feed_seq: number | null
-  // The highest feed_seq covered by an archived segment (0 = none yet).
-  archived_through_feed_seq: number
-  // The feed head (the last allocated feed_seq).
-  latest_feed_seq: number
-  caught_up: boolean
-  segments: SessionLogSegment[]
-}
-
-// GET /sessions/{id}/ide (`agent session ide`): the live sandbox's
-// code-server tunnel URL. Unguessable, customer-scoped at discovery, and dead
-// once the sandbox is torn down — fetch it fresh on every open, never store it.
-export interface GetSessionIdeResponse {
-  url: string
-}
-
-// GET /sessions/{id}/ports/{port} (`agent session port`): the tunnel URL
-// for one of the sandbox's preview ports (a dev server the agent or the IDE
-// user started). Same lifetime/gating as the IDE URL.
-export interface GetSessionPortResponse {
-  url: string
-  port: number
-}
-
-// ----------------------------- session search ----------------------------
-
-export type SessionSearchScope = 'records' | 'recaps' | 'both'
-
 export interface SearchSessionsQuery {
   q: string
   scope?: SessionSearchScope
   source?: AgentSessionSource[]
   author_id?: number[]
-  agent_config_id?: string[]
+  config_id?: string[]
   session_ids?: string[]
   repo?: string
   status?: AgentSessionStatus[]
@@ -464,204 +217,21 @@ export interface SearchSessionsQuery {
   limit?: number
 }
 
-// One session record matching the search, denormalized with enough session
-// context to render a result row (backend LogSearchHit).
-export interface RecordSearchHit {
-  id: string
-  session_execution_id: string | null
-  agent_session_id: string
-  stream_seq: number
-  record_type: string
-  created_at: string
-  snippet: string
-  [key: string]: unknown
+export interface ListFilesQuery {
+  // Scope to one run's uploads.
+  session_id?: string
+  limit?: number
 }
 
-// One search result session. `matched` lists which arms hit:
-// "records" | "recap" | "pr" | "similar".
-export interface SessionSearchResult {
-  session: AgentSession
-  matched: string[]
-  recap_snippet: string | null
-  record_hits: RecordSearchHit[]
-  // Total record hits within the search window; may exceed record_hits.length
-  // (which the server caps), so "and N more" can render.
-  record_hit_count: number
+export interface ListReviewsQuery {
+  owner?: string
+  repo?: string
+  pull_request_number?: number
+  status?: S['CodeReviewRunStatus']
+  limit?: number
 }
 
-// The GITHUB_USER attributions among the results, keyed by attribution_id, so
-// the CLI can show author logins without a second lookup.
-export interface GithubAccountSnippet {
-  id: number
-  login: string
-  type: string
-  avatar_url: string
-}
-
-export interface SearchSessionsResponse {
-  results: SessionSearchResult[]
-  attributed_users: Record<string, GithubAccountSnippet>
-}
-
-// -------------------------- integration discovery ------------------------
-// Read-only views of what's connected for the account (GET /integrations
-// and the per-provider listings). Responses never include secrets.
-
-export interface GithubIntegrationSummary {
-  account_login: string
-  account_type: string
-  repository_selection: 'all' | 'selected'
-  suspended: boolean
-  repository_count: number
-}
-
-export interface SlackIntegrationSummary {
-  team_id: string
-  team_name: string
-  operations_channel_id: string | null
-}
-
-export interface LinearTeamSummary {
-  id: string
-  name: string
-  key: string | null
-  // Whether Ellipsis is enabled for this team.
-  is_enabled: boolean
-}
-
-export interface LinearIntegrationSummary {
-  organization_id: string
-  teams: LinearTeamSummary[]
-}
-
-export interface JiraIntegrationSummary {
-  cloud_id: string
-}
-
-export interface SentryOrganizationSummary {
-  integration_id: string
-  organization_slug: string
-}
-
-// A key is null (or an empty list for sentry) when that integration is not
-// connected, so the response always shows the full universe of integrations.
-export interface GetIntegrationsResponse {
-  github: GithubIntegrationSummary | null
-  slack: SlackIntegrationSummary | null
-  linear: LinearIntegrationSummary | null
-  jira: JiraIntegrationSummary | null
-  sentry: SentryOrganizationSummary[]
-}
-
-// A repository connected to the installation: a valid `repository` for
-// POST /configs and for repository lists in an agent config.
-export interface RepositorySummary {
-  id: number
-  name: string
-  full_name: string
-  private: boolean
-  default_branch: string | null
-  description: string | null
-}
-
-export interface ListGithubRepositoriesResponse {
-  repositories: RepositorySummary[]
-}
-
-export interface LinkedSlackIdentity {
-  slack_user_id: string
-  slack_email: string | null
-}
-
-export interface LinkedGithubIdentity {
-  id: number
-  login: string | null
-}
-
-// An org member (or the account itself for a personal customer). `id` is the
-// universe of author_id values for session list/search queries.
-export interface GithubMemberSummary {
-  id: number
-  login: string | null
-  name: string | null
-  avatar_url: string | null
-  // null for a personal (user) account, which has no org roles.
-  role: string | null
-  slack: LinkedSlackIdentity | null
-}
-
-export interface ListGithubMembersResponse {
-  members: GithubMemberSummary[]
-}
-
-export interface SlackMemberSummary {
-  id: string
-  name: string | null
-  real_name: string | null
-  display_name: string | null
-  email: string | null
-  github: LinkedGithubIdentity | null
-}
-
-export interface ListSlackMembersResponse {
-  team_id: string
-  team_name: string
-  members: SlackMemberSummary[]
-}
-
-export interface SlackChannelSummary {
-  id: string
-  name: string | null
-  is_private: boolean | null
-  is_member: boolean | null
-}
-
-export interface ListSlackChannelsResponse {
-  team_id: string
-  team_name: string
-  channels: SlackChannelSummary[]
-}
-
-export interface ListLinearTeamsResponse {
-  organization_id: string
-  teams: LinearTeamSummary[]
-}
-
-export interface ListSentryOrganizationsResponse {
-  organizations: SentryOrganizationSummary[]
-}
-
-// -------------------------- sandbox variables ---------------------------
-// Customer-scoped environment variables injected into a sandbox when an agent
-// config names them. Values are write-only: the API accepts them but never
-// returns them, so the summary carries only the name and timestamps.
-
-export interface SandboxVariableSummary {
-  name: string
-  created_at: string
-  updated_at: string
-}
-
-export interface GetSandboxVariablesResponse {
-  variables: SandboxVariableSummary[]
-}
-
-export interface SandboxVariableInput {
-  name: string
-  value: string
-}
-
-export interface PutSandboxVariablesRequest {
-  variables: SandboxVariableInput[]
-}
-
-// ------------------------------- analytics -------------------------------
-// Mirrors of the /analytics/* responses (analytics_service.py) — the same
-// aggregation behind the app's /analytics dashboard, token-authed. The CLI
-// renders the leaderboards and totals; feed items and day buckets it only
-// passes through to --json are typed loosely.
-
-// Shared window params: explicit start/end (ISO timestamps) or a `days`
+// Shared analytics window: explicit start/end (ISO timestamps) or a `days`
 // look-back (mutually exclusive with start; server default: last 30 days).
 export interface AnalyticsWindowQuery {
   days?: number
@@ -669,75 +239,11 @@ export interface AnalyticsWindowQuery {
   end?: string
 }
 
-// all = everyone, user = humans only, bot = apps/agents only.
-export type AnalyticsAccountType = 'all' | 'user' | 'bot'
-
 export interface AnalyticsMetricsQuery extends AnalyticsWindowQuery {
   repo?: string[] // "owner/name"
   author?: string[] // PR-author logins
   account_type?: AnalyticsAccountType
   status?: string[] // open | draft | merged | closed
-}
-
-// A person or app that reviewed PRs in the window.
-export interface ReviewerUsage {
-  login: string
-  avatar_url: string | null
-  reviews: number
-  approved: number
-  changes_requested: number
-  comments: number
-  lines_reviewed: number
-}
-
-// An author who merged a PR in the window.
-export interface ContributorUsage {
-  login: string
-  avatar_url: string | null
-  prs_merged: number
-  reviews: number
-  additions: number
-  deletions: number
-  ai_attributed_prs: number
-}
-
-export interface AnalyticsRepoUsage {
-  repo_full_name: string
-  prs_merged: number
-  reviews: number
-  active_contributors: number
-  ai_attributed_prs: number
-  additions: number
-  deletions: number
-}
-
-export interface AnalyticsMetricsTotals {
-  prs_opened: number
-  prs_merged: number
-  prs_closed: number
-  reviews: number
-  prs_reviewed: number
-  approved: number
-  changes_requested: number
-  commented: number
-  review_comments: number
-  additions: number
-  deletions: number
-  commits: number
-  active_contributors: number
-  open_prs: number
-  median_time_to_merge_hours: number
-  median_time_to_first_review_hours: number
-}
-
-export interface GetAnalyticsMetricsResponse {
-  series: Array<Record<string, unknown>>
-  totals: AnalyticsMetricsTotals
-  repositories: AnalyticsRepoUsage[]
-  contributors: ContributorUsage[]
-  reviewers: ReviewerUsage[]
-  available_repos: Array<{ repo_full_name: string; prs: number }>
-  available_authors: Array<{ login: string; prs: number }>
 }
 
 export interface AnalyticsPullRequestsQuery extends AnalyticsWindowQuery {
@@ -749,181 +255,9 @@ export interface AnalyticsPullRequestsQuery extends AnalyticsWindowQuery {
   status?: string[]
 }
 
-export interface PullRequestsDayBucket {
-  date: string
-  prs: number
-  prs_human: number
-  prs_bot: number
-  merged: number
-  closed: number
-  lines: number
-  lines_human: number
-  lines_bot: number
-  commits: number
-  commits_human: number
-  commits_bot: number
-  authors: number
-  authors_human: number
-  authors_bot: number
-  // merge_time percentiles pass through untyped.
-  [key: string]: unknown
-}
-
-export interface PullRequestsTotals {
-  prs: number
-  merged: number
-  lines: number
-  commits: number
-  active_authors: number
-  merge_time_p50_hours: number
-}
-
-export interface GetAnalyticsPullRequestsResponse {
-  series: PullRequestsDayBucket[]
-  totals: PullRequestsTotals
-  facets: Record<string, unknown>
-  recent: Array<Record<string, unknown>>
-  // True when the window hit the server's PR scan cap and figures undercount.
-  truncated: boolean
-}
-
 export interface AnalyticsReviewsQuery extends AnalyticsWindowQuery {
   repo?: string[] // bare repo names (matching the review facet values)
   author?: string[] // reviewer logins
   account_type?: AnalyticsAccountType
   review_state?: string[] // APPROVED | CHANGES_REQUESTED | COMMENTED | ...
-}
-
-export interface ReviewsDayBucket {
-  date: string
-  reviews: number
-  approved: number
-  commented: number
-  changes_requested: number
-  reviewers_human: number
-  reviewers_bot: number
-  reviewers_total: number
-  comments: number
-  comments_human: number
-  comments_bot: number
-}
-
-export interface ReviewsTotals {
-  reviews: number
-  reviewers: number
-  prs: number
-  comments: number
-  comments_human: number
-  comments_bot: number
-  thumbs_up: number
-  thumbs_down: number
-}
-
-export interface ReviewAuthorFacet {
-  login: string
-  avatar_url: string | null
-  account_type: string | null
-  reviews: number
-}
-
-export interface GetAnalyticsReviewsResponse {
-  reviews: Array<Record<string, unknown>>
-  review_comments: Array<Record<string, unknown>>
-  series: ReviewsDayBucket[]
-  totals: ReviewsTotals
-  facets: {
-    repos: Array<{ repository_name: string; reviews: number }>
-    authors: ReviewAuthorFacet[]
-  }
-}
-
-// --------------------------------- files ---------------------------------
-// Agent file storage: files an agent persists beyond its sandbox's lifetime —
-// v1 is PNG screenshots posted as org-gated links on PRs. Mirrors
-// files_service.py.
-
-// Caller-facing file metadata — no storage internals (S3 key, sha, owner).
-export interface FileView {
-  id: string
-  filename: string
-  content_type: string
-  size_bytes: number
-  created_at: string
-  // The originating session, when the upload came from a sandbox.
-  agent_session_id: string | null
-}
-
-export interface CreateFileRequest {
-  // Original basename, display only (the S3 key derives from the server-side
-  // file id, never from this).
-  filename: string
-  // v1: must be image/png; the server magic-byte-checks the decoded bytes.
-  content_type: string
-  // The raw file bytes, base64-encoded (same JSON-body precedent as session
-  // transcript sync).
-  data_b64: string
-}
-
-export interface CreateFileResponse {
-  file: FileView
-  // The fully-formed org-gated dashboard URL (app.ellipsis.dev/files/{id}) —
-  // the link an agent pastes into a PR comment.
-  url: string
-}
-
-export interface ListFilesQuery {
-  // Scope to one run's uploads.
-  agent_session_id?: string
-  limit?: number
-}
-
-export interface ListFilesResponse {
-  files: FileView[]
-}
-
-export interface GetFileResponse {
-  file: FileView
-  // The gated dashboard URL (same link the upload returned).
-  url: string
-  // Short-lived (60s) presigned S3 GET for the actual bytes — fetch it
-  // immediately; the JSON API never carries the file itself.
-  download_url: string
-}
-
-// ------------------------------- reviews --------------------------------
-// The Review/CreateReviewRequest shapes come from the SDK (re-exported at the
-// top of this file); only the list query is hand-rolled, since query params
-// aren't part of the generated response types.
-
-export interface ListReviewsQuery {
-  owner?: string
-  repo?: string
-  pull_request_number?: number
-  status?: string
-  limit?: number
-  // The client's query builder takes a plain record.
-  [key: string]: unknown
-}
-
-// ------------------------------ cli auth --------------------------------
-
-export interface CliAuthStart {
-  device_code: string
-  user_code: string
-  verification_uri: string
-  verification_uri_complete: string
-  interval: number
-  expires_in: number
-}
-
-export type CliAuthPollStatus =
-  | 'pending'
-  | 'approved'
-  | 'denied'
-  | 'expired'
-  | 'already_claimed'
-
-export interface CliAuthPoll {
-  status: CliAuthPollStatus
-  access_token?: string
 }

@@ -1,447 +1,140 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiClient, ApiError, buildQuery, parseErrorResponse } from '../src/lib/api'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { APIError } from '@ellipsis-dev/sdk'
+import { api, describeApiError, errorDetail } from '../src/lib/api'
+import { USER_AGENT } from '../src/lib/constants'
 
-describe('buildQuery', () => {
-  it('returns empty string for no/empty query', () => {
-    expect(buildQuery()).toBe('')
-    expect(buildQuery({})).toBe('')
-  })
+// The REST surface itself is the SDK's, generated from the OpenAPI spec and
+// tested there. What belongs to the CLI is this module: how a client gets its
+// credential and base URL, that every request is attributable, and how an SDK
+// error becomes something a terminal user can act on.
 
-  it('skips undefined and null values', () => {
-    expect(buildQuery({ a: 1, b: undefined, c: null })).toBe('?a=1')
-  })
+// A throwaway config dir per test, so resolveToken/resolveApiBase read a known
+// (empty) config rather than the developer's real ~/.ellipsis.
+let dir: string
+const ENV_KEYS = ['ELLIPSIS_API_TOKEN', 'ELLIPSIS_API_BASE_URL', 'ELLIPSIS_API_BASE'] as const
 
-  it('repeats the key for array values (FastAPI list convention)', () => {
-    expect(buildQuery({ source: ['cli', 'api'] })).toBe('?source=cli&source=api')
-  })
-
-  it('encodes values', () => {
-    expect(buildQuery({ start: '2026-01-01T00:00:00+00:00' })).toContain(
-      'start=2026-01-01T00%3A00%3A00%2B00%3A00',
-    )
-  })
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'ellipsis-api-'))
+  process.env.ELLIPSIS_CONFIG_DIR = dir
+  for (const k of ENV_KEYS) delete process.env[k]
 })
 
-describe('parseErrorResponse', () => {
-  it('extracts a string detail', async () => {
-    const res = new Response(JSON.stringify({ detail: 'Invalid credentials' }), {
-      status: 401,
-    })
-    expect((await parseErrorResponse(res)).detail).toBe('Invalid credentials')
-  })
-
-  it('stringifies a structured detail (FastAPI 422)', async () => {
-    const res = new Response(JSON.stringify({ detail: [{ loc: ['query', 'limit'] }] }), {
-      status: 422,
-    })
-    expect((await parseErrorResponse(res)).detail).toContain('limit')
-  })
-
-  it('falls back to status text for non-JSON bodies', async () => {
-    const res = new Response('<html>oops</html>', { status: 502, statusText: 'Bad Gateway' })
-    expect((await parseErrorResponse(res)).detail).toBe('Bad Gateway')
-  })
-
-  it('reads the request id from the X-Request-ID header', async () => {
-    const res = new Response(JSON.stringify({ detail: 'boom' }), {
-      status: 500,
-      headers: { 'x-request-id': 'request_abc123' },
-    })
-    expect(await parseErrorResponse(res)).toEqual({
-      detail: 'boom',
-      requestId: 'request_abc123',
-    })
-  })
-
-  it('falls back to the body request_id when the header is absent', async () => {
-    const res = new Response(
-      JSON.stringify({ detail: 'Internal Server Error', request_id: 'request_xyz' }),
-      { status: 500 },
-    )
-    expect((await parseErrorResponse(res)).requestId).toBe('request_xyz')
-  })
-
-  it('still parses a non-JSON body that carries the header', async () => {
-    const res = new Response('<html>oops</html>', {
-      status: 502,
-      statusText: 'Bad Gateway',
-      headers: { 'x-request-id': 'request_gw' },
-    })
-    expect(await parseErrorResponse(res)).toEqual({
-      detail: 'Bad Gateway',
-      requestId: 'request_gw',
-    })
-  })
+afterEach(() => {
+  delete process.env.ELLIPSIS_CONFIG_DIR
+  for (const k of ENV_KEYS) delete process.env[k]
+  rmSync(dir, { recursive: true, force: true })
+  vi.unstubAllGlobals()
 })
 
-describe('ApiClient.request', () => {
-  afterEach(() => vi.unstubAllGlobals())
+function stubOk(body: unknown = { ok: true }): ReturnType<typeof vi.fn> {
+  const fetchMock = vi.fn(async () => new Response(JSON.stringify(body), { status: 200 }))
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
 
-  it('sends the bearer token and parses JSON', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
+describe('api', () => {
+  it('sends the resolved bearer token and hits the resolved base', async () => {
+    const fetchMock = stubOk({ customer_login: 'acme' })
+    await api('http://api.test', 'tok_123').me()
 
-    const api = new ApiClient('http://api.test', 'tok_123')
-    const out = await api.request<{ ok: boolean }>('GET', '/me')
-
-    expect(out).toEqual({ ok: true })
-    const [url, init] = fetchMock.mock.calls[0]
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('http://api.test/me')
-    expect((init as RequestInit).headers).toMatchObject({ authorization: 'Bearer tok_123' })
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer tok_123' })
   })
 
-  it('appends the query string', async () => {
-    const fetchMock = vi.fn(
-      async () => new Response(JSON.stringify({ sessions: [] }), { status: 200 }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
+  it('resolves the token and base from the environment when not passed', async () => {
+    process.env.ELLIPSIS_API_TOKEN = 'env_tok'
+    process.env.ELLIPSIS_API_BASE_URL = 'http://env.test'
+    const fetchMock = stubOk()
+    await api().budget()
 
-    await new ApiClient('http://api.test', 't').listAgentSessions({ limit: 5, source: ['cli'] })
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/sessions?limit=5&source=cli')
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('http://env.test/budget')
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer env_tok' })
   })
 
-  it('throws ApiError carrying status + server detail on non-2xx', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response(JSON.stringify({ detail: 'nope' }), { status: 403 })),
-    )
-    const api = new ApiClient('http://api.test', 't')
-    await expect(api.whoami()).rejects.toMatchObject({
-      name: 'ApiError',
-      status: 403,
+  it('stamps the CLI user agent on every request, so calls stay attributable', async () => {
+    const fetchMock = stubOk()
+    await api('http://api.test', 't').usage()
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(init.headers).toMatchObject({ 'user-agent': USER_AGENT })
+    expect(USER_AGENT).toMatch(/^ellipsis-cli\//)
+  })
+
+  it('builds a client with no credential at all, for the unauthenticated auth routes', async () => {
+    const fetchMock = stubOk({ device_code: 'dev_1' })
+    await api('http://api.test').auth.cli.start()
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('http://api.test/auth/cli/start')
+  })
+})
+
+describe('errorDetail', () => {
+  it("reads the server's sentence out of the error envelope", () => {
+    const err = new APIError({
+      status: 409,
+      code: 'session_closed',
+      message: 'Session is closed',
+      requestId: 'request_1',
+      body: { error: { message: 'Session is closed', code: 'session_closed' } },
     })
-    await expect(api.whoami()).rejects.toThrow(/403 nope/)
+    expect(errorDetail(err)).toBe('Session is closed')
   })
 
-  it('surfaces the request id from the response on non-2xx', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        async () =>
-          new Response(JSON.stringify({ detail: 'Internal Server Error' }), {
-            status: 500,
-            headers: { 'x-request-id': 'request_deadbeef' },
-          }),
-      ),
-    )
-    const api = new ApiClient('http://api.test', 't')
-    await expect(api.whoami()).rejects.toMatchObject({
-      name: 'ApiError',
+  it("reads FastAPI's own `detail` shape, which auth and validation still use", () => {
+    const err = new APIError({
+      status: 401,
+      code: null,
+      message: 'Invalid credentials',
+      requestId: null,
+      body: { detail: 'Invalid credentials' },
+    })
+    expect(errorDetail(err)).toBe('Invalid credentials')
+  })
+
+  it("falls back to the SDK's message when the body carries no sentence", () => {
+    const err = new APIError({
+      status: 502,
+      code: null,
+      message: 'Bad Gateway',
+      requestId: null,
+      body: '<html>oops</html>',
+    })
+    expect(errorDetail(err)).toBe('502 error: Bad Gateway')
+  })
+
+  it('passes a plain Error through unchanged', () => {
+    expect(errorDetail(new Error('boom'))).toBe('boom')
+  })
+})
+
+describe('describeApiError', () => {
+  it('quotes the status, the message, and the request id we can grep for', () => {
+    const err = new APIError({
       status: 500,
+      code: null,
+      message: 'Internal Server Error',
       requestId: 'request_deadbeef',
+      body: { error: { message: 'Internal Server Error' } },
     })
-    await expect(api.whoami()).rejects.toThrow(/request id: request_deadbeef/)
-  })
-
-  it('tolerates empty response bodies', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })))
-    const api = new ApiClient('http://api.test', 't')
-    await expect(api.request('DELETE', '/whatever')).resolves.toBeUndefined()
-  })
-
-  it('exposes ApiError as an Error subclass', () => {
-    const err = new ApiError(500, 'GET', '/x', 'boom')
-    expect(err).toBeInstanceOf(Error)
-    expect(err.message).toContain('GET /x failed: 500 boom')
-  })
-})
-
-describe('ApiClient sandbox variables', () => {
-  afterEach(() => vi.unstubAllGlobals())
-
-  it('lists variables and unwraps the response envelope', async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ variables: [{ name: 'A', created_at: '', updated_at: '' }] }), {
-          status: 200,
-        }),
+    expect(describeApiError(err)).toBe(
+      '500 Internal Server Error (request id: request_deadbeef)',
     )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const out = await new ApiClient('http://api.test', 't').listSandboxVariables()
-    expect(out).toEqual([{ name: 'A', created_at: '', updated_at: '' }])
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/secrets')
-    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
   })
 
-  it('PUTs the variables batch and returns the echoed list', async () => {
-    const fetchMock = vi.fn(
-      async () => new Response(JSON.stringify({ variables: [] }), { status: 200 }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    await new ApiClient('http://api.test', 't').putSandboxVariables([{ name: 'TOKEN', value: 'x' }])
-    const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/secrets')
-    expect((init as RequestInit).method).toBe('PUT')
-    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
-      variables: [{ name: 'TOKEN', value: 'x' }],
+  it('omits the request id when the server stamped none', () => {
+    const err = new APIError({
+      status: 404,
+      code: null,
+      message: 'nope',
+      requestId: null,
+      body: { detail: 'nope' },
     })
-  })
-
-  it('URL-encodes the name on delete', async () => {
-    const fetchMock = vi.fn(
-      async () => new Response(JSON.stringify({ variables: [] }), { status: 200 }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    await new ApiClient('http://api.test', 't').deleteSandboxVariable('MY/VAR')
-    const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/secrets/MY%2FVAR')
-    expect((init as RequestInit).method).toBe('DELETE')
-  })
-})
-
-describe('getSessionLog', () => {
-  afterEach(() => vi.unstubAllGlobals())
-
-  it('hits the log path and returns the manifest', async () => {
-    const body = {
-      format: 'ellipsis_session_log@1',
-      session_id: 'session_1',
-      earliest_feed_seq: null,
-      archived_through_feed_seq: 0,
-      latest_feed_seq: 0,
-      caught_up: true,
-      segments: [],
-    }
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify(body), { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
-
-    const out = await new ApiClient('http://api.test', 't').getSessionLog('session_1')
-    expect(out).toEqual(body)
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/sessions/session_1/log')
-  })
-})
-
-describe('replayAgentSession', () => {
-  afterEach(() => vi.unstubAllGlobals())
-
-  it('POSTs to the session-scoped replay path (encoded) with the body', async () => {
-    const fetchMock = vi.fn(
-      async () => new Response(JSON.stringify({ id: 'session_2' }), { status: 200 }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const out = await new ApiClient('http://api.test', 't').replayAgentSession('session/1', {
-      config_override: { claude: { model: 'claude-opus-4-8' } },
-    })
-    expect(out.id).toBe('session_2')
-    const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/sessions/session%2F1/replay')
-    expect((init as RequestInit).method).toBe('POST')
-    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
-      config_override: { claude: { model: 'claude-opus-4-8' } },
-    })
-  })
-})
-
-describe('stopAgentSession', () => {
-  afterEach(() => vi.unstubAllGlobals())
-
-  it('POSTs to the session-scoped stop path (encoded) and returns the session', async () => {
-    const fetchMock = vi.fn(
-      async () => new Response(JSON.stringify({ id: 'session_1', status: 'stopped' }), { status: 200 }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const out = await new ApiClient('http://api.test', 't').stopAgentSession('session/1')
-    expect(out).toEqual({ id: 'session_1', status: 'stopped' })
-    const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/sessions/session%2F1/stop')
-    expect((init as RequestInit).method).toBe('POST')
-  })
-})
-
-describe('agent templates', () => {
-  afterEach(() => vi.unstubAllGlobals())
-
-  it('unwraps the templates array from the list response', async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ templates: [{ slug: 'a' }, { slug: 'b' }] }), {
-          status: 200,
-        }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const out = await new ApiClient('http://api.test', 't').listAgentTemplates()
-    expect(out.map((t) => t.slug)).toEqual(['a', 'b'])
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/agents/templates')
-  })
-
-  it('fetches a single template by slug (encoded)', async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ slug: 'ci-failure-triager', yaml: 'x' }), { status: 200 }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const out = await new ApiClient('http://api.test', 't').getAgentTemplate('ci-failure-triager')
-    expect(out.yaml).toBe('x')
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/agents/templates/ci-failure-triager')
-  })
-})
-
-describe('supported models', () => {
-  afterEach(() => vi.unstubAllGlobals())
-
-  it('unwraps the models array from the list response', async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            models: [
-              { id: 'claude-opus-5', display_name: 'Claude Opus 5', is_default_agent_model: true },
-            ],
-          }),
-          { status: 200 },
-        ),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const out = await new ApiClient('http://api.test', 't').listSupportedModels()
-    expect(out.map((m) => m.id)).toEqual(['claude-opus-5'])
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/models')
-  })
-})
-
-describe('createAgentConfig', () => {
-  afterEach(() => vi.unstubAllGlobals())
-
-  it('POSTs template_id + repository and returns the pull request', async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            config: { id: 'cfg_1' },
-            path: 'agents/ci-failure-triager.yaml',
-            pull_request_url: 'https://github.com/octocat/api/pull/7',
-          }),
-          { status: 200 },
-        ),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const out = await new ApiClient('http://api.test', 't').createAgentConfig({
-      template_id: 'ci-failure-triager',
-      repository: 'api',
-    })
-    expect(out.pull_request_url).toBe('https://github.com/octocat/api/pull/7')
-    const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/agents/configs')
-    expect((init as RequestInit).method).toBe('POST')
-    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
-      template_id: 'ci-failure-triager',
-      repository: 'api',
-    })
-  })
-})
-
-describe('ApiClient files', () => {
-  afterEach(() => vi.unstubAllGlobals())
-
-  it('POSTs the upload payload and returns the gated URL', async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            file: { id: 'a1', filename: 'shot.png' },
-            url: 'https://app.ellipsis.dev/files/a1',
-          }),
-          { status: 201 },
-        ),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const out = await new ApiClient('http://api.test', 't').uploadFile({
-      filename: 'shot.png',
-      content_type: 'image/png',
-      data_b64: 'aGk=',
-    })
-    expect(out.url).toBe('https://app.ellipsis.dev/files/a1')
-    const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/files')
-    expect((init as RequestInit).method).toBe('POST')
-    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
-      filename: 'shot.png',
-      content_type: 'image/png',
-      data_b64: 'aGk=',
-    })
-  })
-
-  it('lists files, unwrapping the envelope and passing filters as query', async () => {
-    const fetchMock = vi.fn(
-      async () => new Response(JSON.stringify({ files: [{ id: 'a1' }] }), { status: 200 }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const out = await new ApiClient('http://api.test', 't').listFiles({
-      agent_session_id: 'session_1',
-      limit: 5,
-    })
-    expect(out).toEqual([{ id: 'a1' }])
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      'http://api.test/files?agent_session_id=session_1&limit=5',
-    )
-  })
-
-  it('URL-encodes the file id on get', async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({ file: { id: 'a/1' }, url: 'u', download_url: 'd' }),
-          { status: 200 },
-        ),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const out = await new ApiClient('http://api.test', 't').getFile('a/1')
-    expect(out.download_url).toBe('d')
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/files/a%2F1')
-  })
-
-  it('DELETEs the file id (encoded) and tolerates a 204 empty body', async () => {
-    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }))
-    vi.stubGlobal('fetch', fetchMock)
-
-    const out = await new ApiClient('http://api.test', 't').deleteFile('a/1')
-    expect(out).toBeUndefined()
-    const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://api.test/files/a%2F1')
-    expect((init as RequestInit).method).toBe('DELETE')
-  })
-})
-
-describe('ApiClient session IDE and ports', () => {
-  afterEach(() => vi.unstubAllGlobals())
-
-  it('fetches the IDE tunnel URL', async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ url: 'https://ide.modal.host' }), { status: 200 }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const out = await new ApiClient('http://api.test', 't').getSessionIde('session_1')
-    expect(out.url).toBe('https://ide.modal.host')
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/sessions/session_1/ide')
-    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
-  })
-
-  it('fetches a preview port tunnel URL', async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ url: 'https://p3000.modal.host', port: 3000 }), {
-          status: 200,
-        }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const out = await new ApiClient('http://api.test', 't').getSessionPort('session_1', 3000)
-    expect(out).toEqual({ url: 'https://p3000.modal.host', port: 3000 })
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      'http://api.test/sessions/session_1/ports/3000',
-    )
+    expect(describeApiError(err)).toBe('404 nope')
   })
 })

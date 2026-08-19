@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { extname } from 'node:path'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { parse as parseYaml } from 'yaml'
-import { ApiClient } from '../lib/api'
+import { api } from '../lib/api'
 import { requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
 import {
   formatTs,
@@ -34,9 +34,10 @@ import {
 } from '@ellipsis-dev/sdk/stream'
 import { recordToItems } from '@ellipsis-dev/sdk/store'
 import { makeOpenSocket, resolveWsBase } from '../lib/stream'
+import type { Ellipsis, Session as FrameSession } from '@ellipsis-dev/sdk'
 import type {
+  AgentConfig,
   AgentSession,
-  AgentSessionWire,
   AgentSessionSource,
   AgentSessionStatus,
   GithubAccountSnippet,
@@ -65,7 +66,7 @@ import { openBrowser } from '../lib/auth'
 import { registerConnect, runConnect } from './connect'
 import { canHostSessionsUi, defaultStartRequest, runSessionsUi } from '../ui/launch'
 import { formatStepLine, oneLine, recordText } from '../lib/steps'
-import { ApiError } from '../lib/api'
+import { APIError } from '../lib/api'
 import { resolveToken } from '../lib/config'
 
 // Poll cadence for the `--watch` REST fallback (used only when live WebSocket
@@ -225,7 +226,7 @@ export function registerSession(program: Command): void {
             metadata: opts.metadata,
           }
           if (opts.config) req.config_id = opts.config
-          if (opts.configFile) req.config = readConfigFile(opts.configFile)
+          if (opts.configFile) req.config = readConfigFile(opts.configFile) as AgentConfig
           if (opts.template) req.template_id = opts.template
           // The repo we're standing in (origin remote), sent unconditionally —
           // with no config source it picks the repo rung of the server's
@@ -252,8 +253,9 @@ export function registerSession(program: Command): void {
           // workflow, so this only applies to the interactive open.
           if (opts.connect && !promptText) req.idle_start = true
 
-          const api = new ApiClient()
-          const session = await api.startAgentSession(req)
+          const client = api()
+          const { session, resolved_config_name, resolution_source } =
+            await client.sessions.start(req)
 
           // Say which agent the server picked when it came from the defaults
           // ladder, so a bare `agent` never silently runs an unexpected config.
@@ -261,30 +263,30 @@ export function registerSession(program: Command): void {
           // printed before the app would land in scrollback); every other
           // mode prints this note.
           let configNote: string | undefined
-          if (session.resolved_config_name) {
-            if (session.resolution_source === 'repo_default') {
-              configNote = `using config "${session.resolved_config_name}" (repo default)`
-            } else if (session.resolution_source === 'account_default') {
-              configNote = `using config "${session.resolved_config_name}" (account default)`
+          if (resolved_config_name) {
+            if (resolution_source === 'repo_default') {
+              configNote = `using config "${resolved_config_name}" (repo default)`
+            } else if (resolution_source === 'account_default') {
+              configNote = `using config "${resolved_config_name}" (account default)`
             }
           }
 
           if (opts.connect) {
             // A non-interactive config refuses the stream/messages surface, so
             // a connect would fail; degrade to watching the output instead.
-            const ellipsisBlock = (session.agent_config as Record<string, unknown> | undefined)
-              ?.ellipsis as { interactive?: boolean } | undefined
-            if (ellipsisBlock?.interactive === false) {
+            // The wire session carries no config blob, so interactivity comes
+            // from the same projection POST /messages enforces.
+            if (!session.prompting.enabled) {
               if (configNote) console.log(configNote)
               console.log(
                 'this agent is not interactive; watching output instead of connecting',
               )
               console.log(`✓ started session ${session.id}`)
-              await printSessionUrl(api, session.id)
-              await watchSessionStreaming(api, session.id, FALLBACK_POLL_INTERVAL_SECONDS, false)
+              await printSessionUrl(client, session.id)
+              await watchSessionStreaming(client, session.id, FALLBACK_POLL_INTERVAL_SECONDS, false)
               return
             }
-            await startConnect(session)
+            await startConnect(session, undefined, resolved_config_name ?? undefined)
             return
           }
 
@@ -293,14 +295,19 @@ export function registerSession(program: Command): void {
           if (opts.watch) {
             if (!opts.json) {
               console.log(`✓ started session ${session.id}`)
-              await printSessionUrl(api, session.id)
+              await printSessionUrl(client, session.id)
             }
             // --quiet blocks on status only (no live output stream); either way
             // the terminal status sets the exit code.
             if (opts.quiet) {
-              await watchSession(api, session.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+              await watchSession(client, session.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
             } else {
-              await watchSessionStreaming(api, session.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+              await watchSessionStreaming(
+                client,
+                session.id,
+                FALLBACK_POLL_INTERVAL_SECONDS,
+                opts.json,
+              )
             }
             return
           }
@@ -310,7 +317,7 @@ export function registerSession(program: Command): void {
             return
           }
           console.log(`✓ started session ${session.id} (${session.status})`)
-          await printSessionUrl(api, session.id)
+          await printSessionUrl(client, session.id)
           console.log(`  follow with: agent session get ${session.id} --watch`)
         })
       },
@@ -356,16 +363,18 @@ export function registerSession(program: Command): void {
         json?: boolean
       }) => {
         await runAction(async () => {
-          const api = new ApiClient()
-          const sessions = await api.listAgentSessions({
-            config_id: opts.config,
-            source: opts.source.length ? (opts.source as AgentSessionSource[]) : undefined,
-            author_id: opts.author ? await resolveAuthorId(api, opts.author) : undefined,
-            days: opts.days,
-            start: opts.since,
-            end: opts.until,
-            limit: opts.limit,
-          })
+          const client = api()
+          const sessions = (
+            await client.sessions.list({
+              config_id: opts.config,
+              source: opts.source.length ? (opts.source as AgentSessionSource[]) : undefined,
+              author_id: opts.author ? await resolveAuthorId(client, opts.author) : undefined,
+              days: opts.days,
+              start: opts.since,
+              end: opts.until,
+              limit: opts.limit,
+            })
+          ).items
           if (opts.json) {
             printJson(sessions)
             return
@@ -456,14 +465,14 @@ export function registerSession(program: Command): void {
         },
       ) => {
         await runAction(async () => {
-          const api = new ApiClient()
-          const authorId = opts.author ? await resolveAuthorId(api, opts.author) : undefined
-          const res = await api.searchSessions({
+          const client = api()
+          const authorId = opts.author ? await resolveAuthorId(client, opts.author) : undefined
+          const res = await client.sessions.search({
             q: query,
             scope: opts.scope as SessionSearchScope,
             source: opts.source.length ? (opts.source as AgentSessionSource[]) : undefined,
             author_id: authorId === undefined ? undefined : [authorId],
-            agent_config_id: opts.config.length ? opts.config : undefined,
+            config_id: opts.config.length ? opts.config : undefined,
             session_ids: opts.session.length ? opts.session : undefined,
             repo: opts.repo,
             status: opts.status.length ? (opts.status as AgentSessionStatus[]) : undefined,
@@ -503,7 +512,7 @@ export function registerSession(program: Command): void {
     .option('--json', 'output raw JSON (full record payloads)')
     .action(async (sessionId: string, opts: { json?: boolean }) => {
       await runAction(async () => {
-        const records = await new ApiClient().getAgentSessionRecords(sessionId)
+        const records = (await api().sessions.records(sessionId)).items as SessionRecord[]
         if (opts.json) {
           printJson(records)
           return
@@ -541,7 +550,7 @@ export function registerSession(program: Command): void {
         },
       ) => {
         await runAction(async () => {
-          const manifest = await new ApiClient().getSessionLog(sessionId)
+          const manifest = await api().sessions.log(sessionId)
           if (opts.json) {
             printJson(manifest)
             return
@@ -565,7 +574,7 @@ export function registerSession(program: Command): void {
           } else {
             process.stdout.write(data)
           }
-          if (!manifest.caught_up) {
+          if (manifest.has_more) {
             console.error(
               `note: the archive trails the live feed (archived through ` +
                 `${manifest.archived_through_feed_seq} of ${manifest.latest_feed_seq}). ` +
@@ -592,25 +601,33 @@ export function registerSession(program: Command): void {
     .action(
       async (sessionId: string, opts: { watch?: boolean; quiet?: boolean; json?: boolean }) => {
         await runAction(async () => {
-          const api = new ApiClient()
+          const client = api()
           if (opts.quiet && !opts.watch) {
             throw new Error('--quiet only applies with --watch')
           }
           if (opts.watch) {
-            if (!opts.json) await printSessionUrl(api, sessionId)
+            if (!opts.json) await printSessionUrl(client, sessionId)
             if (opts.quiet) {
-              await watchSession(api, sessionId, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+              await watchSession(client, sessionId, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
             } else {
-              await watchSessionStreaming(api, sessionId, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+              await watchSessionStreaming(
+                client,
+                sessionId,
+                FALLBACK_POLL_INTERVAL_SECONDS,
+                opts.json,
+              )
             }
             return
           }
         if (opts.json) {
-          printJson(await api.getAgentSession(sessionId))
+          printJson((await client.sessions.get(sessionId)).session)
           return
         }
         // Fetch the session and the login (for the link) together — no added latency.
-        const [s, me] = await Promise.all([api.getAgentSession(sessionId), api.whoami()])
+        const [{ session: s }, me] = await Promise.all([
+          client.sessions.get(sessionId),
+          client.me(),
+        ])
         printSessionSummary(s)
         console.log(`url:       ${sessionUrl(resolveAppBase(), me.customer_login, sessionId)}`)
       })
@@ -669,18 +686,23 @@ export function registerSession(program: Command): void {
           // `--prompt ''` (clear it): only set the field when the flag was passed.
           if (opts.prompt !== undefined) req.prompt = opts.prompt
 
-          const api = new ApiClient()
-          const session = await api.replayAgentSession(sessionId, req)
+          const client = api()
+          const { session } = await client.sessions.replay(sessionId, req)
 
           if (opts.watch) {
             if (!opts.json) {
               console.log(`✓ started replay ${session.id} (from ${sessionId})`)
-              await printSessionUrl(api, session.id)
+              await printSessionUrl(client, session.id)
             }
             if (opts.quiet) {
-              await watchSession(api, session.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+              await watchSession(client, session.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
             } else {
-              await watchSessionStreaming(api, session.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+              await watchSessionStreaming(
+                client,
+                session.id,
+                FALLBACK_POLL_INTERVAL_SECONDS,
+                opts.json,
+              )
             }
             return
           }
@@ -689,7 +711,7 @@ export function registerSession(program: Command): void {
             return
           }
           console.log(`✓ started replay ${session.id} (${session.status}, from ${sessionId})`)
-          await printSessionUrl(api, session.id)
+          await printSessionUrl(client, session.id)
           console.log(`  follow with: agent session get ${session.id} --watch`)
         })
       },
@@ -733,8 +755,8 @@ export function registerSession(program: Command): void {
                 : `✓ working tree clean, handing off HEAD ${sha.slice(0, 12)} via ${ref}`,
             )
           }
-          const api = new ApiClient()
-          const session = await api.startAgentSession({
+          const client = api()
+          const { session } = await client.sessions.start({
             handoff: { parent_session_id: opts.parent, repo, sha, ref },
             prompt,
           })
@@ -743,7 +765,7 @@ export function registerSession(program: Command): void {
             return
           }
           console.log(`✓ started handoff session ${session.id} (${session.status})`)
-          await printSessionUrl(api, session.id)
+          await printSessionUrl(client, session.id)
           console.log(`  follow with: agent session get ${session.id} --watch`)
         })
       },
@@ -788,8 +810,7 @@ export function registerSession(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(async (sessionId: string, opts: { json?: boolean }) => {
       await runAction(async () => {
-        const api = new ApiClient()
-        const s = await api.stopAgentSession(sessionId)
+        const { session: s } = await api().sessions.stop(sessionId)
         if (opts.json) {
           printJson(s)
           return
@@ -820,7 +841,7 @@ export function registerSession(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(async (sessionId: string, opts: { open: boolean; json?: boolean }) => {
       await runAction(async () => {
-        const res = await new ApiClient().getSessionIde(sessionId)
+        const res = await api().sessions.ide(sessionId)
         if (opts.json) {
           printJson(res)
           return
@@ -855,7 +876,7 @@ export function registerSession(program: Command): void {
           if (Number.isNaN(portNumber)) {
             throw new Error(`port must be a number, got "${port}"`)
           }
-          const res = await new ApiClient().getSessionPort(sessionId, portNumber)
+          const res = await api().sessions.port(sessionId, portNumber)
           if (opts.json) {
             printJson(res)
             return
@@ -873,10 +894,14 @@ export function registerSession(program: Command): void {
 // process) as it happens and reports a terminal status reached before the
 // sandbox ever ran (a preflight/budget gate), so there is nothing to wait
 // for out here.
-export async function startConnect(session: AgentSession, notice?: string): Promise<void> {
-  // The start response carries the resolved config identity; hand it to the
-  // chat for the footer meta line (a later GET may not resolve the name).
-  const configName = session.resolved_config_name ?? session.agent_config_id ?? undefined
+export async function startConnect(
+  session: AgentSession,
+  notice?: string,
+  // The start response's resolved config name, which the session itself does
+  // not carry; shown in the chat footer's meta line.
+  resolvedConfigName?: string,
+): Promise<void> {
+  const configName = resolvedConfigName ?? session.config_id ?? undefined
   if (canHostSessionsUi()) {
     await runSessionsUi({
       initialSessionId: session.id,
@@ -894,7 +919,7 @@ export async function startConnect(session: AgentSession, notice?: string): Prom
 // backend without the endpoint). Identical UX either way — the same flag
 // covers both.
 export async function watchSessionStreaming(
-  api: ApiClient,
+  client: Ellipsis,
   sessionId: string,
   intervalSeconds: number,
   json?: boolean,
@@ -911,7 +936,7 @@ export async function watchSessionStreaming(
   const onFrame = (frame: StreamFrame) => {
     if (frame.type === 'session' || frame.type === 'snapshot') {
       const word = sessionStatusWord(
-        (frame as unknown as { session: AgentSessionWire }).session,
+        (frame as unknown as { session: FrameSession }).session,
       )
       if (word === lastStatus) return
       lastStatus = word
@@ -934,7 +959,7 @@ export async function watchSessionStreaming(
           `live stream unavailable (${err.message}); falling back to status polling`,
         )
       }
-      await watchSession(api, sessionId, intervalSeconds, json)
+      await watchSession(client, sessionId, intervalSeconds, json)
       return
     }
     throw err // StreamAuthError and anything unexpected: surfaced by runAction.
@@ -995,7 +1020,7 @@ export function exitCodeForStatus(status: string): number {
 // transition. This is the status-level fallback used when live streaming isn't
 // available: the public REST API exposes session state, not the step-by-step stream.
 export async function watchSession(
-  api: ApiClient,
+  client: Ellipsis,
   sessionId: string,
   intervalSeconds: number,
   json?: boolean,
@@ -1003,7 +1028,7 @@ export async function watchSession(
   const intervalMs = Math.max(1, intervalSeconds) * 1000
   let last: AgentSessionStatus | undefined
   for (;;) {
-    const s = await api.getAgentSession(sessionId)
+    const { session: s } = await client.sessions.get(sessionId)
     if (s.status !== last) {
       if (!json) {
         const reason = s.status_reason ? `: ${s.status_reason}` : ''
@@ -1029,7 +1054,7 @@ function printSessionSummary(s: AgentSession): void {
   console.log(`id:        ${s.id}`)
   console.log(`status:    ${s.status}${s.status_reason ? ` (${s.status_reason})` : ''}`)
   if (s.source) console.log(`source:    ${s.source}`)
-  if (s.agent_config_id) console.log(`config:    ${s.agent_config_id}`)
+  if (s.config_id) console.log(`config:    ${s.config_id}`)
   console.log(`created:   ${s.created_at}`)
   console.log(`updated:   ${s.updated_at}`)
   console.log(`tokens:    ${s.tokens_total.toLocaleString()}`)
@@ -1047,8 +1072,8 @@ function printSessionSummary(s: AgentSession): void {
 
 // Print a clickable dashboard link for a session. The route is scoped by
 // account login, which isn't on the session object, so resolve it from /me.
-async function printSessionUrl(api: ApiClient, sessionId: string): Promise<void> {
-  const me = await api.whoami()
+async function printSessionUrl(client: Ellipsis, sessionId: string): Promise<void> {
+  const me = await client.me()
   console.log(`  ${sessionUrl(resolveAppBase(), me.customer_login, sessionId)}`)
 }
 
@@ -1057,7 +1082,10 @@ async function printSessionUrl(api: ApiClient, sessionId: string): Promise<void>
 // config_override_yaml; `--config-override-file` is read and parsed to a mapping
 // and sent as the structured config_override. Both merge identically server-side.
 export function applyConfigOverride(
-  req: { config_override?: Record<string, unknown>; config_override_yaml?: string },
+  req: {
+    config_override?: Record<string, unknown> | null
+    config_override_yaml?: string | null
+  },
   opts: { configOverride?: string; configOverrideFile?: string },
 ): void {
   if (opts.configOverride && opts.configOverrideFile) {
@@ -1181,8 +1209,8 @@ function readMappingFile(path: string, label: string): Record<string, unknown> {
 // Resolve a --author GitHub login to the account id the API filters by
 // (author_id on GET /sessions and /sessions/search), via the org roster.
 // An unknown login fails with the known logins so the user can self-correct.
-export async function resolveAuthorId(api: ApiClient, login: string): Promise<number> {
-  const { members } = await api.listGithubMembers()
+export async function resolveAuthorId(client: Ellipsis, login: string): Promise<number> {
+  const { members } = await client.integrations.github.members()
   const member = members.find((m) => m.login?.toLowerCase() === login.toLowerCase())
   if (member) return member.id
   const known = members.flatMap((m) => (m.login ? [m.login] : [])).join(', ')
@@ -1284,7 +1312,7 @@ async function readHookStdin(): Promise<HookStdin | undefined> {
 // A fetch() network failure (DNS, refused, offline) — retriable, so spool.
 // ApiError >= 500 is treated the same; 4xx is permanent and never spooled.
 function isRetriable(err: unknown): boolean {
-  if (err instanceof ApiError) return err.status >= 500
+  if (err instanceof APIError) return err.status >= 500
   // Anything that never produced an HTTP response (DNS, refused, offline).
   return true
 }
@@ -1358,9 +1386,9 @@ async function syncTranscript(opts: {
     git_branch: branchFromCwd(cwd),
   }
 
-  const api = new ApiClient()
+  const client = api()
   try {
-    const res = await api.syncAgentSession(req)
+    const res = await client.sessions.sync(req)
     recordSyncOutcome({
       outcome: 'synced',
       cc_session_id: ccSessionId,
@@ -1397,7 +1425,7 @@ async function syncTranscript(opts: {
       continue
     }
     try {
-      await api.syncAgentSession(spooled)
+      await client.sessions.sync(spooled)
       dropSpooledSync(file)
     } catch (err) {
       if (isRetriable(err)) break // server unhealthy again; retry next time

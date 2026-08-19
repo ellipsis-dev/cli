@@ -1,5 +1,5 @@
 import type { Command } from 'commander'
-import { ApiClient } from '../lib/api'
+import { api } from '../lib/api'
 import { requireToken } from '../lib/config'
 import { apiRoutes } from '../lib/help'
 import { printJson, runAction } from '../lib/output'
@@ -27,7 +27,7 @@ export function registerMe(program: Command): void {
         // without this the request would go out unauthenticated and come back
         // as a 401.
         requireToken()
-        const me = await new ApiClient().whoami()
+        const me = await api().me()
         if (opts.json) {
           printJson(me)
           return

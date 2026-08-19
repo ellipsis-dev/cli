@@ -1,5 +1,5 @@
 import type { Command } from 'commander'
-import { ApiClient, ApiError } from '../lib/api'
+import { api, APIError } from '../lib/api'
 import { apiRoutes } from '../lib/help'
 import { runAction } from '../lib/output'
 import { repoFromCwd } from '../lib/laptop'
@@ -73,12 +73,11 @@ async function startHelperSession(): Promise<void> {
   // `agent`, rather than running a workflow against a fabricated kickoff.
   req.idle_start = true
 
-  const api = new ApiClient()
   try {
-    const session = await api.startAgentSession(req)
+    const { session } = await api().sessions.start(req)
     await startConnect(session, 'Ellipsis help agent')
   } catch (err) {
-    if (err instanceof ApiError && err.status === 404) {
+    if (err instanceof APIError && err.status === 404) {
       throw new Error(
         `the help agent is not available on this host yet (template "${HELPER_TEMPLATE_SLUG}" not found). Run \`agent template list\` to see what you can start.`,
       )

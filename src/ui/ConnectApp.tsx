@@ -28,7 +28,8 @@ import {
   type SessionTranscriptStore,
   type TranscriptItem,
 } from '@ellipsis-dev/sdk/store'
-import { ApiClient, ApiError } from '../lib/api'
+import { errorDetail } from '../lib/api'
+import type { Ellipsis } from '@ellipsis-dev/sdk'
 import { hyperlink } from '../lib/urls'
 import { usdNumberFromMillicents } from '../lib/output'
 import { applyEditShortcut } from '../lib/editing'
@@ -81,7 +82,7 @@ import {
 // either way.
 
 export interface ConnectAppProps {
-  api: ApiClient
+  api: Ellipsis
   sessionId: string
   // The one transcript store, pre-seeded with the fetched records + session.
   store: SessionTranscriptStore
@@ -406,9 +407,11 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     polling.current = true
     const tick = async (): Promise<void> => {
       try {
-        const [page, session] = await Promise.all([
-          api.getAgentSessionRecordsPage(sessionId, { afterSeq: store.cursor }),
-          api.getAgentSession(sessionId),
+        // No cursor: the store drops records at or below its own feed_seq,
+        // so a full re-read is deduped rather than re-rendered.
+        const [page, { session }] = await Promise.all([
+          api.sessions.records(sessionId).then((p) => p.response),
+          api.sessions.get(sessionId),
         ])
         if (page.records.length) {
           // Inbox state (message_received/delivered/requeued) rides the record
@@ -607,7 +610,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       void (async () => {
         try {
           if (text === '/stop') {
-            const s = await api.stopAgentSession(sessionId)
+            const { session: s } = await api.sessions.stop(sessionId)
             setNotice(null)
             setChatNotes((prev) => [
               ...prev,
@@ -624,7 +627,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           // retires it in favour of the server's own row.
           setQueued((prev) => [...prev, { text, messageId: null }])
           setNotice(null)
-          const created = await api.sendSessionMessage(sessionId, text)
+          const { message: created } = await api.sessions.sendMessage(sessionId, { message: text })
           setQueued((prev) => {
             let stamped = false
             return prev.map((q) => {
@@ -642,7 +645,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             const j = prev.findIndex((q) => q.text === text && q.messageId === null)
             return j < 0 ? prev : [...prev.slice(0, j), ...prev.slice(j + 1)]
           })
-          setNotice(`✗ ${err instanceof ApiError ? err.detail : (err as Error).message}`)
+          setNotice(`✗ ${errorDetail(err)}`)
         }
       })()
     },
