@@ -154,8 +154,8 @@ export async function runConnect(
       minRenderFeedSeq: showRecords ? 0 : store.cursor,
       sessionUrl: url,
       initialNotice: notice,
-      // The session's one model, fixed at creation (backend tokens_model).
-      model: typeof session.tokens_model === 'string' ? session.tokens_model : null,
+      // The session's one model, fixed at creation.
+      model: session.tokens?.model || null,
       configName: config,
       exitState,
     }),

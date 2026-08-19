@@ -62,12 +62,15 @@ function costTick(store: SessionTranscriptStore, cents: number): void {
     session: {
       id: 'session_render',
       status: 'waiting',
-      cost_tokens: cents,
-      cost_sandbox_cpu: 0,
-      cost_sandbox_memory: 0,
-      cost_fee: 0,
-      tokens_total: cents,
-      tokens_model: 'claude-fable-5',
+      cost: { llm: cents, sandbox_cpu: 0, sandbox_memory: 0, fee: 0, total: cents },
+      tokens: {
+        input: 0,
+        output: 0,
+        cache_read: 0,
+        cache_creation: 0,
+        total: cents,
+        model: 'claude-fable-5',
+      },
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any)
@@ -108,12 +111,15 @@ function seededStore(records: Record<string, unknown>[], status: string) {
   const session = {
     id: 'session_render',
     status,
-    cost_tokens: 0,
-    cost_sandbox_cpu: 0,
-    cost_sandbox_memory: 0,
-    cost_fee: 0,
-    tokens_total: 0,
-    tokens_model: 'claude-fable-5',
+    cost: { llm: 0, sandbox_cpu: 0, sandbox_memory: 0, fee: 0, total: 0 },
+    tokens: {
+      input: 0,
+      output: 0,
+      cache_read: 0,
+      cache_creation: 0,
+      total: 0,
+      model: 'claude-fable-5',
+    },
   }
   store.ingest({
     type: 'snapshot',

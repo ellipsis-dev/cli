@@ -127,15 +127,15 @@ function trimZero(s: string): string {
 }
 
 // The nav row's right-hand metadata: how much work the agent did (tokens,
-// spend) and when it last moved. Spend is the sum of the four millicent cost
-// columns, the same total the chat footer shows. A just-started session drops
-// the empty bits rather than showing "0 · $0.00". No source tag: the nav lists
-// cloud sessions only, so it would read the same on every row.
+// spend) and when it last moved. Spend is the server's millicent total, the
+// same total the chat footer shows. A just-started session drops the empty
+// bits rather than showing "0 · $0.00". No source tag: the nav lists cloud
+// sessions only, so it would read the same on every row.
 export function rowMeta(session: AgentSession, now: Date = new Date()): string {
   const bits: string[] = []
-  if (session.tokens_total > 0) bits.push(compactTokens(session.tokens_total))
-  const millicents =
-    session.cost_tokens + session.cost_sandbox_cpu + session.cost_sandbox_memory + session.cost_fee
+  const tokens = session.tokens?.total ?? 0
+  if (tokens > 0) bits.push(compactTokens(tokens))
+  const millicents = session.cost?.total ?? 0
   if (millicents > 0) bits.push(`$${(millicents / 100_000).toFixed(2)}`)
   bits.push(shortAge(lastEventAt(session), now))
   return bits.join(' · ')

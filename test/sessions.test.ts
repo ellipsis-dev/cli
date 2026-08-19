@@ -36,18 +36,9 @@ function session(overrides: Partial<AgentSession>): AgentSession {
     source: 'api',
     harness: 'claude_code',
     prompting: { enabled: true },
-    resolved_budget_cents: 0,
-    resolved_budget_source: 'system',
-    cost_tokens: 0,
-    cost_sandbox_cpu: 0,
-    cost_sandbox_memory: 0,
-    cost_fee: 0,
-    tokens_total: 0,
-    tokens_input: 0,
-    tokens_output: 0,
-    tokens_cache_read: 0,
-    tokens_cache_creation: 0,
-    tokens_model: '',
+    budget: { cents: 0, source: 'system' },
+    cost: { llm: 0, sandbox_cpu: 0, sandbox_memory: 0, fee: 0, total: 0 },
+    tokens: { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: 0, model: '' },
     metadata: {},
     ...overrides,
   }
@@ -173,11 +164,8 @@ describe('rowMeta', () => {
 
   it('reads tokens, spend, and age', () => {
     const s = session({
-      tokens_total: 84_200,
-      cost_tokens: 30_000,
-      cost_sandbox_cpu: 10_000,
-      cost_sandbox_memory: 2_000,
-      cost_fee: 0,
+      tokens: { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: 84_200, model: '' },
+      cost: { llm: 30_000, sandbox_cpu: 10_000, sandbox_memory: 2_000, fee: 0, total: 42_000 },
       updated_at: '2026-07-23T11:58:00Z',
     } as never)
     expect(rowMeta(s, now)).toBe('84.2k · $0.42 · 2m ago')
