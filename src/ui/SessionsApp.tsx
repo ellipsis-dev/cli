@@ -1100,6 +1100,11 @@ function NewSessionPane({
   // minus the heading, notices, and the panel's other rows (~12); the panel
   // grows upward into the spacer above, so the prompt never moves.
   const dropdownCapacity = Math.max(3, height - 12)
+  // Whether the input has room for its 1-row perimeter: the three picker rows,
+  // the blank one above the prompt, the prompt's own two, and a pad row top AND
+  // bottom. All or nothing, deliberately — a pad on top with none underneath
+  // reads as a box that forgot to close, which is worse than no pad at all.
+  const inputPad = height - (PICKER_ROWS.length + 1 + 2) >= 2 ? 1 : 0
   // The wrap width inside the input box: the pane minus the box's own left
   // and right padding (the "▶ " prompt is part of the wrapped text).
   const inputWidth = Math.max(8, width - COMPOSER_PAD_X * 2)
@@ -1119,24 +1124,31 @@ function NewSessionPane({
     // pushing the input around.
     // No pane padding: the input's rules span the full terminal width like
     // the header's and the nav's (the rows inside carry their own indents).
+    // The heading and the fact are DECORATION, and they are what yields when the
+    // terminal is short: both sit in an overflow-hidden box that shrinks to
+    // nothing, so the input below keeps every row it asked for — including the
+    // blank one under the prompt. Squeezing the input instead would eat that row
+    // and leave the box looking open at the bottom.
     <Box width={width} height={height} flexDirection="column">
-      <Box flexGrow={1} />
-      <Box justifyContent="center">
-        <Text bold color={theme.foreground}>
-          What are we shipping today?
-        </Text>
-      </Box>
-      {/* The fact box is sized to the text (capped so long facts wrap at a
-          readable measure) so short facts sit centered, not left-aligned
-          inside a fixed column. */}
-      <Box justifyContent="center" paddingTop={1}>
-        <Box width={Math.min(fact.length, Math.max(8, width - 4), 72)}>
-          <Text color={theme.muted} wrap="wrap">
-            {fact}
+      <Box flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden">
+        <Box flexGrow={1} />
+        <Box justifyContent="center" flexShrink={0}>
+          <Text bold color={theme.foreground}>
+            What are we shipping today?
           </Text>
         </Box>
+        {/* The fact box is sized to the text (capped so long facts wrap at a
+            readable measure) so short facts sit centered, not left-aligned
+            inside a fixed column. */}
+        <Box justifyContent="center" paddingTop={1} flexShrink={0}>
+          <Box width={Math.min(fact.length, Math.max(8, width - 4), 72)}>
+            <Text color={theme.muted} wrap="wrap">
+              {fact}
+            </Text>
+          </Box>
+        </Box>
+        <Box flexGrow={1} />
       </Box>
-      <Box flexGrow={1} />
       {error && <Text color={theme.error}> ✗ {error}</Text>}
       {starting && <Text color={theme.muted}> ✻ Starting session…</Text>}
       {/* The input, laid out like the chat composer: the run controls one row
@@ -1151,8 +1163,14 @@ function NewSessionPane({
         flexDirection="column"
         backgroundColor={inputSurface}
         alignItems="flex-start"
-        paddingY={1}
+        paddingY={inputPad}
         paddingX={COMPOSER_PAD_X}
+        // Never squeezed. The pane clips its overflow, and the input is the LAST
+        // child, so without this a pane too short for the content above it takes
+        // the difference out of the input's bottom edge — which reads as a box
+        // with a top pad and no bottom one, its tint stopping flush against the
+        // prompt. The squeeze belongs on the spacers and the fact above instead.
+        flexShrink={0}
       >
         {PICKER_ROWS.map((r, i) => {
           const active = focused && openPicker === null && row === i
