@@ -232,7 +232,6 @@ describe('sessionBar', () => {
       hosts: {},
       sessionBar: {
         hidden: true,
-        rows: 8,
         days: 30,
         repo: 'any',
         statuses: 'unfinished',
@@ -241,7 +240,6 @@ describe('sessionBar', () => {
     })
     expect(sessionBar()).toEqual({
       hidden: true,
-      rows: 8,
       days: 30,
       repo: 'any',
       statuses: 'unfinished',
@@ -250,8 +248,8 @@ describe('sessionBar', () => {
   })
 
   it('fills in the fields the file leaves out', () => {
-    writeConfig({ version: 2, hosts: {}, sessionBar: { rows: 3 } })
-    expect(sessionBar()).toEqual({ ...SESSION_BAR_DEFAULTS, rows: 3 })
+    writeConfig({ version: 2, hosts: {}, sessionBar: { days: 3 } })
+    expect(sessionBar()).toEqual({ ...SESSION_BAR_DEFAULTS, days: 3 })
   })
 
   // A typo in a preference should not stop the UI from opening.
@@ -259,7 +257,7 @@ describe('sessionBar', () => {
     writeConfig({
       version: 2,
       hosts: {},
-      sessionBar: { hidden: 'yes', rows: 0, days: -3, repo: 'origin', statuses: 'live' },
+      sessionBar: { hidden: 'yes', days: -3, repo: 'origin', statuses: 'live' },
     })
     expect(sessionBar()).toEqual(SESSION_BAR_DEFAULTS)
   })

@@ -530,6 +530,54 @@ export function rowViewport(
   }
 }
 
+// ---------------------------------------------------------------- scrollback
+//
+// In scrollback mode the settled part of the transcript is printed ONCE, into
+// the terminal's own scrollback, and never repainted (ink's <Static>). That
+// buys native wheel/trackpad scrolling and native select/copy, and it costs
+// mutability: a row that has been flushed can't re-wrap, re-fold, or take a
+// selection marker. So the flush point has to be a row that CANNOT change
+// again, and these two helpers are what decide it.
+
+// The items whose rows are final. An item's rows can still change for two
+// reasons: a collapsed fold ("Ran 2 tool calls") grows as more tool activity
+// lands under the same message, and the message that owns the open run is the
+// one → can still unfold. So while a turn is in flight the LAST message and
+// everything after it stay live, and everything before it is final. With no
+// turn in flight nothing can grow, so all of it is final.
+//
+// Note this is per-MESSAGE, not per-turn: the moment the agent starts a new
+// message the previous one and its whole tool run flush together, which is what
+// keeps the live frame about one message tall during a long turn. Pure, for
+// tests.
+export function settledItemKeys(
+  items: readonly TranscriptItem[],
+  turnLive: boolean,
+): Set<string> {
+  if (!turnLive) return new Set(items.map((i) => i.key))
+  let lastSpeech = -1
+  for (const [i, item] of items.entries()) if (!isToolActivity(item)) lastSpeech = i
+  // A transcript that is nothing but an open tool run has no settled prefix.
+  if (lastSpeech < 0) return new Set()
+  return new Set(items.slice(0, lastSpeech).map((i) => i.key))
+}
+
+// How many rows off the FRONT of the list are final — the count handed to
+// <Static>. A prefix, deliberately: rows are flushed in screen order, so the
+// first row that can still change stops the scan even if later rows are
+// settled. Pure, for tests.
+export function settledRowCount(
+  rows: readonly TranscriptRow[],
+  settledKeys: ReadonlySet<string>,
+): number {
+  let n = 0
+  for (const row of rows) {
+    if (!settledKeys.has(row.entryKey)) break
+    n++
+  }
+  return n
+}
+
 // The scroll position as (entry, row within that entry) rather than a flat row
 // index, so appends, re-wraps and expansions can't slide the window: the row
 // you parked on stays the row on screen.

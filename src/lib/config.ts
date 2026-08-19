@@ -35,10 +35,8 @@ export interface Host {
 // How the interactive UI's session bar is scoped. Every field is optional; a
 // missing one takes the SESSION_BAR_DEFAULTS value below.
 export interface SessionBarConfig {
-  // Drop the bar entirely, giving its rows to the chat window.
+  // Drop the session list entirely: the chat then never hands focus to it.
   hidden?: boolean
-  // How many session rows the bar shows (a short terminal shows fewer).
-  rows?: number
   // Only sessions that moved in the last N days; 0 means no age cutoff.
   days?: number
   // "cwd" lists only sessions on the repository the shell is in, falling back
@@ -243,7 +241,6 @@ export const SESSION_BAR_DEFAULTS: Required<Omit<SessionBarConfig, 'sources'>> &
   sources: string[] | undefined
 } = {
   hidden: false,
-  rows: 5,
   days: 7,
   repo: 'cwd',
   statuses: 'all',
@@ -266,10 +263,6 @@ export function sessionBar(): ResolvedSessionBar {
     : undefined
   return {
     hidden: raw.hidden === true,
-    rows:
-      typeof raw.rows === 'number' && isFinite(raw.rows) && raw.rows >= 1
-        ? Math.floor(raw.rows)
-        : SESSION_BAR_DEFAULTS.rows,
     days:
       typeof raw.days === 'number' && isFinite(raw.days) && raw.days >= 0
         ? Math.floor(raw.days)

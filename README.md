@@ -162,13 +162,12 @@ is migrated on first use — your existing login becomes a host named for its AP
 base.
 
 The config file also carries UI preferences. `"sessionBar"` scopes the session
-list at the bottom of the interactive UI:
+list, which the interactive UI opens as a full screen with `ctrl+j`:
 
 ```json
 {
   "sessionBar": {
     "hidden": false,
-    "rows": 5,
     "days": 7,
     "repo": "cwd",
     "statuses": "all",
@@ -177,9 +176,8 @@ list at the bottom of the interactive UI:
 }
 ```
 
-`hidden` drops the bar entirely and gives its rows to the chat window. `rows` is
-how many sessions it lists (a short terminal shows fewer). `days` hides sessions
-that have not moved in that long; `0` means no age cutoff. `repo` is `"cwd"` to
+`hidden` drops the list entirely, so the chat never hands focus to it. `days`
+hides sessions that have not moved in that long; `0` means no age cutoff. `repo` is `"cwd"` to
 list only sessions on the repository your shell is in, or `"any"` for all of
 them. `statuses` is `"unfinished"` to leave out the sessions that finished,
 errored, or were stopped, or `"all"` to keep them. `sources` lists only sessions

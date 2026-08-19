@@ -53,11 +53,10 @@ export async function runSessionsUi(options: SessionsUiOptions): Promise<void> {
   const openSocket = makeOpenSocket(token, resolveWsBase(resolveApiBase()))
   const me = await client.me()
 
-  // Start at the top of a fresh window: scroll whatever is on screen into
-  // scrollback, then home the cursor (same dance as the solo connect).
-  if (process.stdout.isTTY) {
-    process.stdout.write('\n'.repeat(process.stdout.rows ?? 24) + '\x1b[H')
-  }
+  // No screen-clearing dance: the chat prints its settled transcript into THIS
+  // terminal's scrollback (see ConnectApp), so the conversation grows down the
+  // terminal from wherever the shell prompt left off, like ordinary command
+  // output. Homing the cursor would throw away the scrollback it relies on.
   const app = render(
     React.createElement(SessionsApp, {
       api: client,

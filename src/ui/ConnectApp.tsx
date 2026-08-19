@@ -6,7 +6,7 @@ import React, {
   useState,
   useSyncExternalStore,
 } from 'react'
-import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink'
+import { Box, Static, Text, useApp, useInput, useStdin, useStdout } from 'ink'
 import {
   streamSession,
   sessionStatusWord,
@@ -34,9 +34,10 @@ import { hyperlink } from '../lib/urls'
 import { usdNumberFromMillicents } from '../lib/output'
 import { applyEditShortcut } from '../lib/editing'
 import { CTRL_C_QUIT_HINT, useCtrlCQuit } from './ctrlC'
-import { fitLines } from '../lib/markdown'
+import { fitLines, visibleWidth } from '../lib/markdown'
 import { SELECTION_GLYPH } from '../lib/sessions'
 import { SURFACE_ACTIVE, SURFACE_ELEVATED, theme } from '../lib/theme'
+import { useAltScreen } from './altScreen'
 import { VERSION } from '../lib/constants'
 import {
   activityRows,
@@ -56,6 +57,8 @@ import {
   padPanelBlocks,
   pendingMessageRows,
   rowViewport,
+  settledItemKeys,
+  settledRowCount,
   snapAnchorForEntry,
   spacerRow,
   spanColor,
@@ -70,6 +73,22 @@ import {
 // transcript block it describes — above a footer with a composer that echoes
 // what you send. Rendering shape lives in @ellipsis-dev/sdk/store (pure); this
 // component owns the data flow, the composer, and the colours.
+//
+// TWO VIEWS of the same transcript, because they want opposite things from the
+// terminal:
+//
+//   * THE CHAT (resting). Settled rows are handed to <Static>, which prints them
+//     ONCE into the terminal's own scrollback and never repaints them. That is
+//     what makes wheel/trackpad scrolling, select/copy and clickable links work
+//     natively — they are the terminal's, not reimplementations. The price is
+//     that a printed row is frozen: it cannot re-wrap, re-fold, or take a
+//     selection marker. Only the unsettled tail plus the footer repaint.
+//   * THE BROWSER (ctrl+r). A windowed view of the whole conversation on the
+//     ALTERNATE screen, where rows can be repainted: folding tool runs open and
+//     shut, walking entries with ↑/↓, app-read wheel scrolling. esc restores the
+//     chat's screen exactly as it was.
+//
+// `windowed` is the flag that says which one this frame is painting.
 //
 // Data flow: ONE SessionTranscriptStore (pre-seeded by the caller with the
 // stored records + session, so the first paint is instant) is fed by the
@@ -110,28 +129,21 @@ export interface ConnectAppProps {
   // conversation closed, so the caller skips the "detached — still running"
   // sign-off (the session is not still running).
   exitState?: { closed: boolean }
-  // ---- pane hosting (the multi-session UI) ----
-  // When set, the app renders inside a fixed-size pane instead of sizing to
-  // the terminal: wrap math and the viewport budget use these instead of
-  // stdout's rows/columns.
-  paneWidth?: number
-  paneHeight?: number
-  // Blank rows above the first line, at MOST: the padding is the layout's
-  // give, so a pane too short for it gets fewer (or none). The solo app keeps
-  // TOP_PAD's slack against terminal row-accounting quirks; a pane host owns
-  // its own edges.
-  topPad?: number
-  // Whether this pane owns the keyboard. The host keeps exactly one input
-  // handler active (sidebar or chat); default true for the solo app.
+  // ---- hosting (the multi-session UI) ----
+  // Whether the app owns the keyboard. The host keeps exactly one input handler
+  // active (session picker or chat); default true for the solo app.
   focused?: boolean
-  // Leave the pane and hand focus to the host's session nav (the bar below
-  // the composer). Fired by esc with nothing open (no panel, no transcript
-  // nav) and by ↓ at the bottom edge (the composer's last line, or a
-  // watch-only follow). Absent in the solo app, where neither leaves.
+  // Hand focus to the host's session picker. Fired by ctrl+j, by esc with
+  // nothing open (no browser, no transcript nav), and by ↓ at the bottom edge
+  // (the composer's last line, or a watch-only follow). Absent in the solo app,
+  // which has no picker to open.
   onFocusNav?: () => void
-  // Drop the bottom meta line (status · cost · model · id · version): the
-  // host renders it in its own header instead.
-  hideMetaLine?: boolean
+  // Print a header above this session's first flushed row. Set by the host when
+  // this chat REPLACES another session's chat: both print into the same
+  // scrollback, one under the other, so without a break the second reads as a
+  // continuation of the first. Absent for the first chat of the process, which
+  // has nothing above it.
+  scrollbackBreak?: boolean
   // Terminal outcomes, reported to the host INSTEAD of exiting the app:
   // 'closed' = the conversation closed; 'preflight' = the session died
   // before it became connectable; 'ended' = a watch-only stream finished.
@@ -147,12 +159,6 @@ function isWorkingStatus(status: string): boolean {
   return ['scheduled', 'starting', 'working', 'retrying'].includes(status)
 }
 
-// Blank rows rendered above the app's first line: one of visual breathing room
-// above the ✦ startup header, plus one of sacrificial slack — see the termRows
-// comment in ConnectApp for what the slack absorbs. Deliberately thin: every
-// row here is a row the conversation doesn't get.
-const TOP_PAD = 2
-
 // Text rows inside the composer panel, before its 1-cell pad above and below.
 // One row: the input grows as you type past it, and the rows it isn't using
 // belong to the conversation.
@@ -165,6 +171,10 @@ const COMPOSER_PAD_X = 2
 // Rows one wheel notch moves. Terminals report a notch per tick, and one row
 // per tick makes a trackpad feel like it's dragging through treacle.
 const WHEEL_ROWS = 3
+
+// The startup block's entry key — it is one block, not a transcript item, so it
+// owns a fixed key rather than a feed_seq one.
+const SANDBOX_KEY = 'sandbox'
 
 // Half the period of the live ⏺ pulse: the glyph dims for this long, then
 // brightens for this long. ~1.4s a cycle — slow enough to read as breathing
@@ -191,14 +201,11 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const { isRawModeSupported } = useStdin()
   const { stdout } = useStdout()
 
-  // Terminal height, tracked across resizes, so the app fills the whole
-  // window Claude Code-style: composer + meta pinned to the bottom edge (one
-  // row below is left for the shell cursor), the transcript growing through
-  // the space between, and TOP_PAD blank rows of padding above the first
-  // line. The padding is deliberate slack: terminals that consume an extra
-  // row (observed in practice) and the caller's post-exit sign-off line
-  // ("resume with: …") each scroll one padding row into scrollback instead
-  // of the app's first line, so the sandbox startup notes stay visible.
+  // Terminal size, tracked across resizes. It bounds the LIVE region — the
+  // unsettled tail, the composer and the meta line — rather than sizing a window
+  // the whole conversation has to fit in: the settled transcript above has been
+  // handed to the terminal, which is what makes the wheel work, and it is the
+  // terminal's business how tall that is now.
   const [termRows, setTermRows] = useState(stdout?.rows ?? 24)
   const [termCols, setTermCols] = useState(stdout?.columns ?? 80)
   useEffect(() => {
@@ -213,15 +220,16 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     }
   }, [stdout])
 
-  // Hosted-in-a-pane vs owning the terminal (the solo `connect`). A pane host
-  // fixes the size and owns the window edges (no shell-row or sign-off slack),
-  // so hosted mode drops the solo app's -1 bottom row and defaults topPad to 1.
-  const hosted = props.paneWidth != null || props.paneHeight != null
-  const rows = props.paneHeight ?? termRows
-  const cols = props.paneWidth ?? termCols
-  const topPad = props.topPad ?? (hosted ? 1 : TOP_PAD)
+  // The app always owns the terminal now (there is no pane host left), so the
+  // resting view is SCROLLBACK: the settled transcript is flushed ONCE into the
+  // terminal's own scrollback (<Static>) and only the live tail + composer
+  // repaint. Wheel/trackpad scrolling, select/copy and clickable links are then
+  // the terminal's own, which is the whole point.
+  const rows = termRows
+  const cols = termCols
   const focused = props.focused ?? true
-  const bottomSlack = hosted ? 0 : 1
+  // A row left for the shell cursor and the caller's sign-off line.
+  const bottomSlack = 1
 
   // Terminal outcomes: reported to the host when there is one (the app stays
   // mounted; the host decides what to show), otherwise exit the Ink render.
@@ -279,13 +287,36 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // wheel and ↑/↓ move it a row at a time; the highlight snaps it so the
   // selected entry comes into frame.
   const [scrollAnchor, setScrollAnchor] = useState<ScrollAnchor | null>(null)
-  // Whether the terminal's mouse reporting is armed (wheel/trackpad scrolls
-  // the transcript). Capturing the mouse steals native text selection and
-  // clickable links, so it starts off — the terminal keeps the mouse for
-  // clicking links and copy/paste, and ctrl+s arms it for wheel scrolling
-  // (the terminal's own bypass, shift-drag or option-drag in iTerm2, works
-  // either way).
-  const [mouseCapture, setMouseCapture] = useState(false)
+  // The transcript BROWSER: a windowed view of the whole conversation, opened
+  // over the alternate screen with ctrl+r and closed with esc. It exists because
+  // the scrollback view gives up the things a repaintable window can do —
+  // folding tool runs open and shut, walking entries with ↑/↓, re-wrapping on
+  // resize — so those move here instead of disappearing.
+  //
+  // While it is open the <Static> flush is withheld: a row flushed onto the alt
+  // screen would die with that buffer, so the primary buffer would come back
+  // missing exactly the rows that settled while you were reading. Held back,
+  // they flush on the way out.
+  const [windowed, setWindowed] = useState(false)
+  useAltScreen(windowed)
+  // Everything ↑/↓ can land on, read through a ref so opening the browser can
+  // select the newest entry without the selection effect re-firing every time a
+  // record lands and dragging the highlight back down the transcript.
+  const navKeysRef = useRef<readonly string[]>([])
+  // Opening the browser lands on the newest entry, so →/← have something to
+  // open the moment the screen appears. Leaving drops the selection, the scroll
+  // position and the expand toggle: re-opening starts at the bottom of the
+  // conversation rather than wherever it was parked a conversation ago.
+  useEffect(() => {
+    if (windowed) {
+      const keys = navKeysRef.current
+      if (keys.length > 0) setNavKey(keys[keys.length - 1])
+      return
+    }
+    setNavKey(null)
+    setScrollAnchor(null)
+    setExpanded(false)
+  }, [windowed])
   // Messages you've sent that the server hasn't acknowledged yet — shown
   // IMMEDIATELY as dim rows at the bottom of the transcript, so a send always
   // appears in the chat the moment you hit enter. From the first
@@ -652,27 +683,29 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     [api, exit, pump, sessionId],
   )
 
-  // The composer renders whenever sending is possible. The keyboard handler
-  // is gated on pane focus (the host keeps exactly one handler active) but
-  // NOT on sendability: a hosted watch-only chat (closed conversation,
-  // single-shot session) still navigates, scrolls, and hands focus back with
-  // esc — its composer-editing keys are ignored below. The solo watch-only
-  // follow keeps today's no-input behavior.
-  const composerVisible = canSend && isRawModeSupported
-  const inputActive = (composerVisible || (hosted && isRawModeSupported)) && focused
+  // The composer renders whenever sending is possible.
+  // The browser drops the composer: it is a reader, and those rows are better
+  // spent on conversation. The keyboard handler stays active (it owns the
+  // browser's own keys), and its composer-editing branches are gated below.
+  const composerVisible = canSend && isRawModeSupported && !windowed
+  // The browser keeps the keyboard even though it has no composer — it is
+  // driven entirely by keys, esc included, so gating input on the composer
+  // would strand you on the alt screen.
+  const inputActive = (composerVisible || windowed) && focused
 
-  // Mouse reporting (SGR), so wheel/trackpad scroll reaches the app as input
-  // instead of scrolling the terminal's (empty) scrollback. Capturing the
-  // mouse steals native text selection, so ctrl+s toggles the capture off
-  // for normal select/copy (the terminal's shift/option-drag bypass works
-  // while armed, too). Turned off again on unmount.
+  // Mouse reporting (SGR) — the browser's wheel scrolling, and ONLY the
+  // browser's. It owns the alternate screen, whose scrollback is empty by
+  // definition, so the wheel is useless there unless the app reads it. The chat
+  // never arms it: down there the transcript is in the terminal's real
+  // scrollback, and capturing the mouse would take native scrolling, select/copy
+  // and clickable links away to reimplement what the terminal just did for free.
   useEffect(() => {
-    if (!inputActive || !mouseCapture || !stdout) return
+    if (!windowed || !inputActive || !stdout?.isTTY) return
     stdout.write('\u001B[?1000h\u001B[?1006h')
     return () => {
       stdout.write('\u001B[?1006l\u001B[?1000l')
     }
-  }, [inputActive, mouseCapture, stdout])
+  }, [windowed, inputActive, stdout])
 
   // The rendered transcript lines, in order: collapsed (the default) folds
   // consecutive tool activity into "Ran N …" notices, except the runs under a
@@ -726,20 +759,36 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // pane owns the keyboard, watch-only follows included (nothing to stop there,
   // but ctrl+c still has to be the way out).
   const ctrlCArmed = useCtrlCQuit(
-    isRawModeSupported && focused && (composerVisible || hosted || !hasHost),
+    isRawModeSupported && focused && (composerVisible || windowed || !hasHost),
     () => {
       if (working && canSend) submit('/stop')
     },
   )
   // The notice bar doubles as the ctrl+c prompt: armed, it says what a second
   // press does, so the quit is never a surprise.
-  const shownNotice = ctrlCArmed ? CTRL_C_QUIT_HINT : notice
+  // The browser is for reading, not sending: it drops the composer for the rows
+  // (a whole screen of conversation is the point of opening it) and says so on
+  // the notice line, which is where the app's one line of transient guidance
+  // already lives.
+  const browserNotice = '↑↓ scroll · → open · ← close · ctrl+r expand all · esc back to the chat'
+  // With nothing else to say, the chat names the screens it can open — neither
+  // is visible from here, so without this they are undiscoverable. Only where
+  // the keyboard actually reaches us: a headless `--no-input` follow (piped into
+  // a script or an agent) would otherwise advertise keys nothing can press.
+  const restingHint = isRawModeSupported
+    ? `ctrl+r transcript${props.onFocusNav ? ' · ctrl+j sessions' : ''}`
+    : null
+  const shownNotice = windowed
+    ? browserNotice
+    : ctrlCArmed
+      ? CTRL_C_QUIT_HINT
+      : (notice ?? restingHint)
   const { viewBudget, padRows, composerRows, noticeRows } = useMemo(() => {
     // Both wrapping parts of the footer are measured as the rows they will
     // actually OCCUPY, not as the newlines they contain: a notice ("stream
     // error: …") and a typed paragraph both wrap, and counting either as one
     // row means the footer quietly outgrows the space reserved for it.
-    const fixed = (props.hideMetaLine ? 0 : 1) + 1 /* footer margin */
+    const fixed = 1 /* meta line */ + 1 /* footer margin */
     // What the wrapping parts share. Each takes what it needs and yields the
     // rest, in priority order: the chat window always keeps a row, then the
     // composer, and the notice gives up its extra rows first (it truncates —
@@ -759,18 +808,19 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     const wanted = Math.max(COMPOSER_INTERIOR_ROWS, typedRows) + 2
     const composerRows = composerVisible ? Math.max(1, Math.min(wanted, free - 1)) : 0
     const forContent = Math.max(1, free - composerRows)
-    // At least one row of chat: the top padding yields first.
-    const pad = Math.max(0, Math.min(topPad, forContent - 1))
+    // The browser fills the screen it took over, so it keeps a row of top
+    // padding; the chat is content-sized and grows downward, so it has no window
+    // edge to protect and takes none.
+    const pad = windowed ? Math.max(0, Math.min(1, forContent - 1)) : 0
     return { viewBudget: forContent - pad, padRows: pad, composerRows, noticeRows }
   }, [
     rows,
     cols,
     bottomSlack,
-    topPad,
+    windowed,
     composerVisible,
     composer.text,
     shownNotice,
-    props.hideMetaLine,
   ])
 
   // The live tail: the in-progress response and the one activity line under
@@ -989,6 +1039,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     }
     return out
   }, [allRows, visible])
+  navKeysRef.current = navKeys
 
   // The window on screen this frame. A stale anchor (its entry folded away or
   // scrolled off the record log) falls back to following the bottom.
@@ -996,6 +1047,63 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     const anchor = scrollAnchor ? anchorIndex(allRows, scrollAnchor) : null
     return rowViewport(allRows.length, viewBudget, anchor)
   }, [allRows, viewBudget, scrollAnchor])
+
+  // ---- the scrollback split ----
+  // Rows whose content is FINAL go to <Static>: printed once, into the
+  // terminal's own scrollback, never repainted. Everything after them is the
+  // live region, repainted each frame. See settledItemKeys for what "final"
+  // means and why it is decided per message rather than per turn.
+  //
+  // The startup block is final once it has settled (it collapses to its bare
+  // headline then, so the flushed copy is the one that lasts). It sits at the
+  // top of the list, so nothing below it can flush while it is still moving.
+  const settledKeys = useMemo(() => {
+    if (windowed) return new Set<string>()
+    const keys = settledItemKeys(visible, working)
+    if (sandboxSettled) keys.add(SANDBOX_KEY)
+    return keys
+  }, [windowed, visible, working, sandboxSettled])
+  // The rows already handed to <Static>, held APPEND-ONLY in a ref, and the
+  // entries they covered. Both are needed, and neither can be replaced by
+  // re-slicing allRows each frame:
+  //
+  //   * <Static> prints `items.slice(printedCount)` and re-syncs printedCount
+  //     from items.length. So the list may only GROW, and the rows already in it
+  //     may never change. Hand it a shorter list — which withholding the flush
+  //     for the browser does — and it re-prints everything on the way back.
+  //   * The rows on the terminal are FROZEN TEXT, wrapped at the width they were
+  //     printed at. allRows re-wraps on resize, so a re-slice would hand
+  //     <Static> different rows for the same content and print them again. What
+  //     was flushed is history: it is kept verbatim, and a resize re-wraps only
+  //     the live region below. (Claude Code's scrollback has the same artifact —
+  //     printed output does not reflow.)
+  //
+  // So an entry is flushed ONCE, keyed by entryKey, and its rows are kept as they
+  // were built. Seeded with the session break when this chat replaces another
+  // one's, so the rule prints above the first row of history, not after it.
+  const flushedRows = useRef<TranscriptRow[]>(
+    props.scrollbackBreak ? [sessionBreakRow(sessionId, cols)] : [],
+  )
+  const flushedEntries = useRef<Set<string>>(new Set())
+  if (!windowed) {
+    const settledRows = allRows.slice(0, settledRowCount(allRows, settledKeys))
+    const fresh = settledRows.filter((r) => !flushedEntries.current.has(r.entryKey))
+    if (fresh.length > 0) {
+      flushedRows.current = [...flushedRows.current, ...fresh]
+      for (const row of fresh) flushedEntries.current.add(row.entryKey)
+    }
+  }
+  const staticRows = flushedRows.current
+  // The live region: everything not yet flushed, capped to the rows the frame
+  // has for it. Capped from the FRONT (keep the newest) because an over-tall
+  // live frame scrolls ink's render region and smears stale rows up the
+  // terminal — and nothing is lost, since these rows flush as they settle.
+  const liveRows = useMemo(() => {
+    const rest = allRows.filter((r) => !flushedEntries.current.has(r.entryKey))
+    return rest.length > viewBudget ? rest.slice(rest.length - viewBudget) : rest
+    // flushedEntries is a ref mutated above during this same render, so the
+    // filter always sees the boundary this frame just committed to.
+  }, [allRows, viewBudget, staticRows])
 
   // The one row that wears the ▶ marker: the selected block's FIRST row with a
   // gutter glyph, since the marker replaces that glyph in place. Only one row
@@ -1086,18 +1194,26 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           if (m[1] === '64') delta -= WHEEL_ROWS
           else if (m[1] === '65') delta += WHEEL_ROWS
         }
-        if (delta !== 0) scrollByRows(delta)
+        if (delta !== 0 && windowed) scrollByRows(delta)
         return
       }
       // Page keys scroll the window a frame at a time, from the composer or
-      // the transcript alike — the fast way through a long conversation.
+      // the transcript alike — the fast way through a long conversation. In
+      // the scrollback view the terminal's own page keys do this, over the real
+      // scrollback, so the app leaves them alone.
       if (key.pageUp || key.pageDown) {
-        scrollByRows(key.pageUp ? -view.capacity : view.capacity)
+        if (windowed) scrollByRows(key.pageUp ? -view.capacity : view.capacity)
         return
       }
       if (key.escape) {
-        // Modal-first: transcript navigation drops back to the composer, then
-        // esc leaves the pane.
+        // Modal-first, outermost modal first: the browser is a screen of its
+        // own, so esc closes it before anything inside it is considered.
+        if (windowed) {
+          setWindowed(false)
+          return
+        }
+        // Transcript navigation drops back to the composer, then esc leaves
+        // the pane.
         if (navKey !== null) {
           setNavKey(null)
           setScrollAnchor(null)
@@ -1109,21 +1225,22 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         else if (working) submit('/stop')
         return
       }
+      // ctrl+r means "show me everything", and what that takes depends on where
+      // the transcript lives. In a repaintable window it expands every collapsed
+      // body and tool fold in place. In the scrollback view the printed rows
+      // can't be re-folded, so ctrl+r OPENS THE BROWSER — the windowed view of
+      // the whole conversation on the alt screen — where it can. Inside the
+      // browser it goes back to being the expand toggle.
       if (key.ctrl && ch === 'r') {
-        setExpanded((v) => !v)
+        if (windowed) setExpanded((v) => !v)
+        else setWindowed(true)
         return
       }
-      // ctrl+s releases/re-arms the mouse capture: released, the terminal
-      // gets the mouse back for normal select/copy; armed, wheel/trackpad
-      // scrolls the transcript.
-      if (key.ctrl && ch === 's') {
-        const next = !mouseCapture
-        setMouseCapture(next)
-        setNotice(
-          next
-            ? 'wheel scrolling on · ctrl+s to release mouse for links/select'
-            : 'mouse released for links/select · ctrl+s for wheel scrolling',
-        )
+      // ctrl+j opens the session picker. It needs a key of its own now that the
+      // list is a screen rather than a band you can see: esc and ↓ still reach
+      // it, but neither says it is there.
+      if (key.ctrl && ch === 'j' && props.onFocusNav) {
+        props.onFocusNav()
         return
       }
       if (navKey !== null) {
@@ -1205,11 +1322,20 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         }
         return
       }
+      // The browser has no composer and no session nav to hand focus to: with
+      // nothing highlighted yet, ↑/↓ scroll the window a notch (entering the
+      // ↑ walk above once something is selected). esc — handled at the top — is
+      // the only way out.
+      if (windowed) {
+        if (key.upArrow) scrollByRows(-1)
+        else if (key.downArrow) scrollByRows(1)
+        return
+      }
       // Below here are the composer's own keys. Watch-only (no composer):
       // ↑ still enters transcript navigation, ↓ leaves for the session nav;
       // everything else is inert.
       if (!composerVisible) {
-        if (key.upArrow && navKeys.length > 0) {
+        if (key.upArrow && windowed && navKeys.length > 0) {
           setNavKey(navKeys[navKeys.length - 1])
           setScrollAnchor(null)
         } else if (key.downArrow && props.onFocusNav) {
@@ -1230,10 +1356,12 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       }
       if (key.upArrow) {
         // Up inside a multi-line input climbs a line; up on line 1 moves
-        // focus into the transcript, landing on the newest line.
+        // focus into the transcript, landing on the newest line. Not in
+        // the scrollback view: the transcript up there is the terminal's, not
+        // the app's, so there is nothing to put a highlight on.
         const up = cursorLineUp(composer.text, composer.cursor)
         if (up !== null) setComposer((c) => ({ ...c, cursor: up }))
-        else if (navKeys.length > 0) {
+        else if (windowed && navKeys.length > 0) {
           setNavKey(navKeys[navKeys.length - 1])
           setScrollAnchor(null)
         }
@@ -1305,11 +1433,31 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     // the squeeze resolves inside (the overflow-hidden viewport absorbs it).
     <Box
       flexDirection="column"
-      width={hosted ? cols : undefined}
-      height={hosted ? rows : undefined}
-      minHeight={hosted ? undefined : Math.max(0, rows - bottomSlack)}
+      // Scrollback mode does NOT fill the terminal: the frame is only as tall
+      // as the live tail plus the footer, and it grows downward from wherever
+      // the last flushed row left the cursor. A minHeight here would hold the
+      // composer at the bottom of the screen with a screenful of blank canvas
+      // above it, and every flushed row would push that blank block down. The
+      // browser is the opposite: it fills the alt screen it took over.
+      minHeight={windowed ? Math.max(0, rows - bottomSlack) : undefined}
       backgroundColor={theme.canvas}
     >
+      {/* The settled transcript, printed once into the terminal's own
+          scrollback and never repainted — which is what makes the wheel, the
+          trackpad, and select/copy work natively above the live frame. Empty
+          (and inert) in a hosted pane, which can't own the scrollback, and
+          while the browser holds the alt screen. */}
+      {!windowed && (
+        <Static items={staticRows}>
+          {(row) => (
+            // Flushed rows are frozen: no selection marker, no live tick, no
+            // pulse — every one of those repaints, and a printed row can't
+            // repaint. `seconds` is 0 and `pulseOn` true so a row that WAS
+            // live prints in its settled state.
+            <RowLine key={row.id} row={row} cols={cols} selected={false} marker={false} seconds={0} pulseOn />
+          )}
+        </Static>
+      )}
       {/* Top padding — see the termRows comment: absorbs terminal row-
           accounting quirks and the post-exit sign-off so the first content
           line never scrolls out of the window. */}
@@ -1328,17 +1476,20 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           rowViewport already emits exactly the rows that fit. */}
       <Box
         flexDirection="column"
-        flexGrow={1}
+        // Scrollback mode sizes the live region to its content: it must not
+        // claim the terminal's leftover height, or the composer would sit at
+        // the bottom of the screen with blank canvas above it.
+        flexGrow={windowed ? 1 : 0}
         flexShrink={1}
         overflow="hidden"
         justifyContent="flex-end"
       >
-        {view.showAbove && (
+        {windowed && view.showAbove && (
           <Text color={theme.muted} wrap="truncate">
             {`   ↑ ${view.hiddenAbove} more line${view.hiddenAbove === 1 ? '' : 's'} above`}
           </Text>
         )}
-        {allRows.slice(view.start, view.end).map((row) => (
+        {(windowed ? allRows.slice(view.start, view.end) : liveRows).map((row) => (
           <RowLine
             key={row.id}
             row={row}
@@ -1355,7 +1506,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             pulseOn={row.pulse ? pulseOn : true}
           />
         ))}
-        {view.showBelow && (
+        {windowed && view.showBelow && (
           <Text color={theme.muted} wrap="truncate">
             {`   ↓ ${view.hiddenBelow} more line${view.hiddenBelow === 1 ? '' : 's'} below`}
           </Text>
@@ -1440,7 +1591,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             </Text>
           </Box>
         )}
-        {!props.hideMetaLine && <Text color={theme.muted}>{metaLine}</Text>}
+        <Text color={theme.muted}>{metaLine}</Text>
       </Box>
     </Box>
   )
@@ -1477,6 +1628,23 @@ export function cursorLineDown(text: string, cursor: number): number | null {
   return nextStart + Math.min(col, nextLen)
 }
 
+// The rule printed into scrollback above a session that replaced another in the
+// same terminal: two conversations otherwise run together, and the second's
+// opening line reads as the first's next turn. Names the session it opens, since
+// that is the thing the reader needs to know about the text below it.
+function sessionBreakRow(sessionId: string, cols: number): TranscriptRow {
+  const label = ` ${sessionId} `
+  const rule = '─'.repeat(Math.max(0, contentWidth(cols) - visibleWidth(label)))
+  return {
+    id: `break:${sessionId}`,
+    entryKey: `break:${sessionId}`,
+    spans: [
+      { text: label, dim: true },
+      { text: rule, dim: true },
+    ],
+  }
+}
+
 // One or more SGR mouse reports (\x1b[<button;x;yM), and nothing else — ink's
 // key parser doesn't recognise them and would pass them through as text (the
 // leading escape of the first report is already stripped by ink).
@@ -1502,7 +1670,7 @@ function sandboxRows(o: {
   cols: number
 }): TranscriptRow[] {
   const { sandbox, infraActivity, settled, cols } = o
-  const key = 'sandbox'
+  const key = SANDBOX_KEY
   const rows: TranscriptRow[] = []
   const width = contentWidth(cols)
   // Every row of the block reserves the standard gutter, so the ▶ marker lands

@@ -199,7 +199,6 @@ describe('sessionSource', () => {
 
 describe('sessionBarQuery', () => {
   const bar = {
-    rows: 5,
     days: 7,
     repo: 'cwd' as const,
     statuses: 'all' as const,
@@ -250,8 +249,8 @@ describe('sessionBarQuery', () => {
     ).toBeUndefined()
   })
 
-  it('fetches at least as many rows as the bar displays', () => {
-    expect(sessionBarQuery({ ...bar, rows: 200 }, context).limit).toBe(200)
+  it('fetches a page deep enough to band and scroll', () => {
+    expect(sessionBarQuery(bar, context).limit).toBe(SESSION_BAR_FETCH)
   })
 })
 
