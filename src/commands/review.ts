@@ -1,12 +1,19 @@
 import { type Command } from 'commander'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname } from 'node:path'
-import { ApiClient, ApiError } from '../lib/api'
+import { api, APIError } from '../lib/api'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { repoFromCwd } from '../lib/laptop'
 import { formatTs, printJson, printTable, relativeAge, runAction, usdFromMillicents } from '../lib/output'
 import { watchSessionStreaming } from './session'
-import type { CreateReviewRequest, Finding, Review, ReviewScope } from '../lib/types'
+import type { Ellipsis } from '@ellipsis-dev/sdk'
+import type {
+  CodeReviewRunStatus,
+  CreateReviewRequest,
+  Finding,
+  Review,
+  ReviewScope,
+} from '../lib/types'
 
 // `agent review`: ask for a code review now, instead of waiting for a push to
 // trigger one.
@@ -58,9 +65,9 @@ export function registerReview(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(async (pullRequest: string, opts: StartOptions) => {
       await runAction(async () => {
-        const api = new ApiClient()
+        const client = api()
         const request = buildCreateRequest(pullRequest, opts)
-        const started = await api.createReview(request)
+        const started = await client.reviews.create(request)
 
         // Nothing new since the last review of this PR. Not an error — you
         // asked, and the honest answer is "already covered".
@@ -93,8 +100,8 @@ export function registerReview(program: Command): void {
               `(${started.id})`,
           )
         }
-        await watchSessionStreaming(api, started.id, FALLBACK_POLL_INTERVAL_SECONDS, false)
-        const finished = await api.getReview(started.id)
+        await watchSessionStreaming(client, started.id, FALLBACK_POLL_INTERVAL_SECONDS, false)
+        const finished = await client.reviews.get(started.id)
         if (opts.json) printJson(finished)
         else renderReview(finished)
       })
@@ -109,7 +116,7 @@ export function registerReview(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(async (reviewId: string, opts: { json?: boolean }) => {
       await runAction(async () => {
-        const found = await getReviewOrExplain(new ApiClient(), reviewId)
+        const found = await getReviewOrExplain(api(), reviewId)
         if (opts.json) printJson(found)
         else renderReview(found)
       })
@@ -133,13 +140,15 @@ export function registerReview(program: Command): void {
         if (opts.pr !== undefined && repo === undefined) {
           throw new Error('--pr needs --repo <owner/name> to say which repository')
         }
-        const reviews = await new ApiClient().listReviews({
-          owner: repo?.owner,
-          repo: repo?.name,
-          pull_request_number: opts.pr,
-          status: opts.status,
-          limit: opts.limit,
-        })
+        const reviews = (
+          await api().reviews.list({
+            owner: repo?.owner,
+            repo: repo?.name,
+            pull_request_number: opts.pr,
+            status: opts.status,
+            limit: opts.limit,
+          })
+        ).items
         if (opts.json) {
           printJson(reviews)
           return
@@ -281,7 +290,7 @@ interface StartOptions {
 interface ListOptions {
   repo?: string
   pr?: number
-  status?: string
+  status?: CodeReviewRunStatus
   limit?: number
   json?: boolean
 }
@@ -312,14 +321,14 @@ function buildScope(opts: StartOptions): ReviewScope {
   }
 }
 
-async function getReviewOrExplain(api: ApiClient, reviewId: string): Promise<Review> {
+async function getReviewOrExplain(client: Ellipsis, reviewId: string): Promise<Review> {
   try {
-    return await api.getReview(reviewId)
+    return await client.reviews.get(reviewId)
   } catch (err) {
     // The likeliest mistake is handing this a stage session id (or any other
     // session id) instead of the review's own — indistinguishable from an
     // unknown id server-side, on purpose.
-    if (err instanceof ApiError && err.status === 404) {
+    if (err instanceof APIError && err.status === 404) {
       throw new Error(`no review with id ${reviewId} (a review id looks like crun_…)`)
     }
     throw err

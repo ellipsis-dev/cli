@@ -1,5 +1,5 @@
 import type { Command } from 'commander'
-import { ApiClient } from '../lib/api'
+import { api } from '../lib/api'
 import {
   activeHostName,
   clearActiveHostToken,
@@ -15,9 +15,8 @@ export function registerLogin(program: Command): void {
     .description('Authenticate against the active host via the device-code flow')
     .option('--no-browser', 'do not auto-open the verification URL (for headless or SSH)')
     .action(async (opts: { browser?: boolean }) => {
-      const api = new ApiClient()
       try {
-        const { token } = await deviceLogin(api, {
+        const { token } = await deviceLogin(api(), {
           onPrompt: (start) => {
             // Build the approval URL from the app base of the host the CLI is
             // pointed at, NOT the server's verification_uri_complete — the

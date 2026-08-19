@@ -22,7 +22,8 @@ export function resolveWsBase(apiBase?: string): string {
 }
 
 // The bearer door's stream URL: /sessions/{id}/stream plus the SDK's
-// handshake query (`protocol=2`, `after_seq` when resuming).
+// handshake query (`protocol`, `after_seq` when resuming) — the version comes
+// from the SDK, so a protocol bump ships with an SDK bump.
 export function buildStreamUrl(wsBase: string, sessionId: string, query: string): string {
   return `${wsBase}/sessions/${encodeURIComponent(sessionId)}/stream?${query}`
 }

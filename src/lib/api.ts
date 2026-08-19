@@ -1,494 +1,62 @@
+// The CLI's entry point to @ellipsis-dev/sdk: the SDK owns the whole REST
+// surface (every /v1 operation, its request/response types, retries, and error
+// mapping), generated from the server's OpenAPI spec. This module owns only
+// what is CLI-specific — resolving the credential and base URL through the
+// config precedence chain, stamping the CLI's user agent on every request, and
+// turning an SDK error into the sentence a terminal user should read.
+
+import { Ellipsis, APIError } from '@ellipsis-dev/sdk'
 import { resolveApiBase, resolveToken } from './config'
 import { USER_AGENT } from './constants'
-import type {
-  AgentDefaultView,
-  AgentSession,
-  AgentTemplate,
-  AnalyticsMetricsQuery,
-  AnalyticsPullRequestsQuery,
-  AnalyticsReviewsQuery,
-  BudgetSummary,
-  CliAuthPoll,
-  CliAuthStart,
-  CreateAgentConfigRequest,
-  CreateFileRequest,
-  CreateFileResponse,
-  CreateReviewRequest,
-  CreatedAgentConfig,
-  FileView,
-  GetFileResponse,
-  GetAnalyticsMetricsResponse,
-  GetAnalyticsPullRequestsResponse,
-  GetAnalyticsReviewsResponse,
-  GetIntegrationsResponse,
-  GetSandboxVariablesResponse,
-  GetSessionIdeResponse,
-  GetSessionPortResponse,
-  GetSupportedModelsResponse,
-  ListAgentConfigsResponse,
-  ListAgentDefaultsResponse,
-  ListAgentSessionsQuery,
-  ListAgentSessionsResponse,
-  ListAgentTemplatesResponse,
-  ListFilesQuery,
-  ListFilesResponse,
-  ListGithubMembersResponse,
-  ListGithubRepositoriesResponse,
-  ListLinearTeamsResponse,
-  ListReviewsQuery,
-  ListReviewsResponse,
-  ListSentryOrganizationsResponse,
-  ListSessionRecordsResponse,
-  ListSessionTurnsResponse,
-  ListSlackChannelsResponse,
-  ListSlackMembersResponse,
-  PutAgentDefaultRequest,
-  ReplayAgentSessionRequest,
-  Review,
-  SendSessionMessageRequest,
-  SandboxVariableInput,
-  SandboxVariableSummary,
-  SearchSessionsQuery,
-  SearchSessionsResponse,
-  SessionMessage,
-  SessionRecord,
-  SyncAgentSessionRequest,
-  SyncAgentSessionResponse,
-  SavedAgentConfig,
-  StartAgentSessionRequest,
-  SupportedModel,
-  UsageDashboard,
-  WhoAmI,
-  GetSessionLogResponse,
-} from './types'
 
-// Thin REST client over the public API. The session-stream surface
-// types come from @ellipsis-dev/sdk (generated from the backend's schema, via
-// lib/types re-exports); the rest of the typed surface remains a hand-rolled
-// mirror of ellipsis/src/public_api/routers/v1/v1_router.py until the SDK's
-// OpenAPI surface widens beyond the protocol endpoints.
+export { APIError }
 
-export class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    readonly method: string,
-    readonly path: string,
-    readonly detail: string,
-    // Per-request id the server stamps on every response; quote it to us so a
-    // failure maps to an exact log line. Absent only for pre-request failures.
-    readonly requestId?: string,
-  ) {
-    super(
-      `${method} ${path} failed: ${status} ${detail}` +
-        (requestId ? ` (request id: ${requestId})` : ''),
-    )
-    this.name = 'ApiError'
-  }
+// The SDK's Transport takes no custom headers, so the user agent rides in on an
+// injected fetch — every CLI request stays attributable server-side.
+function fetchWithUserAgent(
+  input: string | URL | Request,
+  init?: RequestInit,
+): Promise<Response> {
+  return globalThis.fetch(input, {
+    ...init,
+    headers: { ...(init?.headers as Record<string, string>), 'user-agent': USER_AGENT },
+  })
 }
 
-export class ApiClient {
-  private readonly base: string
-  private readonly token?: string
+// Both args are optional overrides; when omitted, each is resolved through the
+// precedence chain (explicit → env → config → default) in config.ts. The token
+// may legitimately be absent: the device-code auth routes are unauthenticated,
+// and the server answers 401 for anything else, which reads as "run `agent
+// login`" via friendlyErrorMessage.
+export function api(base?: string, token?: string): Ellipsis {
+  return new Ellipsis({
+    apiKey: resolveToken(token) ?? '',
+    baseUrl: resolveApiBase(base),
+    fetch: fetchWithUserAgent,
+  })
+}
 
-  // Both args are optional overrides; when omitted, each is resolved through
-  // the precedence chain (explicit → env → config → default) in config.ts.
-  constructor(base?: string, token?: string) {
-    this.base = resolveApiBase(base)
-    this.token = resolveToken(token)
+// The server's own sentence for a failed call. The SDK's APIError.message is
+// prefixed with the status and code for library consumers; a terminal user wants
+// the sentence alone (a 429's remedy reads badly behind "429 error:"), so read it
+// back off the parsed error body and keep the prefixed form as the fallback.
+export function errorDetail(err: unknown): string {
+  if (!(err instanceof APIError)) return (err as Error).message
+  const body = err.body
+  if (body !== null && typeof body === 'object') {
+    const envelope = (body as { error?: { message?: unknown } }).error
+    if (envelope && typeof envelope.message === 'string') return envelope.message
+    const detail = (body as { detail?: unknown }).detail
+    if (typeof detail === 'string') return detail
   }
+  return err.message
+}
 
-  async request<T>(
-    method: string,
-    path: string,
-    body?: unknown,
-    query?: Record<string, unknown>,
-  ): Promise<T> {
-    const url = this.base + path + buildQuery(query)
-    const res = await fetch(url, {
-      method,
-      headers: {
-        'content-type': 'application/json',
-        'user-agent': USER_AGENT,
-        ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    })
-    if (!res.ok) {
-      const { detail, requestId } = await parseErrorResponse(res)
-      throw new ApiError(res.status, method, path, detail, requestId)
-    }
-    // Some endpoints (DELETEs, acks) return empty bodies; tolerate that.
-    const text = await res.text()
-    return (text ? JSON.parse(text) : undefined) as T
-  }
-
-  // ------------------------------- identity -------------------------------
-
-  whoami(): Promise<WhoAmI> {
-    return this.request('GET', '/me')
-  }
-
-  // ----------------------------- usage / budget ---------------------------
-
-  getBudget(): Promise<BudgetSummary> {
-    return this.request('GET', '/budget')
-  }
-
-  getUsage(): Promise<UsageDashboard> {
-    return this.request('GET', '/usage')
-  }
-
-  // ------------------------------- analytics ------------------------------
-  // GitHub PR + review analytics — the same aggregation behind the app's
-  // /analytics dashboard, scoped to the token's customer. Window: pass
-  // start/end or days (server default: the last 30 days).
-
-  getAnalyticsMetrics(
-    query?: AnalyticsMetricsQuery,
-  ): Promise<GetAnalyticsMetricsResponse> {
-    return this.request(
-      'GET',
-      '/analytics/metrics',
-      undefined,
-      query as Record<string, unknown> | undefined,
-    )
-  }
-
-  getAnalyticsPullRequests(
-    query?: AnalyticsPullRequestsQuery,
-  ): Promise<GetAnalyticsPullRequestsResponse> {
-    return this.request(
-      'GET',
-      '/analytics/pull-requests',
-      undefined,
-      query as Record<string, unknown> | undefined,
-    )
-  }
-
-  getAnalyticsReviews(
-    query?: AnalyticsReviewsQuery,
-  ): Promise<GetAnalyticsReviewsResponse> {
-    return this.request(
-      'GET',
-      '/analytics/reviews',
-      undefined,
-      query as Record<string, unknown> | undefined,
-    )
-  }
-
-  // ---------------------------- agent sessions -----------------------------
-
-  startAgentSession(req: StartAgentSessionRequest): Promise<AgentSession> {
-    return this.request('POST', '/sessions', req)
-  }
-
-  async listAgentSessions(query?: ListAgentSessionsQuery): Promise<AgentSession[]> {
-    const res = await this.request<ListAgentSessionsResponse>(
-      'GET',
-      '/sessions',
-      undefined,
-      query as Record<string, unknown> | undefined,
-    )
-    return res.sessions
-  }
-
-  getAgentSession(sessionId: string): Promise<AgentSession> {
-    return this.request('GET', `/sessions/${encodeURIComponent(sessionId)}`)
-  }
-
-  // Session-grouped search over step text, recap text, created PRs, and
-  // recap-embedding similarity. Each result says which arms matched.
-  searchSessions(query: SearchSessionsQuery): Promise<SearchSessionsResponse> {
-    return this.request(
-      'GET',
-      '/sessions/search',
-      undefined,
-      query as unknown as Record<string, unknown>,
-    )
-  }
-
-  // The session's full stored transcript as native session_records (transcript
-  // + lifecycle), ordered by feed_seq.
-  async getAgentSessionRecords(sessionId: string): Promise<SessionRecord[]> {
-    const res = await this.getAgentSessionRecordsPage(sessionId)
-    // The OpenAPI response type marks defaulted fields optional; on the wire
-    // the server always serializes every field (the frames-schema flavor).
-    return res.records as SessionRecord[]
-  }
-
-  // The full records response (records + the open inbox slice +
-  // has_more/earliest_feed_seq), optionally resuming past a feed_seq cursor
-  // (protocol §4.3) — what the connect UI's REST poll fallback feeds its
-  // transcript store from.
-  getAgentSessionRecordsPage(
-    sessionId: string,
-    options: { afterSeq?: number } = {},
-  ): Promise<ListSessionRecordsResponse> {
-    const query =
-      options.afterSeq != null && options.afterSeq > 0 ? `?after_seq=${options.afterSeq}` : ''
-    return this.request('GET', `/sessions/${encodeURIComponent(sessionId)}/records${query}`)
-  }
-
-  // The session's conversation structure — turns and inbox messages, each
-  // message carrying its pending/delivered status (the server-side "queued"
-  // truth). Empty lists for single-shot sessions.
-  getAgentSessionTurns(sessionId: string): Promise<ListSessionTurnsResponse> {
-    return this.request('GET', `/sessions/${encodeURIComponent(sessionId)}/turns`)
-  }
-
-  // The session-log manifest: the complete history archived into seq-ranged
-  // .jsonl.gz segments, each with a short-lived presigned download URL. Fetch
-  // the URLs immediately; the JSON API never carries the bytes.
-  getSessionLog(sessionId: string): Promise<GetSessionLogResponse> {
-    return this.request('GET', `/sessions/${encodeURIComponent(sessionId)}/log`)
-  }
-
-  syncAgentSession(req: SyncAgentSessionRequest): Promise<SyncAgentSessionResponse> {
-    return this.request('POST', '/sessions/sync', req)
-  }
-
-  replayAgentSession(sessionId: string, req: ReplayAgentSessionRequest): Promise<AgentSession> {
-    return this.request(
-      'POST',
-      `/sessions/${encodeURIComponent(sessionId)}/replay`,
-      req,
-    )
-  }
-
-  stopAgentSession(sessionId: string): Promise<AgentSession> {
-    return this.request('POST', `/sessions/${encodeURIComponent(sessionId)}/stop`)
-  }
-
-  // Post a human message into a durable (keyed) session's conversation. The
-  // inbox delivers it to the agent's Claude Code stdin at the next turn
-  // boundary, or wakes the session when idle. 409 for single-shot / closed
-  // sessions (no inbox loop to attend it).
-  // Returns the CREATED SessionMessage (protocol v2 §4.2) so callers key
-  // their optimistic chip on its id. `idempotencyKey` makes retries safe:
-  // the server dedupes per (session, key) and returns the original message.
-  sendSessionMessage(
-    sessionId: string,
-    message: string,
-    idempotencyKey?: string,
-  ): Promise<SessionMessage> {
-    return this.request('POST', `/sessions/${encodeURIComponent(sessionId)}/messages`, {
-      message,
-      idempotency_key: idempotencyKey ?? null,
-    } satisfies SendSessionMessageRequest)
-  }
-
-  // The session's browser-IDE link: the membership-gated dashboard page for
-  // the live sandbox (app.ellipsis.dev/sandboxes/{id}) — the page starts
-  // code-server and does the sandbox-proxy handoff itself, so the URL carries
-  // no credential and is safe to share with any org member. 409 when the
-  // sandbox isn't running (send the session a message to wake it first).
-  getSessionIde(sessionId: string): Promise<GetSessionIdeResponse> {
-    return this.request('GET', `/sessions/${encodeURIComponent(sessionId)}/ide`)
-  }
-
-  // A preview port's link (a dev server running in the sandbox): the same
-  // dashboard page, deep-linked to the port. Same gate as the IDE URL.
-  getSessionPort(sessionId: string, port: number): Promise<GetSessionPortResponse> {
-    return this.request(
-      'GET',
-      `/sessions/${encodeURIComponent(sessionId)}/ports/${port}`,
-    )
-  }
-
-  // --------------------------------- files ---------------------------------
-  // Agent file storage: persist a file to the platform and get back an
-  // org-membership-gated link. v1 is PNG-only with a 10 MiB cap, enforced
-  // server-side.
-
-  uploadFile(req: CreateFileRequest): Promise<CreateFileResponse> {
-    return this.request('POST', '/files', req)
-  }
-
-  // Newest-first metadata for the credential's customer's files. Metadata
-  // only — presigned download URLs are minted per explicit getFile.
-  async listFiles(query?: ListFilesQuery): Promise<FileView[]> {
-    const res = await this.request<ListFilesResponse>(
-      'GET',
-      '/files',
-      undefined,
-      query as Record<string, unknown> | undefined,
-    )
-    return res.files
-  }
-
-  // Metadata + the gated URL + a short-lived presigned `download_url`. To pull
-  // the bytes locally, GET download_url immediately (it expires in ~60s; if it
-  // lapses, just call this again for a fresh one).
-  getFile(fileId: string): Promise<GetFileResponse> {
-    return this.request('GET', `/files/${encodeURIComponent(fileId)}`)
-  }
-
-  // Delete a file: it disappears from every read path and its gated link
-  // stops resolving (the server soft-deletes; storage accounting keeps
-  // charging for everything ever written). The
-  // server returns 204 with an empty body on success; 404 when the id is
-  // unknown to the credential's customer, 403 when the token isn't allowed to
-  // delete (e.g. a sandbox token).
-  deleteFile(fileId: string): Promise<void> {
-    return this.request('DELETE', `/files/${encodeURIComponent(fileId)}`)
-  }
-
-  // -------------------------------- reviews --------------------------------
-  // A review IS a code_review agent session over one commit range, and its id
-  // IS the session id — so the session methods above (get, records, stream,
-  // stop) all work on a review id unchanged, and only the review-shaped parts
-  // (scope, findings, posting outcome) need endpoints of their own.
-
-  createReview(request: CreateReviewRequest): Promise<Review> {
-    return this.request('POST', '/reviews', request)
-  }
-
-  // The findings only exist once the review finalizes (they're collected from
-  // the sandbox at teardown), so a running review returns findings: [] — hence
-  // the stream-then-re-GET two-step the command uses.
-  getReview(reviewId: string): Promise<Review> {
-    return this.request('GET', `/reviews/${encodeURIComponent(reviewId)}`)
-  }
-
-  // Newest first, findings omitted (counters only). Includes webhook-triggered
-  // reviews, so this is a PR's whole review history.
-  async listReviews(query: ListReviewsQuery = {}): Promise<Review[]> {
-    const res = await this.request<ListReviewsResponse>(
-      'GET',
-      '/reviews',
-      undefined,
-      query,
-    )
-    return res.reviews
-  }
-
-  // ----------------------------- agent configs ----------------------------
-
-  async listAgentConfigs(): Promise<SavedAgentConfig[]> {
-    const res = await this.request<ListAgentConfigsResponse>('GET', '/agents/configs')
-    return res.configs
-  }
-
-  // Opens a pull request that adds the config's YAML to the repo's agents/
-  // directory; the agent goes live once it merges and syncs.
-  createAgentConfig(req: CreateAgentConfigRequest): Promise<CreatedAgentConfig> {
-    return this.request('POST', '/agents/configs', req)
-  }
-
-  getAgentConfig(configId: string): Promise<SavedAgentConfig> {
-    return this.request('GET', `/agents/configs/${encodeURIComponent(configId)}`)
-  }
-
-  // ------------------------------ defaults --------------------------------
-  // The default-config ladder (repo default -> account default -> bare),
-  // addressed by rung: `repository` is "owner/name" for a repo default and
-  // null/omitted for the account default — never a row id. Mutations are
-  // refused for sandbox tokens (403).
-
-  async listAgentDefaults(): Promise<AgentDefaultView[]> {
-    const res = await this.request<ListAgentDefaultsResponse>('GET', '/agents/defaults')
-    return res.defaults
-  }
-
-  putAgentDefault(req: PutAgentDefaultRequest): Promise<AgentDefaultView> {
-    return this.request('PUT', '/agents/defaults', req)
-  }
-
-  // Clears a rung: the account default when `repository` is omitted, that
-  // repo's default otherwise. 404 when the rung isn't set.
-  deleteAgentDefault(repository?: string): Promise<void> {
-    return this.request('DELETE', '/agents/defaults', undefined, { repository })
-  }
-
-  // ------------------------------- variables --------------------------------
-  // All three return the full current list (the backend echoes it after every
-  // mutation), so callers can render the resulting state.
-
-  async listSandboxVariables(): Promise<SandboxVariableSummary[]> {
-    const res = await this.request<GetSandboxVariablesResponse>('GET', '/secrets')
-    return res.variables
-  }
-
-  async putSandboxVariables(
-    variables: SandboxVariableInput[],
-  ): Promise<SandboxVariableSummary[]> {
-    const res = await this.request<GetSandboxVariablesResponse>('PUT', '/secrets', {
-      variables,
-    })
-    return res.variables
-  }
-
-  async deleteSandboxVariable(name: string): Promise<SandboxVariableSummary[]> {
-    const res = await this.request<GetSandboxVariablesResponse>(
-      'DELETE',
-      `/secrets/${encodeURIComponent(name)}`,
-    )
-    return res.variables
-  }
-
-  // ------------------------------- models ---------------------------------
-
-  // The models a customer may select for their agent (GET /models) — the
-  // registry behind the dashboard's rate table, most expensive first.
-  async listSupportedModels(): Promise<SupportedModel[]> {
-    const res = await this.request<GetSupportedModelsResponse>('GET', '/models')
-    return res.models
-  }
-
-  // ---------------------------- agent templates ---------------------------
-
-  async listAgentTemplates(): Promise<AgentTemplate[]> {
-    const res = await this.request<ListAgentTemplatesResponse>('GET', '/agents/templates')
-    return res.templates
-  }
-
-  getAgentTemplate(slug: string): Promise<AgentTemplate> {
-    return this.request('GET', `/agents/templates/${encodeURIComponent(slug)}`)
-  }
-
-  // ------------------------ integration discovery -------------------------
-  // Read-only views of what's connected for the account. Slack and Linear
-  // listings 404 when that integration isn't connected; GitHub always works
-  // (an Ellipsis account is a GitHub account) and Sentry returns an empty list.
-
-  getIntegrations(): Promise<GetIntegrationsResponse> {
-    return this.request('GET', '/integrations')
-  }
-
-  listGithubRepositories(): Promise<ListGithubRepositoriesResponse> {
-    return this.request('GET', '/integrations/github/repos')
-  }
-
-  listGithubMembers(): Promise<ListGithubMembersResponse> {
-    return this.request('GET', '/integrations/github/members')
-  }
-
-  listSlackChannels(): Promise<ListSlackChannelsResponse> {
-    return this.request('GET', '/integrations/slack/channels')
-  }
-
-  listSlackMembers(): Promise<ListSlackMembersResponse> {
-    return this.request('GET', '/integrations/slack/members')
-  }
-
-  listLinearTeams(): Promise<ListLinearTeamsResponse> {
-    return this.request('GET', '/integrations/linear/teams')
-  }
-
-  listSentryOrganizations(): Promise<ListSentryOrganizationsResponse> {
-    return this.request('GET', '/integrations/sentry/organizations')
-  }
-
-  // --------------------------- device-code auth ---------------------------
-  // Unauthenticated: the CLI has no credential yet — that's what it's obtaining.
-
-  startCliAuth(): Promise<CliAuthStart> {
-    return this.request('POST', '/auth/cli/start')
-  }
-
-  pollCliAuth(deviceCode: string): Promise<CliAuthPoll> {
-    return this.request('POST', '/auth/cli/poll', { device_code: deviceCode })
-  }
+// The full one-line account of a failure: the status, the server's message, and
+// the request id it stamped, so a user can quote an exact log line to us.
+export function describeApiError(err: APIError): string {
+  const requestId = err.requestId ? ` (request id: ${err.requestId})` : ''
+  return `${err.status} ${errorDetail(err)}${requestId}`
 }
 
 // Await a provider listing, mapping its 404 (Slack/Linear not connected for
@@ -498,60 +66,11 @@ export async function requireConnected<T>(provider: string, call: Promise<T>): P
   try {
     return await call
   } catch (err) {
-    if (err instanceof ApiError && err.status === 404) {
+    if (err instanceof APIError && err.status === 404) {
       throw new Error(
         `${provider} is not connected. Connect it in the Ellipsis dashboard, then retry.`,
       )
     }
     throw err
-  }
-}
-
-export function buildQuery(query?: Record<string, unknown>): string {
-  if (!query) return ''
-  const params = new URLSearchParams()
-  for (const [key, value] of Object.entries(query)) {
-    if (value === undefined || value === null) continue
-    // Repeat the key for arrays (FastAPI's `Query()` list convention).
-    if (Array.isArray(value)) {
-      for (const item of value) params.append(key, String(item))
-    } else {
-      params.append(key, String(value))
-    }
-  }
-  const qs = params.toString()
-  return qs ? `?${qs}` : ''
-}
-
-// Pull the server's message and request id off a non-2xx response. The message
-// keeps `agent` error output actionable instead of bare codes; the id comes from
-// the `X-Request-ID` header (set on every API response) and falls back to the
-// body, so an error carries something we can grep our logs for.
-//
-// The public API answers with `{"error": {code, message, request_id}}`. FastAPI's
-// own validation and auth rejections still use `{"detail": ...}`, so both shapes
-// are read: an unrecognized body would otherwise degrade to a bare status line.
-export async function parseErrorResponse(
-  res: Response,
-): Promise<{ detail: string; requestId?: string }> {
-  const headerRequestId = res.headers.get('x-request-id') ?? undefined
-  try {
-    const body = (await res.json()) as {
-      error?: { code?: unknown; message?: unknown; request_id?: unknown }
-      detail?: unknown
-      request_id?: unknown
-    }
-    const bodyRequestId = body.error?.request_id ?? body.request_id
-    const requestId =
-      headerRequestId ?? (typeof bodyRequestId === 'string' ? bodyRequestId : undefined)
-    if (typeof body.error?.message === 'string') {
-      return { detail: body.error.message, requestId }
-    }
-    if (typeof body.detail === 'string') return { detail: body.detail, requestId }
-    if (body.detail) return { detail: JSON.stringify(body.detail), requestId }
-    return { detail: res.statusText, requestId }
-  } catch {
-    // not JSON
-    return { detail: res.statusText, requestId: headerRequestId }
   }
 }

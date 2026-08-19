@@ -1,5 +1,5 @@
 import { sessionStatusWord } from '@ellipsis-dev/sdk/stream'
-import type { AgentSessionWire } from '@ellipsis-dev/sdk'
+import type { Session as FrameSession } from '@ellipsis-dev/sdk'
 import { theme } from './theme'
 import type {
   AgentSession,
@@ -28,44 +28,24 @@ export const SELECTION_GLYPH = '▶'
 // to read well. A session that came from a surface (a Slack/GitHub/Linear
 // mention) is steered THERE, not here, because that surface is where the
 // agent's answers post.
-//
-// Pre-`prompting` servers (older deployments) omit the field: fall back to the
-// local keyed/closed read those binaries already shipped with.
 export function connectability(session: AgentSession): {
   canSend: boolean
   reason?: string
 } {
-  const prompting = session.prompting
-  if (prompting) {
-    if (prompting.enabled) return { canSend: true }
-    const detail = prompting.detail?.trim()
-    return {
-      canSend: false,
-      reason: detail
-        ? `${detail} Opening watch-only.`
-        : 'this session does not accept messages — opening watch-only',
-    }
+  if (session.prompting.enabled) return { canSend: true }
+  const detail = session.prompting.detail?.trim()
+  return {
+    canSend: false,
+    reason: detail
+      ? `${detail} Opening watch-only.`
+      : 'this session does not accept messages — opening watch-only',
   }
-  if (!session.session_key) {
-    return {
-      canSend: false,
-      reason: 'this session is single-shot (no durable conversation) — opening watch-only',
-    }
-  }
-  if (session.session_state === 'closed') {
-    return {
-      canSend: false,
-      reason:
-        'this conversation is closed (a new event on its surface starts a successor) — opening watch-only',
-    }
-  }
-  return { canSend: true }
 }
 
 // The one-word display status for a session row (the SDK's surface-first
 // projection over the raw status).
 export function rowStatusWord(session: AgentSession): string {
-  return sessionStatusWord(session as unknown as AgentSessionWire)
+  return sessionStatusWord(session as unknown as FrameSession)
 }
 
 // Statuses in which the agent is actively doing something (the sidebar's
@@ -146,16 +126,13 @@ function trimZero(s: string): string {
   return s.replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1')
 }
 
-// The nav row's right-hand metadata: how much work the agent did (turns,
-// tokens, spend) and when it last moved. Turns come from tokens_info.num_turns
-// — the list row's own counter — and spend is the sum of the four millicent
-// cost columns, the same total the chat footer shows. A just-started session
-// drops the empty bits rather than showing "0 turns · 0 · $0.00". No source tag:
-// the nav lists cloud sessions only, so it would read the same on every row.
+// The nav row's right-hand metadata: how much work the agent did (tokens,
+// spend) and when it last moved. Spend is the sum of the four millicent cost
+// columns, the same total the chat footer shows. A just-started session drops
+// the empty bits rather than showing "0 · $0.00". No source tag: the nav lists
+// cloud sessions only, so it would read the same on every row.
 export function rowMeta(session: AgentSession, now: Date = new Date()): string {
   const bits: string[] = []
-  const turns = numberField(session.tokens_info, 'num_turns')
-  if (turns > 0) bits.push(`${turns} ${turns === 1 ? 'turn' : 'turns'}`)
   if (session.tokens_total > 0) bits.push(compactTokens(session.tokens_total))
   const millicents =
     session.cost_tokens + session.cost_sandbox_cpu + session.cost_sandbox_memory + session.cost_fee
@@ -164,23 +141,10 @@ export function rowMeta(session: AgentSession, now: Date = new Date()): string {
   return bits.join(' · ')
 }
 
-// Where the session runs. The list row has no top-level `source` (that's the
-// stream's wire shape); it rides `input.source` instead, with laptop syncs the
-// only non-cloud kind the nav distinguishes.
+// Where the session runs — laptop syncs are the only non-cloud kind the nav
+// distinguishes. Every session-returning route carries `source` top-level.
 export function sessionSource(session: AgentSession): string {
-  if (session.source === 'laptop') return 'laptop'
-  const input = session.input
-  if (input && typeof input === 'object') {
-    const source = (input as Record<string, unknown>).source
-    if (source === 'laptop') return 'laptop'
-  }
-  return 'cloud'
-}
-
-function numberField(container: unknown, key: string): number {
-  if (!container || typeof container !== 'object') return 0
-  const value = (container as Record<string, unknown>)[key]
-  return typeof value === 'number' && isFinite(value) ? value : 0
+  return session.source === 'laptop' ? 'laptop' : 'cloud'
 }
 
 // The sidebar's status bands, top to bottom: live conversations, then parked
@@ -361,7 +325,7 @@ export function applyComposerChoices(
     // re-add a repo the user just unchecked. Dropping it also moves default-
     // config resolution off that repo's rung, which is the honest reading of
     // "not this one".
-    if (req.repository !== undefined && !choices.repos.includes(req.repository)) {
+    if (req.repository != null && !choices.repos.includes(req.repository)) {
       delete req.repository
     }
   }

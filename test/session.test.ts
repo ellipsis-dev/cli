@@ -10,23 +10,32 @@ import {
   readConfigFile,
   watchSession,
 } from '../src/commands/session'
-import type { ApiClient } from '../src/lib/api'
+import type { Ellipsis } from '@ellipsis-dev/sdk'
 import type { AgentSession, AgentSessionStatus, SessionLogSegment } from '../src/lib/types'
 
 function session(status: AgentSessionStatus): AgentSession {
   return {
     id: 'session_1',
-    customer_id: 'c',
     created_at: '2026-06-25T00:00:00+00:00',
     updated_at: '2026-06-25T00:00:00+00:00',
-    status,
+    status: status,
     status_reason: null,
-    agent_config_id: null,
+    config_id: null,
+    source: 'api',
+    harness: 'claude_code',
+    prompting: { enabled: true },
+    resolved_budget_cents: 0,
+    resolved_budget_source: 'system',
     cost_tokens: 0,
     cost_sandbox_cpu: 0,
     cost_sandbox_memory: 0,
     cost_fee: 0,
     tokens_total: 0,
+    tokens_input: 0,
+    tokens_output: 0,
+    tokens_cache_read: 0,
+    tokens_cache_creation: 0,
+    tokens_model: '',
     metadata: {},
   }
 }
@@ -44,12 +53,12 @@ describe('watchSession', () => {
   it('polls until a terminal status, then stops', async () => {
     const get = vi
       .fn()
-      .mockResolvedValueOnce(session('running'))
-      .mockResolvedValueOnce(session('running'))
-      .mockResolvedValueOnce(session('completed'))
-    const api = { getAgentSession: get } as unknown as ApiClient
+      .mockResolvedValueOnce({ session: session('running') })
+      .mockResolvedValueOnce({ session: session('running') })
+      .mockResolvedValueOnce({ session: session('completed') })
+    const client = { sessions: { get } } as unknown as Ellipsis
 
-    const promise = watchSession(api, 'session_1', 1, true)
+    const promise = watchSession(client, 'session_1', 1, true)
     await vi.advanceTimersByTimeAsync(1000) // 1st poll running -> sleep -> 2nd poll
     await vi.advanceTimersByTimeAsync(1000) // -> 3rd poll completed -> return
     await promise
@@ -59,36 +68,36 @@ describe('watchSession', () => {
   })
 
   it('returns immediately when the session is already terminal', async () => {
-    const get = vi.fn().mockResolvedValueOnce(session('error'))
-    const api = { getAgentSession: get } as unknown as ApiClient
+    const get = vi.fn().mockResolvedValueOnce({ session: session('error') })
+    const client = { sessions: { get } } as unknown as Ellipsis
 
-    await watchSession(api, 'session_1', 5, true) // no timer advance needed
+    await watchSession(client, 'session_1', 5, true) // no timer advance needed
     expect(get).toHaveBeenCalledTimes(1)
   })
 
   it('treats stopped/cancelled as terminal', async () => {
     for (const status of ['stopped', 'cancelled'] as AgentSessionStatus[]) {
-      const get = vi.fn().mockResolvedValueOnce(session(status))
-      const api = { getAgentSession: get } as unknown as ApiClient
-      await watchSession(api, 'session_1', 5, true)
+      const get = vi.fn().mockResolvedValueOnce({ session: session(status) })
+      const client = { sessions: { get } } as unknown as Ellipsis
+      await watchSession(client, 'session_1', 5, true)
       expect(get).toHaveBeenCalledTimes(1)
     }
   })
 
   it('sets a failure exit code on a non-completed terminal status (for --wait)', async () => {
     process.exitCode = 0
-    const get = vi.fn().mockResolvedValueOnce(session('error'))
-    const api = { getAgentSession: get } as unknown as ApiClient
-    await watchSession(api, 'session_1', 5, true)
+    const get = vi.fn().mockResolvedValueOnce({ session: session('error') })
+    const client = { sessions: { get } } as unknown as Ellipsis
+    await watchSession(client, 'session_1', 5, true)
     expect(process.exitCode).toBe(1)
     process.exitCode = 0
   })
 
   it('leaves the exit code clean on a completed status', async () => {
     process.exitCode = 0
-    const get = vi.fn().mockResolvedValueOnce(session('completed'))
-    const api = { getAgentSession: get } as unknown as ApiClient
-    await watchSession(api, 'session_1', 5, true)
+    const get = vi.fn().mockResolvedValueOnce({ session: session('completed') })
+    const client = { sessions: { get } } as unknown as Ellipsis
+    await watchSession(client, 'session_1', 5, true)
     expect(process.exitCode).toBe(0)
     process.exitCode = 0
   })
@@ -295,21 +304,23 @@ describe('session start prompt positional', () => {
   async function startedPrompt(argv: string[]): Promise<string | undefined> {
     const { Command } = await import('commander')
     const { registerSession } = await import('../src/commands/session')
-    const { ApiClient } = await import('../src/lib/api')
+    // Read the prompt off the wire: the SDK client is generated, so the body it
+    // POSTs is the only place the CLI's own assembly is observable.
     let seen: string | undefined
-    const spy = vi
-      .spyOn(ApiClient.prototype, 'startAgentSession')
-      .mockImplementation(async (req) => {
-        seen = req.prompt
-        return session('queued')
-      })
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      seen = JSON.parse(init?.body as string).prompt
+      return new Response(JSON.stringify({ session: session('scheduled') }), { status: 201 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const program = new Command()
     program.exitOverride()
     registerSession(program)
     try {
       await program.parseAsync(['node', 'agent', 'session', 'start', ...argv, '--json'])
     } finally {
-      spy.mockRestore()
+      vi.unstubAllGlobals()
+      vi.restoreAllMocks()
     }
     return seen
   }

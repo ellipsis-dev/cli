@@ -1,7 +1,7 @@
 import { type Command } from 'commander'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname } from 'node:path'
-import { ApiClient } from '../lib/api'
+import { api } from '../lib/api'
 import { resolveAppBase } from '../lib/config'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { repoFromCwd } from '../lib/laptop'
@@ -9,6 +9,7 @@ import { formatTs, printJson, printTable, printYaml, runAction } from '../lib/ou
 import { configUrl } from '../lib/urls'
 import { readConfigFile } from './session'
 import type {
+  AgentConfig,
   AgentDefaultView,
   CreateAgentConfigRequest,
   SavedAgentConfig,
@@ -34,7 +35,7 @@ export function registerConfig(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
-        const configs = await new ApiClient().listAgentConfigs()
+        const { configs } = await api().agents.configs.list()
         if (opts.json) {
           printJson(configs)
           return
@@ -64,15 +65,18 @@ export function registerConfig(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(async (configId: string, opts: { json?: boolean }) => {
       await runAction(async () => {
-        const api = new ApiClient()
+        const client = api()
         // --json is the machine-readable mode: emit only the raw config.
         if (opts.json) {
-          printJson(await api.getAgentConfig(configId))
+          printJson((await client.agents.configs.get(configId)).config)
           return
         }
         // Fetch the config and the login (for the link) together. The link goes
         // to stderr so the YAML on stdout stays clean for piping/redirecting.
-        const [c, me] = await Promise.all([api.getAgentConfig(configId), api.whoami()])
+        const [{ config: c }, me] = await Promise.all([
+          client.agents.configs.get(configId),
+          client.me(),
+        ])
         printYaml(c)
         console.error(`\nview: ${configUrl(resolveAppBase(), me.customer_login, configId)}`)
       })
@@ -119,9 +123,9 @@ export function registerConfig(program: Command): void {
             repository: opts.repo,
             path: opts.path,
           }
-          if (opts.file) req.config = readConfigFile(opts.file)
+          if (opts.file) req.config = readConfigFile(opts.file) as AgentConfig
           if (opts.template) req.template_id = opts.template
-          const created = await new ApiClient().createAgentConfig(req)
+          const created = await api().agents.configs.create(req)
           if (opts.json) {
             printJson(created)
             return
@@ -156,7 +160,7 @@ export function registerConfig(program: Command): void {
     // (the same ladder session start resolves server-side).
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
-        const rungs = await new ApiClient().listAgentDefaults()
+        const { defaults: rungs } = await api().agents.defaults.list()
         const repo = repoFromCwd(process.cwd())
         const repoRung = repo
           ? rungs.find((d) => d.repository?.toLowerCase() === repo.toLowerCase())
@@ -197,7 +201,7 @@ export function registerConfig(program: Command): void {
     // merged view, not just this command's own opts.
     .action(async (_opts: { json?: boolean }, cmd: Command) => {
       await runAction(async () => {
-        const rungs = await new ApiClient().listAgentDefaults()
+        const { defaults: rungs } = await api().agents.defaults.list()
         if (cmd.optsWithGlobals().json) {
           printJson(rungs)
           return
@@ -234,7 +238,7 @@ export function registerConfig(program: Command): void {
       async (configId: string, opts: { repo?: string | boolean; json?: boolean }, cmd: Command) => {
         await runAction(async () => {
           const repository = resolveRepoFlag(opts.repo)
-          const set = await new ApiClient().putAgentDefault({
+          const { default: set } = await api().agents.defaults.set({
             config_id: configId,
             ...(repository ? { repository } : {}),
           })
@@ -265,7 +269,7 @@ export function registerConfig(program: Command): void {
     .action(async (opts: { repo?: string | boolean }) => {
       await runAction(async () => {
         const repository = resolveRepoFlag(opts.repo)
-        await new ApiClient().deleteAgentDefault(repository)
+        await api().agents.defaults.delete({ repository })
         console.log(
           `✓ cleared ${repository ? `default for ${repository}` : 'account default'}`,
         )
@@ -309,7 +313,7 @@ export function registerConfig(program: Command): void {
             return
           }
           await runAction(async () => {
-            const created = await new ApiClient().createAgentConfig({
+            const created = await api().agents.configs.create({
               template_id: opts.template,
               repository: opts.repo!,
               path: opts.path,

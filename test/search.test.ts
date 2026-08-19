@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiClient } from '../src/lib/api'
+import { Ellipsis } from '@ellipsis-dev/sdk'
 import {
   formatSearchResult,
   formatStepLine,
@@ -16,17 +16,26 @@ import type {
 function session(overrides: Partial<AgentSession> = {}): AgentSession {
   return {
     id: 'session_1',
-    customer_id: 'c',
     created_at: '2026-07-03T12:00:00+00:00',
     updated_at: '2026-07-03T12:00:00+00:00',
     status: 'completed',
     status_reason: null,
-    agent_config_id: null,
+    config_id: null,
+    source: 'api',
+    harness: 'claude_code',
+    prompting: { enabled: true },
+    resolved_budget_cents: 0,
+    resolved_budget_source: 'system',
     cost_tokens: 0,
     cost_sandbox_cpu: 0,
     cost_sandbox_memory: 0,
     cost_fee: 0,
     tokens_total: 0,
+    tokens_input: 0,
+    tokens_output: 0,
+    tokens_cache_read: 0,
+    tokens_cache_creation: 0,
+    tokens_model: '',
     metadata: {},
     ...overrides,
   }
@@ -42,7 +51,7 @@ describe('searchSessions', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    await new ApiClient('http://api.test', 't').searchSessions({
+    await new Ellipsis({ apiKey: 't', baseUrl: 'http://api.test' }).sessions.search({
       q: 'shift trade webhook',
       scope: 'both',
       author_id: [5201153],
@@ -66,52 +75,62 @@ describe('getAgentSessionRecords', () => {
 
   it('unwraps the records array from the session-scoped path (encoded)', async () => {
     const fetchMock = vi.fn(
-      async () => new Response(JSON.stringify({ records: [{ id: 'rec_1' }] }), { status: 200 }),
+      async () =>
+        new Response(JSON.stringify({ records: [{ id: 'rec_1' }], messages: [], has_more: false }), {
+          status: 200,
+        }),
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const out = await new ApiClient('http://api.test', 't').getAgentSessionRecords('session/1')
-    expect(out.map((s) => s.id)).toEqual(['rec_1'])
+    const page = await new Ellipsis({
+      apiKey: 't',
+      baseUrl: 'http://api.test',
+    }).sessions.records('session/1')
+    expect(page.items.map((s) => s.id)).toEqual(['rec_1'])
     expect(fetchMock.mock.calls[0][0]).toBe('http://api.test/sessions/session%2F1/records')
   })
 })
 
 describe('resolveAuthorId', () => {
   const members = (logins: Array<[number, string | null]>) => ({
-    listGithubMembers: vi.fn(async () => ({
-      members: logins.map(([id, login]) => ({
-        id,
-        login,
-        name: null,
-        avatar_url: null,
-        role: null,
-        slack: null,
-      })),
-    })),
+    integrations: {
+      github: {
+        members: vi.fn(async () => ({
+          members: logins.map(([id, login]) => ({
+            id,
+            login,
+            name: null,
+            avatar_url: null,
+            role: null,
+            slack: null,
+          })),
+        })),
+      },
+    },
   })
 
   it('resolves a login to its account id, case-insensitively', async () => {
-    const api = members([
+    const client = members([
       [1, 'octocat'],
       [2, 'hbrooks'],
-    ]) as unknown as ApiClient
-    await expect(resolveAuthorId(api, 'HBrooks')).resolves.toBe(2)
+    ]) as unknown as Ellipsis
+    await expect(resolveAuthorId(client, 'HBrooks')).resolves.toBe(2)
   })
 
   it('rejects an unknown login listing the known ones', async () => {
-    const api = members([
+    const client = members([
       [1, 'octocat'],
       [2, 'hbrooks'],
       [3, null], // roster rows without a cached login are skipped in the hint
-    ]) as unknown as ApiClient
-    await expect(resolveAuthorId(api, 'tony')).rejects.toThrow(
+    ]) as unknown as Ellipsis
+    await expect(resolveAuthorId(client, 'tony')).rejects.toThrow(
       'no GitHub member with login "tony" (known logins: octocat, hbrooks)',
     )
   })
 
   it('omits the hint when no logins are known', async () => {
-    const api = members([[3, null]]) as unknown as ApiClient
-    await expect(resolveAuthorId(api, 'tony')).rejects.toThrow(
+    const client = members([[3, null]]) as unknown as Ellipsis
+    await expect(resolveAuthorId(client, 'tony')).rejects.toThrow(
       /no GitHub member with login "tony"$/,
     )
   })

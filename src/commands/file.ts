@@ -1,7 +1,7 @@
 import { type Command } from 'commander'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
-import { ApiClient, ApiError } from '../lib/api'
+import { api, APIError } from '../lib/api'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { formatTs, printJson, printTable, runAction } from '../lib/output'
 import type { CreateFileRequest, FileView, GetFileResponse } from '../lib/types'
@@ -94,7 +94,7 @@ export function registerFile(program: Command): void {
     .action(async (path: string, opts: { json?: boolean }) => {
       await runAction(async () => {
         const req = buildUploadRequest(path, readFileSync(path))
-        const res = await new ApiClient().uploadFile(req)
+        const res = await api().files.create(req)
         // The URL is the whole point — keep it the bare primary output so an
         // agent (or $(...) in a script) can capture it directly.
         if (opts.json) printJson(res)
@@ -111,10 +111,9 @@ export function registerFile(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(async (opts: { session?: string; limit?: number; json?: boolean }) => {
       await runAction(async () => {
-        const files = await new ApiClient().listFiles({
-          agent_session_id: opts.session,
-          limit: opts.limit,
-        })
+        const files = (
+          await api().files.list({ session_id: opts.session, limit: opts.limit })
+        ).items
         if (opts.json) {
           printJson(files)
           return
@@ -130,7 +129,7 @@ export function registerFile(program: Command): void {
             f.filename,
             formatSize(f.size_bytes),
             formatTs(f.created_at),
-            f.agent_session_id ?? '-',
+            f.session_id ?? '-',
           ]),
         )
       })
@@ -147,7 +146,7 @@ export function registerFile(program: Command): void {
     .option('--json', 'output raw JSON (includes the short-lived download_url)')
     .action(async (fileId: string, opts: { output?: string; json?: boolean }) => {
       await runAction(async () => {
-        const res = await new ApiClient().getFile(fileId)
+        const res = await api().files.get(fileId)
         if (opts.output) {
           // download_url is a ~60s presigned S3 GET — fetch it immediately,
           // while it's fresh. The JSON API never carries the bytes itself.
@@ -172,18 +171,18 @@ export function registerFile(program: Command): void {
     .action(async (fileId: string, opts: { json?: boolean }) => {
       await runAction(async () => {
         try {
-          await new ApiClient().deleteFile(fileId)
+          await api().files.delete(fileId)
         } catch (err) {
           // A 404 covers "never existed", "someone else's", and "already
           // deleted" — all the same "there's nothing here to delete" to the
           // caller, so give one clear message instead of the raw HTTP error.
-          if (err instanceof ApiError && err.status === 404) {
+          if (err instanceof APIError && err.status === 404) {
             throw new Error(`file not found: ${fileId}`)
           }
           // A 403 is a real policy decision (e.g. sandbox tokens can't delete);
           // surface the server's own explanation rather than masking it.
-          if (err instanceof ApiError && err.status === 403) {
-            throw new Error(err.detail)
+          if (err instanceof APIError && err.status === 403) {
+            throw new Error(err.message)
           }
           throw err
         }
@@ -201,7 +200,7 @@ function renderFile(res: GetFileResponse): void {
   console.log(`type:      ${f.content_type}`)
   console.log(`size:      ${formatSize(f.size_bytes)}`)
   console.log(`created:   ${formatTs(f.created_at)}`)
-  if (f.agent_session_id) console.log(`session:   ${f.agent_session_id}`)
+  if (f.session_id) console.log(`session:   ${f.session_id}`)
   console.log(`url:       ${res.url}`)
   console.log(`\ndownload the file with: agent file get ${f.id} -o ${f.filename}`)
 }

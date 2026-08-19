@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiClient, requireConnected } from '../src/lib/api'
+import { requireConnected } from '../src/lib/api'
+import { Ellipsis } from '@ellipsis-dev/sdk'
 import { integrationRows } from '../src/commands/integrations'
 import type { GetIntegrationsResponse } from '../src/lib/types'
 
@@ -13,26 +14,22 @@ describe('integration discovery endpoints', () => {
   }
 
   it('hits the provider-namespaced paths', async () => {
-    const cases: Array<[(api: ApiClient) => Promise<unknown>, string, unknown]> = [
-      [(api) => api.getIntegrations(), '/integrations', { sentry: [] }],
+    const cases: Array<[(client: Ellipsis) => Promise<unknown>, string, unknown]> = [
+      [(c) => c.integrations.list(), '/integrations', { sentry: [] }],
+      [(c) => c.integrations.github.repos(), '/integrations/github/repos', { repositories: [] }],
+      [(c) => c.integrations.github.members(), '/integrations/github/members', { members: [] }],
+      [(c) => c.integrations.slack.channels(), '/integrations/slack/channels', { channels: [] }],
+      [(c) => c.integrations.slack.members(), '/integrations/slack/members', { members: [] }],
+      [(c) => c.integrations.linear.teams(), '/integrations/linear/teams', { teams: [] }],
       [
-        (api) => api.listGithubRepositories(),
-        '/integrations/github/repos',
-        { repositories: [] },
-      ],
-      [(api) => api.listGithubMembers(), '/integrations/github/members', { members: [] }],
-      [(api) => api.listSlackChannels(), '/integrations/slack/channels', { channels: [] }],
-      [(api) => api.listSlackMembers(), '/integrations/slack/members', { members: [] }],
-      [(api) => api.listLinearTeams(), '/integrations/linear/teams', { teams: [] }],
-      [
-        (api) => api.listSentryOrganizations(),
+        (c) => c.integrations.sentry.organizations(),
         '/integrations/sentry/organizations',
         { organizations: [] },
       ],
     ]
     for (const [call, path, body] of cases) {
       const fetchMock = stub(body)
-      await call(new ApiClient('http://api.test', 't'))
+      await call(new Ellipsis({ apiKey: 't', baseUrl: 'http://api.test' }))
       expect(fetchMock.mock.calls[0][0]).toBe(`http://api.test${path}`)
       vi.unstubAllGlobals()
     }
@@ -52,10 +49,10 @@ describe('requireConnected', () => {
           }),
       ),
     )
-    const api = new ApiClient('http://api.test', 't')
-    await expect(requireConnected('Slack', api.listSlackChannels())).rejects.toThrow(
-      /^Slack is not connected/,
-    )
+    const client = new Ellipsis({ apiKey: 't', baseUrl: 'http://api.test' })
+    await expect(
+      requireConnected('Slack', client.integrations.slack.channels()),
+    ).rejects.toThrow(/^Slack is not connected/)
   })
 
   it('propagates other failures unchanged', async () => {
@@ -63,11 +60,10 @@ describe('requireConnected', () => {
       'fetch',
       vi.fn(async () => new Response(JSON.stringify({ detail: 'nope' }), { status: 403 })),
     )
-    const api = new ApiClient('http://api.test', 't')
-    await expect(requireConnected('Slack', api.listSlackChannels())).rejects.toMatchObject({
-      name: 'ApiError',
-      status: 403,
-    })
+    const client = new Ellipsis({ apiKey: 't', baseUrl: 'http://api.test' })
+    await expect(
+      requireConnected('Slack', client.integrations.slack.channels()),
+    ).rejects.toMatchObject({ status: 403 })
   })
 
   it('returns the payload when connected', async () => {
@@ -80,10 +76,10 @@ describe('requireConnected', () => {
           }),
       ),
     )
-    const api = new ApiClient('http://api.test', 't')
-    await expect(requireConnected('Slack', api.listSlackChannels())).resolves.toMatchObject({
-      team_id: 'T1',
-    })
+    const client = new Ellipsis({ apiKey: 't', baseUrl: 'http://api.test' })
+    await expect(
+      requireConnected('Slack', client.integrations.slack.channels()),
+    ).resolves.toMatchObject({ team_id: 'T1' })
   })
 })
 

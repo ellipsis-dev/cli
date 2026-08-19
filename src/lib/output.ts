@@ -2,7 +2,7 @@
 // structured output the same way.
 
 import { stringify as stringifyYaml } from 'yaml'
-import { ApiError } from './api'
+import { APIError, describeApiError, errorDetail } from './api'
 import { envToken } from './config'
 import { VERSION } from './constants'
 
@@ -76,18 +76,18 @@ export function usd(amount: number): string {
 // where the token came from: an env token outranks the config file in the
 // precedence chain, so `agent login` alone can't replace it.
 export function friendlyErrorMessage(err: unknown): string {
-  if (err instanceof ApiError && err.status === 401) {
+  if (err instanceof APIError && err.status === 401) {
     return envToken()
       ? 'The server rejected ELLIPSIS_API_TOKEN. Check the token, or unset it and run `agent login`.'
       : 'Your login is invalid or has expired. Run `agent login` to re-authenticate.'
   }
-  // A 429 detail is written for a human to act on (which limit was hit, how to
-  // get it raised), so print it alone — the `METHOD /path failed: 429` prefix
-  // buries the remedy.
-  if (err instanceof ApiError && err.status === 429) return err.detail
-  if (err instanceof ApiError && !UPGRADE_HINT_EXEMPT.has(err.status)) {
-    return `${err.message}\n${upgradeHint()}`
+  // A 429 message is written for a human to act on (which limit was hit, how
+  // to get it raised), so print it alone — the status prefix buries the remedy.
+  if (err instanceof APIError && err.status === 429) return errorDetail(err)
+  if (err instanceof APIError && !UPGRADE_HINT_EXEMPT.has(err.status)) {
+    return `${describeApiError(err)}\n${upgradeHint()}`
   }
+  if (err instanceof APIError) return describeApiError(err)
   return (err as Error).message
 }
 

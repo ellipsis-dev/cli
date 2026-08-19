@@ -1,5 +1,5 @@
 import { type Command } from 'commander'
-import { ApiClient, requireConnected } from '../lib/api'
+import { api, requireConnected } from '../lib/api'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { printJson, printTable, runAction } from '../lib/output'
 
@@ -20,7 +20,7 @@ export function registerLinear(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
-        const res = await requireConnected('Linear', new ApiClient().listLinearTeams())
+        const res = await requireConnected('Linear', api().integrations.linear.teams())
         if (opts.json) {
           printJson(res)
           return

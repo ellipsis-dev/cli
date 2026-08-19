@@ -10,9 +10,8 @@ import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink'
 import type { OpenSocket } from '@ellipsis-dev/sdk/stream'
 import { SESSION_STREAM_PROTOCOL_VERSION } from '@ellipsis-dev/sdk/stream'
 import { SessionTranscriptStore } from '@ellipsis-dev/sdk/store'
-import type { AgentSessionWire } from '@ellipsis-dev/sdk'
-import type { ApiClient } from '../lib/api'
-import { ApiError } from '../lib/api'
+import type { Ellipsis, Session as FrameSession } from '@ellipsis-dev/sdk'
+import { errorDetail } from '../lib/api'
 import type {
   AgentSession,
   SavedAgentConfig,
@@ -91,7 +90,7 @@ const NAV_GUTTER = 1
 const COMPOSER_PAD_X = 2
 
 export interface SessionsAppProps {
-  api: ApiClient
+  api: Ellipsis
   openSocket: OpenSocket
   // app.ellipsis.dev base + the customer login, for per-session dashboard links.
   appBase: string
@@ -180,14 +179,16 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   // row, which is the one line always on screen.
   const [apiError, setApiError] = useState<string | null>(null)
   const reportApiError = useCallback((label: string, err: unknown): void => {
-    setApiError(`${label}: ${err instanceof ApiError ? err.detail : (err as Error).message}`)
+    setApiError(`${label}: ${errorDetail(err)}`)
   }, [])
 
   const poll = useCallback(async (): Promise<void> => {
     try {
-      const listed = await api.listAgentSessions(
-        sessionBarQuery(sessionBar, { authorId, detectedRepo: props.detectedRepo }),
-      )
+      const listed = (
+        await api.sessions.list(
+          sessionBarQuery(sessionBar, { authorId, detectedRepo: props.detectedRepo }),
+        )
+      ).items
       setAttention((prev) => {
         const next = new Set(prev)
         for (const s of listed) {
@@ -261,9 +262,9 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       loading.current.add(sessionId)
       setLoadError(null)
       try {
-        const [session, page] = await Promise.all([
-          api.getAgentSession(sessionId),
-          api.getAgentSessionRecordsPage(sessionId),
+        const [{ session }, page] = await Promise.all([
+          api.sessions.get(sessionId),
+          api.sessions.records(sessionId).then((p) => p.response),
         ])
         const store = new SessionTranscriptStore()
         const ordered = [...page.records].sort((a, b) => a.feed_seq - b.feed_seq)
@@ -281,13 +282,12 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
           canSend: c.canSend,
           notice: [notice, c.reason].filter(Boolean).join(' · ') || null,
           model: typeof session.tokens_model === 'string' ? session.tokens_model : null,
-          configName:
-            configName ?? session.resolved_config_name ?? session.agent_config_id ?? null,
+          configName: configName ?? session.config_id ?? null,
           url: sessionUrl(appBase, customerLogin, sessionId),
         }
         setEntries((prev) => new Map(prev).set(sessionId, entry))
       } catch (err) {
-        setLoadError(err instanceof ApiError ? err.detail : (err as Error).message)
+        setLoadError(errorDetail(err))
         loading.current.delete(sessionId)
         return
       }
@@ -324,23 +324,23 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   useEffect(() => {
     if (mainPane.type !== 'new' || pickersLoading.current) return
     pickersLoading.current = true
-    void api
-      .listAgentConfigs()
-      .then((rows) => setConfigs(rows.filter((c) => !c.deleted)))
+    void api.agents.configs
+      .list()
+      .then((rows) => setConfigs(rows.configs))
       .catch((err) => {
         setConfigs([])
         reportApiError('agent configs', err)
       })
-    void api
-      .listGithubRepositories()
+    void api.integrations.github
+      .repos()
       .then((r) => setRepos(r.repositories.map((repo) => repo.full_name)))
       .catch((err) => {
         setRepos([])
         reportApiError('repositories', err)
       })
-    void api
-      .listSupportedModels()
-      .then(setModels)
+    void api.models
+      .list()
+      .then((r) => setModels(r.models))
       .catch((err) => {
         setModels([])
         reportApiError('models', err)
@@ -353,19 +353,16 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       setStartError(null)
       try {
         const req = applyComposerChoices(props.buildStartRequest(prompt), choices)
-        const session = await api.startAgentSession(req)
+        const { session, resolved_config_name } = await api.sessions.start(req)
         lastWords.current.set(session.id, rowStatusWord(session))
         setLocalSessions((prev) => [session, ...prev])
         setSelected(session.id)
         setMainPane({ type: 'chat', sessionId: session.id })
         setFocus('chat')
         // Seed the entry from the start response's resolved config identity.
-        void loadEntry(
-          session.id,
-          session.resolved_config_name ?? session.agent_config_id ?? undefined,
-        )
+        void loadEntry(session.id, resolved_config_name ?? session.config_id ?? undefined)
       } catch (err) {
-        setStartError(err instanceof ApiError ? err.detail : (err as Error).message)
+        setStartError(errorDetail(err))
       } finally {
         setStarting(false)
       }
@@ -733,7 +730,7 @@ function useHeaderMeta(
     () => (entry ? entry.store.getSnapshot() : null),
   )
   if (mainPane.type !== 'chat' || !entry) return null
-  const session = snapshot?.session as AgentSessionWire | undefined | null
+  const session = snapshot?.session as FrameSession | undefined | null
   const costUsd = session
     ? usdNumberFromMillicents(
         session.cost_tokens +

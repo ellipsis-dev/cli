@@ -1,6 +1,6 @@
 import React from 'react'
 import { render } from 'ink'
-import { ApiClient } from '../lib/api'
+import { api } from '../lib/api'
 import { requireToken, resolveApiBase, resolveAppBase, sessionBar } from '../lib/config'
 import { repoFromCwd } from '../lib/laptop'
 import { makeOpenSocket, resolveWsBase } from '../lib/stream'
@@ -48,10 +48,10 @@ export function defaultStartRequest(prompt: string): StartAgentSessionRequest {
 }
 
 export async function runSessionsUi(options: SessionsUiOptions): Promise<void> {
-  const api = new ApiClient()
+  const client = api()
   const token = requireToken()
   const openSocket = makeOpenSocket(token, resolveWsBase(resolveApiBase()))
-  const me = await api.whoami()
+  const me = await client.me()
 
   // Start at the top of a fresh window: scroll whatever is on screen into
   // scrollback, then home the cursor (same dance as the solo connect).
@@ -60,7 +60,7 @@ export async function runSessionsUi(options: SessionsUiOptions): Promise<void> {
   }
   const app = render(
     React.createElement(SessionsApp, {
-      api,
+      api: client,
       openSocket,
       appBase: resolveAppBase(),
       customerLogin: me.customer_login,

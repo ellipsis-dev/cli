@@ -3,7 +3,7 @@ import React from 'react'
 import { render } from 'ink'
 import { SessionTranscriptStore } from '@ellipsis-dev/sdk/store'
 import { SESSION_STREAM_PROTOCOL_VERSION } from '@ellipsis-dev/sdk/stream'
-import { ApiClient } from '../lib/api'
+import { api } from '../lib/api'
 import { requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
 import { runAction } from '../lib/output'
 import { sessionUrl } from '../lib/urls'
@@ -92,11 +92,14 @@ export async function runConnect(
   // from the fetched session. Shown in the footer meta line.
   configName?: string,
 ): Promise<void> {
-  const api = new ApiClient()
+  const client = api()
   const token = requireToken()
   const openSocket = makeOpenSocket(token, resolveWsBase(resolveApiBase()))
 
-  const [session, me] = await Promise.all([api.getAgentSession(sessionId), api.whoami()])
+  const [{ session }, me] = await Promise.all([
+    client.sessions.get(sessionId),
+    client.me(),
+  ])
   const c = connectability(session)
   // --no-input forces watch-only even when the session would accept messages.
   const canSend = readOnly ? false : c.canSend
@@ -106,7 +109,7 @@ export async function runConnect(
   const url = sessionUrl(resolveAppBase(), me.customer_login, sessionId)
   // The config identity for the footer meta line: the caller's resolved name
   // first, then whatever the session itself carries.
-  const config = configName ?? session.resolved_config_name ?? session.agent_config_id ?? null
+  const config = configName ?? session.config_id ?? null
 
   // No scrollback preamble: the app owns the whole surface, Claude Code-style.
   // The footer carries the session identity/status; a watch-only reason
@@ -118,7 +121,7 @@ export async function runConnect(
   // cursor instead of replaying history. --no-records skips *rendering* the
   // seeded history (minRenderFeedSeq), not re-streaming it.
   const store = new SessionTranscriptStore()
-  const page = await api.getAgentSessionRecordsPage(sessionId)
+  const page = (await client.sessions.records(sessionId)).response
   const ordered = [...page.records].sort((a, b) => a.feed_seq - b.feed_seq)
   // Seed the session + open inbox as a synthetic snapshot frame (protocol v3:
   // the store folds the inbox from the snapshot projection and the message_*
@@ -146,7 +149,7 @@ export async function runConnect(
   }
   const app = render(
     React.createElement(ConnectApp, {
-      api,
+      api: client,
       sessionId,
       store,
       openSocket,

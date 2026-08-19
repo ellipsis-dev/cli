@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { ApiClient } from './api'
+import type { Ellipsis } from '@ellipsis-dev/sdk'
 import { setActiveHostToken } from './config'
 import type { CliAuthStart } from './types'
 
@@ -18,10 +18,10 @@ export interface DeviceLoginResult {
 // Drives the device-code flow end to end (start -> poll -> persist token).
 // See documents/eng/ELLIPSIS_API_AND_CLI.md §5 in the backend repo.
 export async function deviceLogin(
-  api: ApiClient,
+  client: Ellipsis,
   handlers: DeviceLoginHandlers,
 ): Promise<DeviceLoginResult> {
-  const start = await api.startCliAuth()
+  const start = await client.auth.cli.start()
   handlers.onPrompt(start)
 
   const intervalMs = Math.max(1, start.interval) * 1000
@@ -29,7 +29,7 @@ export async function deviceLogin(
 
   while (nowMs() < deadline) {
     await sleep(intervalMs)
-    const poll = await api.pollCliAuth(start.device_code)
+    const poll = await client.auth.cli.poll({ device_code: start.device_code })
     switch (poll.status) {
       case 'pending':
         handlers.onPending?.()
