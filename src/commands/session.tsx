@@ -390,9 +390,7 @@ export function registerSession(program: Command): void {
               s.status,
               s.source ?? '-',
               formatTs(s.created_at),
-              usdFromMillicents(
-                s.cost_tokens + s.cost_sandbox_cpu + s.cost_sandbox_memory + s.cost_fee,
-              ),
+              usdFromMillicents(s.cost?.total ?? 0),
             ]),
           )
         })
@@ -494,7 +492,7 @@ export function registerSession(program: Command): void {
             }
           }
           console.log(
-            '\nInspect one: agent session get <session-id>. Full log: agent session log <session-id>',
+            '\nInspect one: agent session get <session-id>. Full history: agent session export <session-id>',
           )
         })
       },
@@ -531,11 +529,12 @@ export function registerSession(program: Command): void {
   apiRoutes(
     alsoKnownAs(
       session
-        .command('log <session-id>')
-        .description("Download a session's complete archived log to stdout or a file"),
+        .command('export <session-id>')
+        .description("Download a session's complete archived history to stdout or a file"),
+      'log',
       'logs',
     ),
-    'GET /sessions/{id}/log',
+    'GET /sessions/{id}/export',
   )
     .option('-o, --output <path>', 'write to a file instead of stdout')
     .option('--gzip', 'keep the concatenated .jsonl.gz bytes as-is (skip gunzip)')
@@ -550,7 +549,7 @@ export function registerSession(program: Command): void {
         },
       ) => {
         await runAction(async () => {
-          const manifest = await api().sessions.log(sessionId)
+          const manifest = await api().sessions.export(sessionId)
           if (opts.json) {
             printJson(manifest)
             return
@@ -1057,12 +1056,8 @@ function printSessionSummary(s: AgentSession): void {
   if (s.config_id) console.log(`config:    ${s.config_id}`)
   console.log(`created:   ${s.created_at}`)
   console.log(`updated:   ${s.updated_at}`)
-  console.log(`tokens:    ${s.tokens_total.toLocaleString()}`)
-  console.log(
-    `cost:      ${usdFromMillicents(
-      s.cost_tokens + s.cost_sandbox_cpu + s.cost_sandbox_memory + s.cost_fee,
-    )}`,
-  )
+  console.log(`tokens:    ${(s.tokens?.total ?? 0).toLocaleString()}`)
+  console.log(`cost:      ${usdFromMillicents(s.cost?.total ?? 0)}`)
   const keys = Object.keys(s.metadata ?? {})
   if (keys.length) {
     console.log('metadata:')
@@ -1230,7 +1225,7 @@ export function formatSearchResult(
   now: Date = new Date(),
 ): string[] {
   const s = result.session
-  const author = s.attribution_id ? users[String(s.attribution_id)]?.login : undefined
+  const author = s.attribution?.id ? users[String(s.attribution.id)]?.login : undefined
   const header = [
     s.id,
     s.status,

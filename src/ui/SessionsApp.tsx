@@ -299,7 +299,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
           store,
           canSend: c.canSend,
           notice: [notice, c.reason].filter(Boolean).join(' · ') || null,
-          model: typeof session.tokens_model === 'string' ? session.tokens_model : null,
+          model: session.tokens?.model || null,
           configName: configName ?? session.config_id ?? null,
           url: sessionUrl(appBase, customerLogin, sessionId),
         }
@@ -758,15 +758,8 @@ function useHeaderMeta(
   )
   if (mainPane.type !== 'chat' || !entry) return null
   const session = snapshot?.session as FrameSession | undefined | null
-  const costUsd = session
-    ? usdNumberFromMillicents(
-        session.cost_tokens +
-          session.cost_sandbox_cpu +
-          session.cost_sandbox_memory +
-          session.cost_fee,
-      )
-    : 0
-  const tokens = session?.tokens_total ?? 0
+  const costUsd = session ? usdNumberFromMillicents(session.cost?.total ?? 0) : 0
+  const tokens = session?.tokens?.total ?? 0
   const id = mainPane.sessionId
   const line = (idText: string, model: string | null | undefined): string =>
     [

@@ -24,18 +24,9 @@ function session(overrides: Partial<AgentSession> = {}): AgentSession {
     source: 'api',
     harness: 'claude_code',
     prompting: { enabled: true },
-    resolved_budget_cents: 0,
-    resolved_budget_source: 'system',
-    cost_tokens: 0,
-    cost_sandbox_cpu: 0,
-    cost_sandbox_memory: 0,
-    cost_fee: 0,
-    tokens_total: 0,
-    tokens_input: 0,
-    tokens_output: 0,
-    tokens_cache_read: 0,
-    tokens_cache_creation: 0,
-    tokens_model: '',
+    budget: { cents: 0, source: 'system' },
+    cost: { llm: 0, sandbox_cpu: 0, sandbox_memory: 0, fee: 0, total: 0 },
+    tokens: { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: 0, model: '' },
     metadata: {},
     ...overrides,
   }
@@ -144,7 +135,7 @@ describe('formatSearchResult', () => {
 
   it('renders header, author, age, matched arms, and the recap snippet', () => {
     const result: SessionSearchResult = {
-      session: session({ attribution_id: '5201153' }),
+      session: session({ attribution: { id: '5201153', type: 'github_user' } }),
       matched: ['recap', 'similar'],
       recap_snippet: 'looked into the shift trade webhook retries',
       record_hits: [],

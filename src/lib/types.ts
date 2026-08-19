@@ -19,8 +19,8 @@ type S = components['schemas']
 // --------------------------- sessions & records ---------------------------
 
 export type AgentSession = S['Session']
-export type AgentSessionSource = S['AgentSessionSource']
-export type AgentSessionStatus = S['AgentSessionStatus']
+export type AgentSessionSource = S['SessionSource']
+export type AgentSessionStatus = S['SessionStatus']
 export type SessionState = S['SessionState']
 export type SessionSurface = S['SessionSurface']
 export type SessionPrompting = S['SessionPrompting']

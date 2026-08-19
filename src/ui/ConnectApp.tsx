@@ -382,12 +382,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     [snapshot.records],
   )
   const serverCostUsd = snapshot.session
-    ? usdNumberFromMillicents(
-        snapshot.session.cost_tokens +
-          snapshot.session.cost_sandbox_cpu +
-          snapshot.session.cost_sandbox_memory +
-          snapshot.session.cost_fee,
-      )
+    ? usdNumberFromMillicents(snapshot.session.cost?.total ?? 0)
     : null
 
   // The sandbox startup timeline, derived from the lifecycle records of the
