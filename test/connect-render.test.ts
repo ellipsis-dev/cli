@@ -75,6 +75,15 @@ function costTick(store: SessionTranscriptStore, cents: number): void {
 
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 40))
 
+// The render options every test here uses. `interactive: true` is not optional:
+// ink treats CI as non-interactive (is-in-ci), and a non-interactive render
+// buffers everything and emits ONE final frame — no erases, no repaints, no
+// <Static> flush as it happens. Every claim in this file is about the difference
+// between a flushed row and a repainted one, so the whole file measures nothing
+// under CI without it. The real app pins the same flag for the same reason (see
+// runConnect).
+const OPTIONS = { patchConsole: false, interactive: true } as const
+
 let seq = 0
 // A claude_code assistant-message record — the shape recordToItems turns into a
 // ● prose row.
@@ -146,7 +155,7 @@ describe('ConnectApp — the scrollback view', () => {
       'waiting',
     )
     const { stream, output } = fakeTty()
-    const app = render(chat(store), { stdout: stream, stdin: fakeStdin(), patchConsole: false })
+    const app = render(chat(store), { stdout: stream, stdin: fakeStdin(), ...OPTIONS })
     await settle()
     // Two more repaints of the live region, so "written once" below is a real
     // claim about the flush rather than an artifact of a single frame.
@@ -179,7 +188,7 @@ describe('ConnectApp — the scrollback view', () => {
       'working',
     )
     const { stream, output } = fakeTty()
-    const app = render(chat(store), { stdout: stream, stdin: fakeStdin(), patchConsole: false })
+    const app = render(chat(store), { stdout: stream, stdin: fakeStdin(), ...OPTIONS })
     await settle()
     costTick(store, 50_000)
     await settle()
@@ -198,7 +207,7 @@ describe('ConnectApp — the scrollback view', () => {
     const app = render(chat(store, { scrollbackBreak: true }), {
       stdout: stream,
       stdin: fakeStdin(),
-      patchConsole: false,
+      ...OPTIONS,
     })
     await settle()
     app.unmount()
@@ -218,7 +227,7 @@ describe('ConnectApp — the scrollback view', () => {
       'waiting',
     )
     const { stream, output } = fakeTty()
-    const app = render(chat(store), { stdout: stream, stdin: fakeStdin(), patchConsole: false })
+    const app = render(chat(store), { stdout: stream, stdin: fakeStdin(), ...OPTIONS })
     await settle()
     app.unmount()
     // The flushed rows are everything written before the live frame's first
@@ -236,7 +245,7 @@ describe('ConnectApp — the scrollback view', () => {
     const store = seededStore([lifecycle('sandbox_ready', {}), say('hi')], 'waiting')
     const { stream, output } = fakeTty()
     const stdin = fakeStdin()
-    const app = render(chat(store), { stdout: stream, stdin, patchConsole: false })
+    const app = render(chat(store), { stdout: stream, stdin, ...OPTIONS })
     await settle()
     const before = output().length
 
@@ -272,7 +281,7 @@ describe('ConnectApp — the scrollback view', () => {
     // select/copy to the terminal.
     const store = seededStore([lifecycle('sandbox_ready', {}), say('hello')], 'waiting')
     const { stream, output } = fakeTty()
-    const app = render(chat(store), { stdout: stream, stdin: fakeStdin(), patchConsole: false })
+    const app = render(chat(store), { stdout: stream, stdin: fakeStdin(), ...OPTIONS })
     await settle()
     app.unmount()
     expect(output()).not.toContain('[?1000h')

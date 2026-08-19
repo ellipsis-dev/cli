@@ -28,6 +28,12 @@ function fakeTty(): { stream: NodeJS.WriteStream; output: () => string } {
 
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 25))
 
+// `interactive: true` is not optional: ink treats CI as non-interactive
+// (is-in-ci), and a non-interactive render buffers everything into ONE final
+// frame — no erases, no repaints, no <Static> flush as it happens. These tests
+// are about exactly that difference, so they measure nothing under CI without it.
+const OPTIONS = { patchConsole: false, interactive: true } as const
+
 describe('<Static> flush — the scrollback view', () => {
   it('prints each settled row ONCE and never reprints it', async () => {
     // The invariant the whole scrollback view rests on: a flushed row is printed
@@ -48,7 +54,7 @@ describe('<Static> flush — the scrollback view', () => {
         h(Text, null, 'live'),
       )
     }
-    const app = render(h(App), { stdout: stream, patchConsole: false })
+    const app = render(h(App), { stdout: stream, ...OPTIONS })
     await settle()
     app.unmount()
     const text = stripAnsi(output())
@@ -75,7 +81,7 @@ describe('<Static> flush — the scrollback view', () => {
       }, [])
       return h(Static, { items: rows }, (row: string) => h(Text, { key: row }, row))
     }
-    const app = render(h(App), { stdout: stream, patchConsole: false })
+    const app = render(h(App), { stdout: stream, ...OPTIONS })
     await settle()
     app.unmount()
     expect(stripAnsi(output()).match(/alpha/g)?.length).toBe(2)
@@ -89,7 +95,7 @@ describe('useAltScreen', () => {
       useAltScreen(open)
       return h(Text, null, 'frame')
     }
-    const app = render(h(App, { open: false }), { stdout: stream, patchConsole: false })
+    const app = render(h(App, { open: false }), { stdout: stream, ...OPTIONS })
     await settle()
     expect(output()).not.toContain('[?1049h')
 
@@ -113,7 +119,7 @@ describe('useAltScreen', () => {
       useAltScreen(true)
       return h(Text, null, 'frame')
     }
-    const app = render(h(App), { stdout: stream, patchConsole: false, interactive: true })
+    const app = render(h(App), { stdout: stream, ...OPTIONS })
     await settle()
     app.unmount()
     expect(out).not.toContain('[?1049')
@@ -132,7 +138,7 @@ describe('useAltScreen', () => {
       }, [exit])
       return h(Text, null, 'frame')
     }
-    const app = render(h(App), { stdout: stream, patchConsole: false })
+    const app = render(h(App), { stdout: stream, ...OPTIONS })
     await settle()
     app.unmount()
     await settle()
