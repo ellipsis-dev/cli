@@ -43,7 +43,7 @@ import {
 } from '../lib/sessions'
 import type { ResolvedSessionBar } from '../lib/config'
 import { randomFact } from '../lib/facts'
-import { SURFACE_ACTIVE, SURFACE_ELEVATED, theme } from '../lib/theme'
+import { theme } from '../lib/theme'
 import { useAltScreen } from './altScreen'
 import { ConnectApp } from './ConnectApp'
 
@@ -62,7 +62,7 @@ import { ConnectApp } from './ConnectApp'
 //     alternate-screen view: the windowed transcript with folding and ↑/↓ nav,
 //     which the scrollback view cannot do.
 //   * the new-session composer and the loading placeholder do own their frame,
-//     so they keep the header band and the canvas inset.
+//     so they keep the header band and the frame inset.
 //
 // Focus is modal and esc steps outward: inside the chat esc closes the browser,
 // then transcript navigation, then opens the picker. Exactly one useInput
@@ -82,8 +82,8 @@ const NAV_NEW_LABEL = '+ New session'
 const HEADER_TITLE = 'ellipsis.dev'
 const TITLE_WIDTH = HEADER_TITLE.length
 
-// Blank canvas cells between the frame and the terminal edge, on all four
-// sides. Everything inside lays out against the inset width/height.
+// Blank cells between the frame and the terminal edge, on all four sides.
+// Everything inside lays out against the inset width/height.
 const APP_INSET = 1
 
 // Extra indent for the session-nav rows, on top of the app inset — the list
@@ -159,9 +159,9 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     }
   }, [stdout])
   const height = Math.max(8, termRows - 1)
-  // The app inset: one blank cell of canvas on all four sides of the whole
-  // frame, so nothing sits flush against the terminal edge. The bands lay out
-  // inside it, so every width/height below is the INNER box, not the terminal.
+  // The app inset: one blank cell on all four sides of the whole frame, so
+  // nothing sits flush against the terminal edge. Everything lays out inside it,
+  // so every width/height below is the INNER box, not the terminal.
   const contentCols = Math.max(20, termCols - APP_INSET * 2)
   const contentRows = Math.max(6, height - APP_INSET * 2)
 
@@ -495,16 +495,13 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     ? `@${props.ghLogin} in ${customerLogin}`
     : customerLogin
   const header = (
-    // The top bar is a lifted surface, like the composer: the panel tint (not
-    // a rule) is what separates it from the transcript below. Its own 2-cell
-    // pad sits inside the tint, so the bar reads as a band with the title
-    // floating in it rather than type pinned to an edge.
+    // Unpainted, like every other surface: its own blank rows above and below
+    // are what set the title apart, not a tint.
     <Box
       flexDirection="column"
       width={contentCols}
       height={headerRows}
       flexShrink={0}
-      backgroundColor={theme.panel}
       paddingLeft={2}
       paddingRight={2}
       justifyContent="center"
@@ -633,10 +630,10 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       paddingRight={NAV_GUTTER}
     >
       <Box height={1} flexShrink={0} />
-      {/* The highlighted row — this one and the session rows below — takes
-          the active surface across its full width (the same lighter panel
-          the focused composer sits on), never the inverse bar. */}
-      <Box backgroundColor={selected === 'new' && navFocused ? SURFACE_ACTIVE : undefined}>
+      {/* The highlighted row — this one and the session rows below — is marked
+          by the cyan ▶ in its gutter and nothing else. No bar: a fill would be
+          one more surface to keep in step with the terminal's own. */}
+      <Box>
         <Box flexGrow={1}>
           <Text wrap="truncate">
             {selected === 'new' && navFocused ? (
@@ -663,10 +660,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
         const meta = `${rowMeta(s)}${attention.has(s.id) ? ' · needs you' : ''}`
         const descW = Math.max(8, contentCols - NAV_GUTTER * 2 - meta.length - 6)
         return (
-          // The highlighted row's background spans the whole width — the
-          // meta tag included — on the same active surface as everywhere
-          // else, replacing the old inverse (bone-white) description bar.
-          <Box key={s.id} backgroundColor={cursorHere ? SURFACE_ACTIVE : undefined}>
+          <Box key={s.id}>
             <Box flexGrow={1} flexShrink={1}>
               <Text wrap="truncate">
                 <Text color={cursorHere ? theme.cursor : g.color} dimColor={!cursorHere && g.dim}>
@@ -718,38 +712,24 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   // buffer, waiting behind it.
   if (navOpen) {
     return (
-      <Box
-        flexDirection="column"
-        height={height}
-        backgroundColor={theme.canvas}
-        padding={APP_INSET}
-      >
+      <Box flexDirection="column" height={height} padding={APP_INSET}>
         {header}
         {nav}
       </Box>
     )
   }
 
-  // A LIVE CHAT owns the terminal outright: no canvas box around it, no header,
-  // no inset. All three would be frame furniture painted around a region that
-  // prints into the terminal's scrollback — the rows scrolling past would run
-  // straight through them. ConnectApp paints its own canvas per row instead.
+  // A LIVE CHAT owns the terminal outright: no box around it, no header, no
+  // inset. All three would be frame furniture around a region that prints into
+  // the terminal's scrollback, and the rows scrolling past would run straight
+  // through them.
   const chatOwnsScreen = mainPane.type === 'chat' && entries.has(mainPane.sessionId)
   if (chatOwnsScreen) return main
 
   // The remaining screens (the new-session composer, a chat still loading) do
-  // own their frame, so they keep the canvas, the inset and the header.
+  // own their frame, so they keep the inset and the header.
   return (
-    // The brand canvas, painted edge to edge. Painting the root (rather than
-    // letting the terminal's own background show through) is what makes the
-    // charcoal→panel step read as intentional depth on ANY terminal theme
-    // instead of only on a dark one.
-    <Box
-      flexDirection="column"
-      minHeight={height}
-      backgroundColor={theme.canvas}
-      padding={APP_INSET}
-    >
+    <Box flexDirection="column" minHeight={height} padding={APP_INSET}>
       {header}
       {main}
     </Box>
@@ -842,10 +822,9 @@ const PICKER_ROWS: readonly PickerRow[] = [
 // The new-session pane, mirroring the dashboard's home composer
 // (app.ellipsis.dev/[login]): a centered "What are we shipping today?"
 // heading floating in the empty space, and the input panel docked at the
-// bottom — the Repository / Agent / Model rows inside the tinted box with
-// the ❯ prompt line beneath them (the dashboard card's controls-inside-the-
-// composer shape). The ❯ glyph marks whichever row is selected; the whole
-// panel steps to the lighter active surface while any row has focus. ↑ from
+// bottom — the Repository / Agent / Model rows above the ❯ prompt line (the
+// dashboard card's controls-inside-the-composer shape). The ❯ glyph marks
+// whichever row is selected. ↑ from
 // the prompt climbs into the option rows, ↑/↓ walk them (↓ off the last
 // returns to the prompt), →/enter unfolds a row's option list in place,
 // inside the panel ([x] marks the pick). Inside an open list ↑/↓ walk, → (or
@@ -1160,21 +1139,16 @@ function NewSessionPane({
       <Box flexGrow={1} />
       {error && <Text color={theme.error}> ✗ {error}</Text>}
       {starting && <Text color={theme.muted}> ✻ Starting session…</Text>}
-      {/* The input panel — the SAME surface as the chat composer, stepping
-          onto the lighter active surface while ANY of its four rows is where
-          you are (a picker row, its open option list, or the prompt), no
-          rules, with a uniform 1-cell pad inside the tint. The run controls
-          live INSIDE it, one row each ABOVE the prompt (the dashboard card's
-          controls-inside-the-composer shape): Repository, Agent, Model, a
-          blank spacer row, then the prompt line. The ❯ selection glyph marks
-          whichever row is selected. →/enter opens a picker row IN PLACE —
-          its value collapses to a bare label and the option list unfolds
-          indented beneath it, inside the panel (the panel grows upward into
-          the spacer above; the prompt never moves). Repositories
+      {/* The input, laid out like the chat composer: the run controls one row
+          each ABOVE the prompt (the dashboard card's controls-inside-the-
+          composer shape) — Repository, Agent, Model, a blank row, then the
+          prompt line. The ❯ selection glyph marks whichever row is selected.
+          →/enter opens a picker row IN PLACE: its value collapses to a bare
+          label and the option list unfolds indented beneath it, growing upward
+          into the space above so the prompt never moves. Repositories
           multi-select ([x] toggles), the others pick one. */}
       <Box
         flexDirection="column"
-        backgroundColor={focused && !starting ? SURFACE_ACTIVE : SURFACE_ELEVATED}
         alignItems="flex-start"
         paddingY={1}
         paddingX={COMPOSER_PAD_X}

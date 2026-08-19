@@ -207,6 +207,28 @@ describe('ConnectApp — the scrollback view', () => {
     expect(text).toContain('─')
   })
 
+  it('paints no background, so the terminal\'s own shows through', async () => {
+    // A row printed into scrollback is never repainted, so a fill on it outlives
+    // the frame that drew it: stale bands survive a resize or a shorter frame
+    // with nothing able to clean them up. The app therefore emits no background
+    // SGR at all (48;2;r;g;b truecolor, 48;5;n indexed, or 40-47/100-107).
+    const store = seededStore(
+      [lifecycle('sandbox_ready', {}), say('hello'), say('and again')],
+      'waiting',
+    )
+    const { stream, output } = fakeTty()
+    const app = render(chat(store), { stdout: stream, stdin: fakeStdin(), patchConsole: false })
+    await settle()
+    costTick(store, 50_000)
+    await settle()
+    app.unmount()
+    const raw = output()
+    expect(raw).not.toMatch(/\u001B\[[0-9;]*4[0-7]m/)
+    expect(raw).not.toMatch(/\u001B\[[0-9;]*10[0-7]m/)
+    expect(raw).not.toContain('48;2;')
+    expect(raw).not.toContain('48;5;')
+  })
+
   it('does not capture the mouse in the chat, so the terminal keeps the wheel', async () => {
     // The point of the whole exercise: no SGR mouse reporting (1000h/1006h) is
     // armed while the chat is the view, which is what leaves wheel scrolling and

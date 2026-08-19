@@ -865,15 +865,19 @@ describe('itemRows', () => {
     expect(rows).toHaveLength(1)
   })
 
-  it('panels what you said and leaves everything the agent said on the canvas', () => {
-    const panelOf = (kind: TranscriptItem['kind'], nested = false): boolean | undefined =>
+  // Every row is unpainted: a row prints into the terminal's scrollback and is
+  // never repainted, so a fill on it would outlive the frame that drew it. The
+  // sender is carried by the gutter glyph alone.
+  it('marks the sender with a gutter glyph and paints no background', () => {
+    const gutterOf = (kind: TranscriptItem['kind'], nested = false): string | undefined =>
       itemRows({ key: 'a', kind, text: 'x' } as TranscriptItem, 40, { clamp: false, nested })[0]
-        .panel
-    expect(panelOf('user')).toBe(true)
-    expect(panelOf('assistant')).toBe(false)
-    expect(panelOf('notice')).toBe(false)
-    expect(panelOf('tool', true)).toBe(false)
-    expect(panelOf('tool_result', true)).toBe(false)
+        .gutter?.text
+    expect(gutterOf('user')).toBe('◆')
+    expect(gutterOf('assistant')).toBe('●')
+    expect(gutterOf('notice')).toBe('✦')
+    for (const row of itemRows({ key: 'a', kind: 'user', text: 'x' }, 40, { clamp: false })) {
+      expect(row).not.toHaveProperty('panel')
+    }
   })
 
   it('emits one row per line of a multi-line body', () => {

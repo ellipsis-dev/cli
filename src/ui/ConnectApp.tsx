@@ -36,7 +36,7 @@ import { applyEditShortcut } from '../lib/editing'
 import { CTRL_C_QUIT_HINT, useCtrlCQuit } from './ctrlC'
 import { fitLines, visibleWidth } from '../lib/markdown'
 import { SELECTION_GLYPH } from '../lib/sessions'
-import { SURFACE_ACTIVE, SURFACE_ELEVATED, theme } from '../lib/theme'
+import { theme } from '../lib/theme'
 import { useAltScreen } from './altScreen'
 import { VERSION } from '../lib/constants'
 import {
@@ -54,7 +54,6 @@ import {
   LIVE_GLYPH,
   MESSAGE_PAD,
   navKeyOf,
-  padPanelBlocks,
   pendingMessageRows,
   rowViewport,
   settledItemKeys,
@@ -800,10 +799,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       ? Math.max(0, Math.min(fitLines(`· ${shownNotice}`, cols).length, free - 2))
       : 0
     free -= noticeRows
-    // The composer panel: its interior grows with the input, plus the 1-cell
-    // pad above and below. No rules to account for — the tint is the frame. In
-    // a pane too short for all of it the pad goes, then the interior shrinks
-    // toward a single row.
+    // The composer: its interior grows with the input, plus the 1-cell pad above
+    // and below. In a terminal too short for all of it the pad goes, then the
+    // interior shrinks toward a single row.
     const typedRows = fitLines(composer.text, composerTextCols(cols)).length
     const wanted = Math.max(COMPOSER_INTERIOR_ROWS, typedRows) + 2
     const composerRows = composerVisible ? Math.max(1, Math.min(wanted, free - 1)) : 0
@@ -956,7 +954,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     // full-colour ◆ rows ABOVE the live activity — the running turn is the
     // response to THIS message, so its stream belongs below it.
     for (const q of inFlightSends.filter((q) => q.state === 'accepted')) {
-      out.push(...pendingMessageRows(q.key, q.text, cols, { gutter: '◆', bold: true, panel: true }))
+      out.push(...pendingMessageRows(q.key, q.text, cols, { gutter: '◆', bold: true }))
     }
     if (liveTail.text) {
       out.push(...pendingMessageRows('live', liveTail.text, cols, { gutter: '' }))
@@ -984,7 +982,6 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           dim: true,
           right: 'queued',
           pulse: true,
-          panel: true,
         }),
       )
     }
@@ -999,13 +996,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           dim: true,
           right: q.state === 'sending' ? 'sending' : q.state === 'queued' ? 'queued' : 'cancelled',
           pulse: waiting,
-          panel: true,
         }),
       )
     }
-    // Every lifted block gets its blank tinted row above and below, here so a
-    // message and the tool run attached under it share one pad.
-    return padPanelBlocks(out)
+    return out
   }, [
     infraActivity,
     sandbox,
@@ -1436,11 +1430,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       // Scrollback mode does NOT fill the terminal: the frame is only as tall
       // as the live tail plus the footer, and it grows downward from wherever
       // the last flushed row left the cursor. A minHeight here would hold the
-      // composer at the bottom of the screen with a screenful of blank canvas
-      // above it, and every flushed row would push that blank block down. The
+      // composer at the bottom of the screen with a screenful of blank rows
+      // above it, and every flushed row would push that block down. The
       // browser is the opposite: it fills the alt screen it took over.
       minHeight={windowed ? Math.max(0, rows - bottomSlack) : undefined}
-      backgroundColor={theme.canvas}
     >
       {/* The settled transcript, printed once into the terminal's own
           scrollback and never repainted — which is what makes the wheel, the
@@ -1458,13 +1451,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           )}
         </Static>
       )}
-      {/* Top padding — see the termRows comment: absorbs terminal row-
-          accounting quirks and the post-exit sign-off so the first content
-          line never scrolls out of the window. */}
       {padRows > 0 && <Box height={padRows} flexShrink={0} />}
-      {/* The one-line opener is the whole banner — the rest of the session
-          identity (dashboard link, model, version) lives in the footer meta
-          line, so nothing is printed to scrollback before the app. */}
       {/* The chat window: ONE flat list of rows, sliced to exactly the rows
           that fit. Everything lives in it — the startup block, the
           transcript, in-flight sends, the live activity lines — so nothing
@@ -1476,9 +1463,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           rowViewport already emits exactly the rows that fit. */}
       <Box
         flexDirection="column"
-        // Scrollback mode sizes the live region to its content: it must not
-        // claim the terminal's leftover height, or the composer would sit at
-        // the bottom of the screen with blank canvas above it.
+        // The scrollback view sizes the live region to its content: it must not
+        // claim the terminal's leftover height, or the composer would sit at the
+        // bottom of the screen with blank rows above it.
         flexGrow={windowed ? 1 : 0}
         flexShrink={1}
         overflow="hidden"
@@ -1524,28 +1511,21 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             <Text color={theme.muted}>· {shownNotice}</Text>
           </Box>
         )}
-        {/* The composer: the input area on the elevated surface — one step
-            lighter (the active surface) while it's where you are (focused, no
-            transcript highlight), matching the transcript's selection
-            treatment. The tint is the whole frame — no rules — so the panel
-            reads as lifted off the canvas rather than fenced in by lines. A
-            uniform 1-cell pad keeps the text off all four edges, and because
-            it's inside the tinted Box the gutter carries the panel color too.
-            The panel is pinned to the rows budgeted for it, and clips: a pane
-            too short for the whole input scrolls it (below) rather than
-            painting the overflow across the meta line. */}
+        {/* The composer. Unpainted, like everything else: what marks it as the
+            input is the ▶ prompt and the caret, not a tint. It is pinned to the
+            rows budgeted for it and clips, so a terminal too short for the whole
+            input scrolls it rather than painting the overflow across the meta
+            line. */}
         {composerVisible && (
           <Box
-            backgroundColor={focused && navKey === null ? SURFACE_ACTIVE : SURFACE_ELEVATED}
             height={composerRows}
             flexShrink={0}
             overflow="hidden"
-            // Squeezed, the panel shows the END of the input, not the start:
-            // the caret is where you're typing, so that's the part to keep on
-            // screen.
+            // Squeezed, it shows the END of the input, not the start: the caret
+            // is where you're typing, so that's the part to keep on screen.
             alignItems="flex-end"
-            // The vertical pad is the first thing to go in a pane too short
-            // for the whole panel — the input's own row is never negotiable.
+            // The vertical pad is the first thing to go in a terminal too short
+            // for the whole input — its own row is never negotiable.
             paddingY={composerRows >= COMPOSER_INTERIOR_ROWS + 2 ? 1 : 0}
             paddingX={COMPOSER_PAD_X}
           >
@@ -1562,11 +1542,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             {/* The prompt is the selection glyph while the composer is where
                 you are (focused, no transcript highlight) — the same cyan
                 marker as everywhere else — and dim when it isn't. */}
-            {/* The explicit colour on the parent is what the bare text
-                children below inherit — ink would otherwise leave the typed
-                text on the terminal's default foreground, unreadable against
-                the panel on a light theme — and it gives the inverse caret a
-                known pair of colours to swap. */}
+            {/* The explicit colour on the parent is what the bare text children
+                below inherit, and it gives the inverse caret a known pair of
+                colours to swap. */}
             <Text
               key={`${composer.text}:${composer.cursor}:${focused && navKey === null}`}
               color={theme.foreground}
@@ -2276,10 +2254,10 @@ export function deriveSandboxState(
 // belt-and-braces guarantee — a row that wrapped would push every row below it
 // down and slide the window out of sync with the scroll position.
 //
-// Selection is carried by the cyan ▶ in the gutter and NOTHING else: no tint,
-// no recolored text. A highlight bar across a multi-row block is a lot of paint
-// for "you are here", and it fought with the one panel tint that still means
-// something (a message you sent). The marker is one glyph and unmistakable.
+// Selection is carried by the cyan ▶ in the gutter and NOTHING else: no fill, no
+// recoloured text. Partly taste — a highlight bar is a lot of paint for "you are
+// here" — and partly forced: a row printed into scrollback can never be
+// repainted, so it could not carry a highlight that comes and goes anyway.
 const RowLine = React.memo(function RowLine({
   row,
   cols,
@@ -2304,7 +2282,6 @@ const RowLine = React.memo(function RowLine({
   // the blink repaints the live lines and leaves the rest of the window alone.
   pulseOn: boolean
 }): React.ReactElement {
-  const background = row.panel ? SURFACE_ELEVATED : undefined
   // The "+N lines" marker's hint names the key that actually opens it: → when
   // the line is highlighted, ctrl+r otherwise.
   const spans: RowSpan[] = row.clampedLines
@@ -2325,13 +2302,16 @@ const RowLine = React.memo(function RowLine({
   const right = row.tick
     ? { text: [humanDuration(seconds), row.right?.text].filter(Boolean).join(', '), dim: true }
     : row.right
-  // height=1 is load-bearing: a blank row (a spacer, or a message panel's pad)
-  // has no text, and ink collapses an empty Box to zero height — the row would
-  // silently vanish, leaving the window short of the rows the scroll math
-  // counted. A tinted row also paints its background across the FULL pane
-  // width, so the panel reads as a block, not a ragged strip behind the text.
+  // height=1 is load-bearing: a blank separator row has no text, and ink
+  // collapses an empty Box to zero height — the row would silently vanish,
+  // leaving the window short of the rows the scroll math counted.
+  //
+  // No background: a row prints into the terminal's scrollback and is never
+  // repainted, so any fill it carries is permanent and cannot be kept in step
+  // with a frame that resizes or shrinks. Everything structural is carried by
+  // the gutter glyph and foreground colour instead.
   return (
-    <Box width={cols} height={1} flexShrink={0} backgroundColor={background}>
+    <Box width={cols} height={1} flexShrink={0}>
       <Box width={MESSAGE_PAD} flexShrink={0} />
       {row.indent ? <Box width={row.indent} flexShrink={0} /> : null}
       <Box width={GUTTER_COLS} flexShrink={0}>
