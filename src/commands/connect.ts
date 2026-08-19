@@ -139,14 +139,11 @@ export async function runConnect(
   // Written by the app when it exits because the conversation closed (terminal;
   // nothing left to reconnect to), so the detach sign-off below stays honest.
   const exitState = { closed: false }
-  // Start the app at the top of a fresh window: newlines scroll whatever is on
-  // screen (the shell prompt, anything a caller printed) into scrollback, then
-  // the cursor homes to row 1. Without this the first paint begins mid-screen,
-  // overflows the window, and the app's opening lines (the sandbox startup
-  // notes) end up stranded above the fold.
-  if (process.stdout.isTTY) {
-    process.stdout.write('\n'.repeat(process.stdout.rows ?? 24) + '\x1b[H')
-  }
+  // No screen-clearing dance here any more: the app prints its settled
+  // transcript INTO this terminal's scrollback (see ConnectApp's scrollback
+  // mode), so the conversation grows down the terminal from wherever the shell
+  // prompt left off, exactly like ordinary command output. Homing the cursor
+  // would throw away the scrollback the app now relies on.
   const app = render(
     React.createElement(ConnectApp, {
       api: client,
@@ -204,9 +201,8 @@ export async function runConnect(
 
   if (canSend && !exitState.closed) {
     // The session keeps running after a detach; hand back the exact command
-    // that re-opens this conversation. No leading newline: the single row this
-    // line scrolls is absorbed by the app's top padding (see ConnectApp), so
-    // the sign-off never scrolls the app's first content line out of the window.
+    // that re-opens this conversation. It prints under the app's last frame,
+    // like any other command's parting line.
     console.log(`resume with: agent session connect ${sessionId}`)
   }
 }

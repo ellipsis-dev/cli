@@ -20,6 +20,8 @@ import {
   itemRows,
   layOutItems,
   rowViewport,
+  settledItemKeys,
+  settledRowCount,
   snapAnchorForEntry,
   snapToEntry,
   spanColor,
@@ -733,6 +735,57 @@ describe('cursorLineDown', () => {
   })
 })
 
+describe('settledItemKeys', () => {
+  const item = (key: string, kind: TranscriptItem['kind'], text = 'x'): TranscriptItem => ({
+    key,
+    kind,
+    text,
+  })
+
+  it('settles everything when no turn is in flight', () => {
+    const items = [item('a', 'user'), item('b', 'assistant'), item('c', 'tool')]
+    expect([...settledItemKeys(items, false)]).toEqual(['a', 'b', 'c'])
+  })
+
+  it('holds back the last message and its tool run while a turn is live', () => {
+    // 'b' is the message the open run hangs off, so → can still unfold it and
+    // its fold row can still grow: neither may be flushed yet.
+    const items = [item('a', 'user'), item('b', 'assistant'), item('c', 'tool')]
+    expect([...settledItemKeys(items, true)]).toEqual(['a'])
+  })
+
+  it('flushes a finished message once the agent moves on to the next', () => {
+    const items = [
+      item('a', 'user'),
+      item('b', 'assistant'),
+      item('c', 'tool'),
+      item('d', 'assistant'),
+    ]
+    expect([...settledItemKeys(items, true)]).toEqual(['a', 'b', 'c'])
+  })
+
+  it('settles nothing when the transcript is only an open tool run', () => {
+    expect(settledItemKeys([item('c', 'tool')], true).size).toBe(0)
+  })
+})
+
+describe('settledRowCount', () => {
+  const row = (id: string, entryKey: string): TranscriptRow => ({ id, entryKey, spans: [] })
+
+  it('counts the settled PREFIX, stopping at the first live row', () => {
+    const rows = [row('1', 'a'), row('2', 'a'), row('3', 'b'), row('4', 'c')]
+    // 'c' is settled too, but it sits behind live 'b' — rows flush in screen
+    // order, so the scan stops there.
+    expect(settledRowCount(rows, new Set(['a', 'c']))).toBe(2)
+  })
+
+  it('is 0 when the first row is live and everything when all are settled', () => {
+    const rows = [row('1', 'a'), row('2', 'b')]
+    expect(settledRowCount(rows, new Set(['b']))).toBe(0)
+    expect(settledRowCount(rows, new Set(['a', 'b']))).toBe(2)
+  })
+})
+
 describe('rowViewport', () => {
   it('follows the bottom by default, filling the window', () => {
     expect(rowViewport(10, 4, null)).toMatchObject({ start: 7, end: 10, hiddenBelow: 0 })
@@ -812,15 +865,19 @@ describe('itemRows', () => {
     expect(rows).toHaveLength(1)
   })
 
-  it('panels what you said and leaves everything the agent said on the canvas', () => {
-    const panelOf = (kind: TranscriptItem['kind'], nested = false): boolean | undefined =>
+  // Every row is unpainted: a row prints into the terminal's scrollback and is
+  // never repainted, so a fill on it would outlive the frame that drew it. The
+  // sender is carried by the gutter glyph alone.
+  it('marks the sender with a gutter glyph and paints no background', () => {
+    const gutterOf = (kind: TranscriptItem['kind'], nested = false): string | undefined =>
       itemRows({ key: 'a', kind, text: 'x' } as TranscriptItem, 40, { clamp: false, nested })[0]
-        .panel
-    expect(panelOf('user')).toBe(true)
-    expect(panelOf('assistant')).toBe(false)
-    expect(panelOf('notice')).toBe(false)
-    expect(panelOf('tool', true)).toBe(false)
-    expect(panelOf('tool_result', true)).toBe(false)
+        .gutter?.text
+    expect(gutterOf('user')).toBe('◆')
+    expect(gutterOf('assistant')).toBe('●')
+    expect(gutterOf('notice')).toBe('✦')
+    for (const row of itemRows({ key: 'a', kind: 'user', text: 'x' }, 40, { clamp: false })) {
+      expect(row).not.toHaveProperty('panel')
+    }
   })
 
   it('emits one row per line of a multi-line body', () => {

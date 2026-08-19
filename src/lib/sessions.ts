@@ -203,7 +203,6 @@ export function mergeSidebarSessions(
 // still show it.
 export function sessionBarQuery(
   bar: {
-    rows: number
     days: number
     repo: 'cwd' | 'any'
     statuses: 'all' | 'unfinished'
@@ -213,9 +212,9 @@ export function sessionBarQuery(
 ): ListAgentSessionsQuery {
   const query: ListAgentSessionsQuery = {
     author_id: context.authorId ?? undefined,
-    // Enough rows to band and scroll past the visible window, without paying
-    // for a page nobody scrolls to.
-    limit: Math.max(SESSION_BAR_FETCH, bar.rows),
+    // Enough rows to band and scroll past a screenful, without paying for a page
+    // nobody scrolls to.
+    limit: SESSION_BAR_FETCH,
   }
   if (bar.days > 0) query.days = bar.days
   if (bar.repo === 'cwd' && context.detectedRepo) query.repo = context.detectedRepo
@@ -224,7 +223,7 @@ export function sessionBarQuery(
   return query
 }
 
-// How many rows the bar fetches to fill its window from.
+// How many rows the session list fetches to fill its screen from.
 export const SESSION_BAR_FETCH = 50
 
 // Attention transitions: a session that WAS in flight and now waits for a

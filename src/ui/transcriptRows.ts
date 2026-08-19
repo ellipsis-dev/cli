@@ -25,11 +25,8 @@ import { theme } from '../lib/theme'
 export const GUTTER_COLS = 2
 
 // Horizontal pad on EVERY transcript row — the text sits one cell off the
-// pane's edge, like the composer's interior. Universal, not panel-only: a
-// panelled row is one the pad happens to be tinted on, so your messages and
-// the agent's share one left edge instead of stepping in and out by a column.
-// The VERTICAL pad is a blank tinted row above and below each panel block,
-// added in one place (padPanelBlocks) after the rows are assembled.
+// pane's edge, like the composer's interior, so your messages and the agent's
+// share one left edge instead of stepping in and out by a column.
 export const MESSAGE_PAD = 1
 
 // Long bodies collapse to this many lines until ctrl+r (or → on the line)
@@ -53,11 +50,10 @@ export type RowSpan = {
 // there is no "unstyled" span and no `dimColor` — because neither of the two
 // things a bare span would fall back on belongs to us:
 //
-//   * NO COLOUR MEANS THE TERMINAL'S COLOUR. Ink leaves an uncoloured `<Text>`
-//     on the terminal's default foreground, which under a LIGHT theme is the
-//     same near-black as the canvas we paint beneath it. Most spans carry no
-//     colour of their own (the assistant's prose included, via styleFor), so
-//     the bulk of a transcript came out dark on dark. See theme.ts, rule 1.
+//   * NO COLOUR MEANS THE TERMINAL'S COLOUR, which is a colour we do not know:
+//     most spans carry none of their own (the assistant's prose included, via
+//     styleFor), so leaving them bare hands the bulk of the transcript to
+//     whatever the user's theme happens to be. See theme.ts.
 //   * DIM IS OPTIONAL, as far as terminals are concerned: \x1b[2m is dropped
 //     outright by a fair number of them once a 24-bit foreground is also set.
 //     That is the same reason a pulsing mark SWAPS its colour on the off beat
@@ -101,11 +97,7 @@ export type TranscriptRow = {
   // Right-aligned metadata (a ticking duration, a pipeline state). The row's
   // spans are fitted to the columns left over.
   right?: RowSpan
-  // Sits on a message panel: the elevated tint. Only a message YOU sent does.
-  panel?: boolean
-  // A blank separator row. Off-panel it is bare canvas, so the gap between
-  // blocks reads as a gap. On a panel (panel + spacer) it is the block's
-  // vertical pad, and carries the tint.
+  // A blank separator row: the gap between blocks.
   spacer?: boolean
   // The "+N lines" marker under a clamped body. The key that opens it depends
   // on whether the line is highlighted (→) or not (ctrl+r), which the renderer
@@ -165,35 +157,6 @@ export function navKeyOf(row: TranscriptRow): string {
   return row.navKey ?? row.entryKey
 }
 
-// One blank tinted row above and below every maximal run of consecutive panel
-// rows — the vertical pad around a message YOU sent, matching the composer's
-// interior pad. Applied to the ASSEMBLED list rather than inside itemRows so a
-// run of consecutive sends reads as one padded block instead of each bringing
-// its own pad. Pure, for tests.
-export function padPanelBlocks(rows: readonly TranscriptRow[]): TranscriptRow[] {
-  const out: TranscriptRow[] = []
-  // A pad row inherits the edge row's BLOCK, not just its entry: a pad added
-  // below a message's nested tool line belongs to that message, and leaving
-  // navKey off would make the tool line a ↑/↓ stop of its own again.
-  const pad = (edge: TranscriptRow, side: string): TranscriptRow => ({
-    id: `${edge.id}:${side}`,
-    entryKey: edge.entryKey,
-    navKey: edge.navKey,
-    spans: [],
-    panel: true,
-    spacer: true,
-  })
-  for (const row of rows) {
-    const prev = out[out.length - 1]
-    if (row.panel && !prev?.panel) out.push(pad(row, 'padT'))
-    if (!row.panel && prev?.panel) out.push(pad(prev, 'padB'))
-    out.push(row)
-  }
-  const last = out[out.length - 1]
-  if (last?.panel) out.push(pad(last, 'padB'))
-  return out
-}
-
 // One transcript item as its screen rows: the separator above it, its body
 // pre-wrapped to the column it occupies, and the "+N lines" marker when a long
 // body is clamped.
@@ -202,11 +165,6 @@ export function itemRows(
   cols: number,
   opts: { indent?: number; clamp: boolean; nested?: boolean; attach?: boolean },
 ): TranscriptRow[] {
-  // Only what YOU said sits on the lifted, padded panel the composer uses.
-  // Everything the agent says or does — prose, tool chatter, notices — stays
-  // bare on the canvas, so the transcript reads as dense output with your turns
-  // marked out of it.
-  const panel = item.kind === 'user'
   const indent = opts.indent ?? 0
   // Nested lines are marked by their INDENT, so each keeps the glyph that says
   // what it is: ● the call, ⎿ the result that came back. Only a collapsed fold
@@ -240,7 +198,6 @@ export function itemRows(
       indent,
       textPad,
       spans,
-      panel,
       ...extra,
     })
   }
@@ -276,8 +233,8 @@ export function itemRows(
 // came last, YOURS INCLUDED — the agent often opens a turn with a tool call,
 // and a run that belonged to nothing could not be reached with →. But it only
 // INDENTS under something the AGENT said (isAgentSpeech: prose or ✻ thinking):
-// your message is a lifted box, and a ⎿ branch under it would read as work YOU
-// did, so a turn-opening run stays flat and separated by its own blank row.
+// a ⎿ branch under your own message would read as work YOU did, so a
+// turn-opening run stays flat and separated by its own blank row.
 // Only a run at the very top of the transcript, with no message above it at
 // all, belongs to nothing.
 //
@@ -368,15 +325,14 @@ export function isToolActivity(item: TranscriptItem): boolean {
 // Whether a message is one the AGENT said, which is what a tool run may branch
 // off with its ⎿. Its prose and its ✻ thinking both count — with extended
 // thinking on, thinking is what most runs actually follow. Your own message
-// does not: it is a lifted box, and a branch under it reads as work YOU did.
+// does not: a branch under your own message reads as work YOU did.
 export function isAgentSpeech(item: TranscriptItem): boolean {
   return item.kind === 'assistant' || item.kind === 'thinking'
 }
 
 // A live status line — "Generating…", "Running Bash(pytest…)…" — with its
-// ticking readout in the right-hand metadata column. It is the agent working, so
-// it stays bare on the canvas. `hug` drops the spacer above so the line reads as
-// part of the tool burst it belongs to. The duration is a `tick` marker rather
+// ticking readout in the right-hand metadata column. `hug` drops the spacer
+// above so the line reads as part of the tool burst it belongs to. The duration is a `tick` marker rather
 // than text: it changes every second, and baking it in here would re-wrap the
 // transcript once a second.
 export function activityRows(
@@ -410,11 +366,10 @@ export function activityRows(
 }
 
 // An in-flight send, or the streaming assistant response: laid out exactly like
-// the committed record it becomes, so nothing shifts when that record lands —
-// which is why `panel` is the caller's call (your send is panelled, the
-// streaming response is not). `pulse` marks the send as still in flight — the
-// same breathing ⏺ a running tool wears, so a message the agent hasn't answered
-// yet never reads as settled conversation.
+// the committed record it becomes, so nothing shifts when that record lands.
+// `pulse` marks the send as still in flight — the same breathing ⏺ a running
+// tool wears, so a message the agent hasn't answered yet never reads as settled
+// conversation.
 export function pendingMessageRows(
   key: string,
   text: string,
@@ -425,10 +380,8 @@ export function pendingMessageRows(
     bold?: boolean
     right?: string
     pulse?: boolean
-    panel?: boolean
   },
 ): TranscriptRow[] {
-  const panel = opts.panel ?? false
   const width = contentWidth(cols)
   const rows: TranscriptRow[] = [spacerRow(key, `${key}:sp`)]
   const lines = fitLines(text, width)
@@ -442,7 +395,6 @@ export function pendingMessageRows(
           : undefined,
       spans: [{ text: line, dim: opts.dim, bold: opts.bold }],
       right: i === lines.length - 1 && opts.right ? { text: opts.right, dim: true } : undefined,
-      panel,
       pulse: i === 0 ? opts.pulse : undefined,
     })
   }
@@ -528,6 +480,54 @@ export function rowViewport(
     showAbove,
     showBelow,
   }
+}
+
+// ---------------------------------------------------------------- scrollback
+//
+// In scrollback mode the settled part of the transcript is printed ONCE, into
+// the terminal's own scrollback, and never repainted (ink's <Static>). That
+// buys native wheel/trackpad scrolling and native select/copy, and it costs
+// mutability: a row that has been flushed can't re-wrap, re-fold, or take a
+// selection marker. So the flush point has to be a row that CANNOT change
+// again, and these two helpers are what decide it.
+
+// The items whose rows are final. An item's rows can still change for two
+// reasons: a collapsed fold ("Ran 2 tool calls") grows as more tool activity
+// lands under the same message, and the message that owns the open run is the
+// one → can still unfold. So while a turn is in flight the LAST message and
+// everything after it stay live, and everything before it is final. With no
+// turn in flight nothing can grow, so all of it is final.
+//
+// Note this is per-MESSAGE, not per-turn: the moment the agent starts a new
+// message the previous one and its whole tool run flush together, which is what
+// keeps the live frame about one message tall during a long turn. Pure, for
+// tests.
+export function settledItemKeys(
+  items: readonly TranscriptItem[],
+  turnLive: boolean,
+): Set<string> {
+  if (!turnLive) return new Set(items.map((i) => i.key))
+  let lastSpeech = -1
+  for (const [i, item] of items.entries()) if (!isToolActivity(item)) lastSpeech = i
+  // A transcript that is nothing but an open tool run has no settled prefix.
+  if (lastSpeech < 0) return new Set()
+  return new Set(items.slice(0, lastSpeech).map((i) => i.key))
+}
+
+// How many rows off the FRONT of the list are final — the count handed to
+// <Static>. A prefix, deliberately: rows are flushed in screen order, so the
+// first row that can still change stops the scan even if later rows are
+// settled. Pure, for tests.
+export function settledRowCount(
+  rows: readonly TranscriptRow[],
+  settledKeys: ReadonlySet<string>,
+): number {
+  let n = 0
+  for (const row of rows) {
+    if (!settledKeys.has(row.entryKey)) break
+    n++
+  }
+  return n
 }
 
 // The scroll position as (entry, row within that entry) rather than a flat row

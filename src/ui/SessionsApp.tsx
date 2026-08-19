@@ -43,25 +43,30 @@ import {
 } from '../lib/sessions'
 import type { ResolvedSessionBar } from '../lib/config'
 import { randomFact } from '../lib/facts'
-import { SURFACE_ACTIVE, SURFACE_ELEVATED, theme } from '../lib/theme'
+import { inputSurface, theme } from '../lib/theme'
+import { useAltScreen } from './altScreen'
 import { ConnectApp } from './ConnectApp'
 
-// The multi-session UI, a vertical stack of four bands:
-//   1. the header — " ellipsis.dev" top-left; top-right the focused
-//      session's meta (id · model · cost · tokens), or the who-tag when
-//      no session is focused
-//   2. the chat window (the hosted ConnectApp, full width)
-//   3. the text input (the ConnectApp's composer)
-//   4. the session nav — a vertical list: "+ New session" then your sessions,
-//      banded by status (live conversations first) and newest-born first
-//      inside a band
-// This is what a bare `agent`, `agent "prompt"`, and `agent session
-// connect <id>` all open.
+// The multi-session UI — what a bare `agent`, `agent "prompt"`, and `agent
+// session connect <id>` all open. It is a set of SCREENS, not a stack of bands:
 //
-// Focus is modal and esc steps outward: inside the chat esc closes panels,
-// then transcript navigation, then lands on the nav list. ↓ at the composer's
-// last line reaches the nav too; enter (or esc, or ↑ off the top row) hands it
-// back. Exactly one useInput handler is active at a time.
+//   * the chat (the ConnectApp) owns the terminal outright. Its settled
+//     transcript is printed into the terminal's real scrollback, so the wheel,
+//     the trackpad and select/copy are the terminal's own — which is the reason
+//     for the screen split. Nothing may be pinned above or below it: rows
+//     scrolling past would run straight through any such band.
+//   * the session picker (ctrl+j, or esc / ↓ out of the chat) takes over the
+//     ALTERNATE screen: the full session list, with the chat left untouched on
+//     the primary buffer behind it. enter opens a session and returns.
+//   * the transcript browser (ctrl+r, owned by ConnectApp) is the other
+//     alternate-screen view: the windowed transcript with folding and ↑/↓ nav,
+//     which the scrollback view cannot do.
+//   * the new-session composer and the loading placeholder do own their frame,
+//     so they keep the header band and the frame inset.
+//
+// Focus is modal and esc steps outward: inside the chat esc closes the browser,
+// then transcript navigation, then opens the picker. Exactly one useInput
+// handler is active at a time.
 //
 // Liveness: ONE WebSocket — the focused session's, owned by its ConnectApp —
 // plus a 5s REST poll of the session list for the nav. Transcript stores are
@@ -77,8 +82,8 @@ const NAV_NEW_LABEL = '+ New session'
 const HEADER_TITLE = 'ellipsis.dev'
 const TITLE_WIDTH = HEADER_TITLE.length
 
-// Blank canvas cells between the frame and the terminal edge, on all four
-// sides. Everything inside lays out against the inset width/height.
+// Blank cells between the frame and the terminal edge, on all four sides.
+// Everything inside lays out against the inset width/height.
 const APP_INSET = 1
 
 // Extra indent for the session-nav rows, on top of the app inset — the list
@@ -112,10 +117,9 @@ export interface SessionsAppProps {
   // caveat to show in its chat (watch-only reasons ride connectability).
   initialConfigName?: string
   initialNotice?: string
-  // How the session nav (band 4) is scoped: how many rows it shows and which
-  // sessions reach it. `hidden` drops the band entirely, giving its rows to
-  // the chat — focus then never leaves the chat, so esc and ↓ at the bottom
-  // edge do nothing. Set under "sessionBar" in the config file.
+  // Which sessions reach the picker. `hidden` drops it entirely — focus then
+  // never leaves the chat, so esc, ↓ at the bottom edge and ctrl+j do nothing.
+  // Set under "sessionBar" in the config file.
   sessionBar: ResolvedSessionBar
   // Builds the start request for a composer-spawned session (the entry point
   // owns repository detection and defaults).
@@ -155,9 +159,9 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     }
   }, [stdout])
   const height = Math.max(8, termRows - 1)
-  // The app inset: one blank cell of canvas on all four sides of the whole
-  // frame, so nothing sits flush against the terminal edge. The bands lay out
-  // inside it, so every width/height below is the INNER box, not the terminal.
+  // The app inset: one blank cell on all four sides of the whole frame, so
+  // nothing sits flush against the terminal edge. Everything lays out inside it,
+  // so every width/height below is the INNER box, not the terminal.
   const contentCols = Math.max(20, termCols - APP_INSET * 2)
   const contentRows = Math.max(6, height - APP_INSET * 2)
 
@@ -238,8 +242,18 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
 
   // Both openings start with the main pane focused: a connect lands you in
   // the conversation, a bare `agent` lands you in the new-session composer.
-  // 'nav' = the session bar at the bottom owns the keyboard.
+  // 'nav' = the session picker owns the keyboard, which now means it is OPEN:
+  // the session list is a screen of its own on the alternate buffer (ctrl+j, or
+  // ↓/esc out of the chat) rather than a band pinned under every frame.
+  //
+  // It moved there because the chat gave up its viewport: the transcript is
+  // printed into the terminal's real scrollback now, and scrollback is
+  // all-or-nothing — a band pinned below the chat would be overwritten by the
+  // rows scrolling past it. A screen of its own also gives the list the whole
+  // terminal rather than a fixed handful of rows.
   const [focus, setFocus] = useState<'nav' | 'chat'>('chat')
+  const navOpen = focus === 'nav' && !hideNav
+  useAltScreen(navOpen)
   const [mainPane, setMainPane] = useState<MainPane>(
     props.initialSessionId ? { type: 'chat', sessionId: props.initialSessionId } : { type: 'new' },
   )
@@ -250,6 +264,10 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   // ------------------------------ chat entries ------------------------------
 
   const [entries, setEntries] = useState<ReadonlyMap<string, ChatEntry>>(new Map())
+  // Sessions whose chat has already printed into this terminal's scrollback.
+  // The NEXT one to open prints a rule naming itself first, so two conversations
+  // in one scrollback don't run together (see ConnectApp's scrollbackBreak).
+  const shownChats = useRef<Set<string>>(new Set())
   const [loadError, setLoadError] = useState<string | null>(null)
   const loading = useRef(new Set<string>())
 
@@ -393,7 +411,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
 
   useInput(
     (ch, key) => {
-      // The nav is a vertical list: ↑/↓ move the highlight, enter opens the
+      // The picker is a vertical list: ↑/↓ move the highlight, enter opens the
       // highlighted session, esc (or ↑ off the top row) returns to the chat.
       if (key.upArrow || key.downArrow) {
         const idx = selectable.indexOf(selected)
@@ -447,36 +465,43 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
 
   // ------------------------------- rendering --------------------------------
 
-  // Band heights: header = blank + title line + rule (3); nav = rule + the
-  // new-session row + `sessionBar.rows` session rows + hint, or nothing when
-  // hidden. The chat band gets the rest, and a terminal too short for both
-  // drops session rows rather than growing the frame past the screen.
+  // The session picker, open, owns the whole screen: the header, the
+  // "+ New session" row and the hint line, with every remaining row going to
+  // sessions. Nothing caps the list any more — the old row cap existed to stop a
+  // pinned band from eating the chat, and a screen of its own has no such
+  // conflict. `sessionBar` still scopes WHICH sessions are listed.
   const headerRows = 3
-  const navSessionRows = Math.max(1, Math.min(sessionBar.rows, contentRows - 10))
-  const navRows = hideNav ? 0 : 3 + navSessionRows
-  const chatRows = Math.max(4, contentRows - headerRows - navRows)
+  const navSessionRows = Math.max(1, contentRows - headerRows - 3)
+  // The pane height the new-session composer and the loading placeholder get:
+  // everything under the header. (A live chat is not sized here at all — it owns
+  // the terminal and prints into its scrollback.)
+  const paneRows = Math.max(4, contentRows - headerRows)
 
-  // ---- band 1: the header ----
+  // ---- the header ----
   // "ellipsis.dev" pins the left edge as always; the right edge carries the
   // focused session's live meta (id · model · cost · tokens), derived from
   // its transcript store so it ticks like the old footer did. With no
   // session focused the right edge falls back to the who-tag.
+  //
+  // It is NOT pinned above the chat any more. A live chat prints its transcript
+  // into the terminal's scrollback, and a band above a scrolling region is
+  // simply overwritten by it — the two cannot coexist. So the chat runs
+  // headerless (its own footer meta line carries the same identity, which is
+  // why hideMetaLine is dropped below) and the header renders on the screens
+  // that DO own their frame: the new-session pane and the session picker.
   const focusedEntry = mainPane.type === 'chat' ? entries.get(mainPane.sessionId) : undefined
   const metaText = useHeaderMeta(focusedEntry, mainPane, appBase, customerLogin, contentCols - 4)
   const whoText = props.ghLogin
     ? `@${props.ghLogin} in ${customerLogin}`
     : customerLogin
   const header = (
-    // The top bar is a lifted surface, like the composer: the panel tint (not
-    // a rule) is what separates it from the transcript below. Its own 2-cell
-    // pad sits inside the tint, so the bar reads as a band with the title
-    // floating in it rather than type pinned to an edge.
+    // Unpainted, like every other surface: its own blank rows above and below
+    // are what set the title apart, not a tint.
     <Box
       flexDirection="column"
       width={contentCols}
       height={headerRows}
       flexShrink={0}
-      backgroundColor={theme.panel}
       paddingLeft={2}
       paddingRight={2}
       justifyContent="center"
@@ -506,16 +531,16 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     </Box>
   )
 
-  // ---- bands 2+3: the chat window + its composer (one hosted component) ----
+  // ---- the main screen: the chat, or the new-session composer ----
   let main: React.ReactElement
   if (mainPane.type === 'new') {
     main = (
       // Full width, no side padding: the prompt input's rules span the
       // terminal exactly like the header's and the nav's do.
-      <Box width={contentCols} height={chatRows} flexDirection="column" overflow="hidden">
+      <Box width={contentCols} height={paneRows} flexDirection="column" overflow="hidden">
         <NewSessionPane
           width={contentCols}
-          height={chatRows}
+          height={paneRows}
           focused={focus === 'chat'}
           starting={starting}
           error={startError}
@@ -535,7 +560,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       main = (
         <Box
           width={contentCols}
-          height={chatRows}
+          height={paneRows}
           flexDirection="column"
           paddingLeft={2}
           paddingRight={1}
@@ -549,50 +574,47 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
         </Box>
       )
     } else {
+      // Anything already printed below means this chat is arriving under another
+      // conversation, so it opens with a rule naming itself. Recorded before the
+      // render so the flag is stable for this mount: the ref is what makes the
+      // FIRST chat of the process print no break.
+      const needsBreak = shownChats.current.size > 0 && !shownChats.current.has(mainPane.sessionId)
+      shownChats.current.add(mainPane.sessionId)
       main = (
-        // The chat window + composer, full width (bands 2 and 3 live inside
-        // the hosted ConnectApp: transcript above, input box at the bottom).
-        // overflow=hidden clips a mis-estimated transcript slice instead of
-        // letting the frame outgrow the terminal (which scrolls Ink's render
-        // region and smears stale rows on every hop). The meta line is
-        // hidden here — the header renders it.
-        <Box
-          width={contentCols}
-          height={chatRows}
-          flexDirection="column"
-          overflow="hidden"
-        >
-          <ConnectApp
-            key={mainPane.sessionId}
-            api={api}
-            sessionId={mainPane.sessionId}
-            store={entry.store}
-            openSocket={openSocket}
-            canSend={entry.canSend}
-            minRenderFeedSeq={0}
-            sessionUrl={entry.url}
-            initialNotice={entry.notice}
-            model={entry.model}
-            configName={entry.configName}
-            paneWidth={contentCols}
-            paneHeight={chatRows}
-            focused={focus === 'chat'}
-            onFocusNav={focusNav}
-            onDone={refreshOnDone}
-            hideMetaLine
-          />
-        </Box>
+        // The chat, owning the terminal rather than sitting in a pane: no
+        // width/height box around it and no pane props, which is what puts
+        // ConnectApp in its scrollback view (settled transcript printed into the
+        // terminal's own scrollback, native wheel and select/copy, and ctrl+r for
+        // the full-screen browser). It renders its own meta line again, since
+        // there is no header band above it to carry one.
+        <ConnectApp
+          key={mainPane.sessionId}
+          scrollbackBreak={needsBreak}
+          api={api}
+          sessionId={mainPane.sessionId}
+          store={entry.store}
+          openSocket={openSocket}
+          canSend={entry.canSend}
+          minRenderFeedSeq={0}
+          sessionUrl={entry.url}
+          initialNotice={entry.notice}
+          model={entry.model}
+          configName={entry.configName}
+          focused={focus === 'chat'}
+          onFocusNav={focusNav}
+          onDone={refreshOnDone}
+        />
       )
     }
   }
 
-  // ---- band 4: the session nav ----
-  // A vertical list: the pinned new-session row, then `sessionBar.rows` session
-  // rows (status dot + description + a dim age tag) in sortSidebarSessions
-  // order — status band, newest-born first — windowed so the highlight parks
-  // on the second-to-last row and the list scrolls under it. The band's height
-  // is fixed, so a short list leaves blank rows rather than moving the chat
-  // above it.
+  // ---- the session picker ----
+  // A vertical list on a screen of its own (the alternate buffer): the pinned
+  // new-session row, then the session rows (status dot + description + a dim age
+  // tag) in sortSidebarSessions order — status band, newest-born first —
+  // windowed so the highlight parks near the bottom and the list scrolls under
+  // it. It gets the whole terminal now, so the window is only reached by lists
+  // longer than the screen.
   const selectedRowIdx = Math.max(0, rows.findIndex((s) => s.id === selected))
   const win = navSlice(rows.length, navSessionRows, selectedRowIdx)
   const navFocused = focus === 'nav'
@@ -602,16 +624,16 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     // pad is on the band, so every row (and the hint) shares one left edge.
     <Box
       flexDirection="column"
-      height={navRows}
-      flexShrink={0}
+      flexGrow={1}
+      flexShrink={1}
       paddingLeft={NAV_GUTTER}
       paddingRight={NAV_GUTTER}
     >
       <Box height={1} flexShrink={0} />
-      {/* The highlighted row — this one and the session rows below — takes
-          the active surface across its full width (the same lighter panel
-          the focused composer sits on), never the inverse bar. */}
-      <Box backgroundColor={selected === 'new' && navFocused ? SURFACE_ACTIVE : undefined}>
+      {/* The highlighted row — this one and the session rows below — is marked
+          by the cyan ▶ in its gutter and nothing else. No bar: a fill would be
+          one more surface to keep in step with the terminal's own. */}
+      <Box>
         <Box flexGrow={1}>
           <Text wrap="truncate">
             {selected === 'new' && navFocused ? (
@@ -638,10 +660,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
         const meta = `${rowMeta(s)}${attention.has(s.id) ? ' · needs you' : ''}`
         const descW = Math.max(8, contentCols - NAV_GUTTER * 2 - meta.length - 6)
         return (
-          // The highlighted row's background spans the whole width — the
-          // meta tag included — on the same active surface as everywhere
-          // else, replacing the old inverse (bone-white) description bar.
-          <Box key={s.id} backgroundColor={cursorHere ? SURFACE_ACTIVE : undefined}>
+          <Box key={s.id}>
             <Box flexGrow={1} flexShrink={1}>
               <Text wrap="truncate">
                 <Text color={cursorHere ? theme.cursor : g.color} dimColor={!cursorHere && g.dim}>
@@ -680,31 +699,39 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
         </Text>
       ) : (
         <Text wrap="truncate" color={theme.muted}>
-          {navFocused
-            ? `↑↓ move · enter open · n new · esc chat · q quit${
-                win.end < rows.length ? ` · ${rows.length - win.end} more below` : ''
-              }`
-            : '↓/esc: sessions'}
+          {`↑↓ move · enter open · n new · esc back to the chat · q quit${
+            win.end < rows.length ? ` · ${rows.length - win.end} more below` : ''
+          }`}
         </Text>
       )}
     </Box>
   )
 
+  // The picker, open, IS the screen: it took over the alternate buffer, so it
+  // renders alone (header + list) and the chat is left untouched on the primary
+  // buffer, waiting behind it.
+  if (navOpen) {
+    return (
+      <Box flexDirection="column" height={height} padding={APP_INSET}>
+        {header}
+        {nav}
+      </Box>
+    )
+  }
+
+  // A LIVE CHAT owns the terminal outright: no box around it, no header, no
+  // inset. All three would be frame furniture around a region that prints into
+  // the terminal's scrollback, and the rows scrolling past would run straight
+  // through them.
+  const chatOwnsScreen = mainPane.type === 'chat' && entries.has(mainPane.sessionId)
+  if (chatOwnsScreen) return main
+
+  // The remaining screens (the new-session composer, a chat still loading) do
+  // own their frame, so they keep the inset and the header.
   return (
-    // The brand canvas, painted edge to edge: every band sits on it, and the
-    // composer's panel is the one surface lifted above it. Painting the root
-    // (rather than letting the terminal's own background show through) is what
-    // makes the charcoal→panel step read as intentional depth on ANY terminal
-    // theme instead of only on a dark one.
-    <Box
-      flexDirection="column"
-      minHeight={height}
-      backgroundColor={theme.canvas}
-      padding={APP_INSET}
-    >
+    <Box flexDirection="column" minHeight={height} padding={APP_INSET}>
       {header}
       {main}
-      {!hideNav && nav}
     </Box>
   )
 }
@@ -795,10 +822,9 @@ const PICKER_ROWS: readonly PickerRow[] = [
 // The new-session pane, mirroring the dashboard's home composer
 // (app.ellipsis.dev/[login]): a centered "What are we shipping today?"
 // heading floating in the empty space, and the input panel docked at the
-// bottom — the Repository / Agent / Model rows inside the tinted box with
-// the ❯ prompt line beneath them (the dashboard card's controls-inside-the-
-// composer shape). The ❯ glyph marks whichever row is selected; the whole
-// panel steps to the lighter active surface while any row has focus. ↑ from
+// bottom — the Repository / Agent / Model rows above the ❯ prompt line (the
+// dashboard card's controls-inside-the-composer shape). The ❯ glyph marks
+// whichever row is selected. ↑ from
 // the prompt climbs into the option rows, ↑/↓ walk them (↓ off the last
 // returns to the prompt), →/enter unfolds a row's option list in place,
 // inside the panel ([x] marks the pick). Inside an open list ↑/↓ walk, → (or
@@ -1074,6 +1100,11 @@ function NewSessionPane({
   // minus the heading, notices, and the panel's other rows (~12); the panel
   // grows upward into the spacer above, so the prompt never moves.
   const dropdownCapacity = Math.max(3, height - 12)
+  // Whether the input has room for its 1-row perimeter: the three picker rows,
+  // the blank one above the prompt, the prompt's own two, and a pad row top AND
+  // bottom. All or nothing, deliberately — a pad on top with none underneath
+  // reads as a box that forgot to close, which is worse than no pad at all.
+  const inputPad = height - (PICKER_ROWS.length + 1 + 2) >= 2 ? 1 : 0
   // The wrap width inside the input box: the pane minus the box's own left
   // and right padding (the "▶ " prompt is part of the wrapped text).
   const inputWidth = Math.max(8, width - COMPOSER_PAD_X * 2)
@@ -1093,44 +1124,53 @@ function NewSessionPane({
     // pushing the input around.
     // No pane padding: the input's rules span the full terminal width like
     // the header's and the nav's (the rows inside carry their own indents).
+    // The heading and the fact are DECORATION, and they are what yields when the
+    // terminal is short: both sit in an overflow-hidden box that shrinks to
+    // nothing, so the input below keeps every row it asked for — including the
+    // blank one under the prompt. Squeezing the input instead would eat that row
+    // and leave the box looking open at the bottom.
     <Box width={width} height={height} flexDirection="column">
-      <Box flexGrow={1} />
-      <Box justifyContent="center">
-        <Text bold color={theme.foreground}>
-          What are we shipping today?
-        </Text>
-      </Box>
-      {/* The fact box is sized to the text (capped so long facts wrap at a
-          readable measure) so short facts sit centered, not left-aligned
-          inside a fixed column. */}
-      <Box justifyContent="center" paddingTop={1}>
-        <Box width={Math.min(fact.length, Math.max(8, width - 4), 72)}>
-          <Text color={theme.muted} wrap="wrap">
-            {fact}
+      <Box flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden">
+        <Box flexGrow={1} />
+        <Box justifyContent="center" flexShrink={0}>
+          <Text bold color={theme.foreground}>
+            What are we shipping today?
           </Text>
         </Box>
+        {/* The fact box is sized to the text (capped so long facts wrap at a
+            readable measure) so short facts sit centered, not left-aligned
+            inside a fixed column. */}
+        <Box justifyContent="center" paddingTop={1} flexShrink={0}>
+          <Box width={Math.min(fact.length, Math.max(8, width - 4), 72)}>
+            <Text color={theme.muted} wrap="wrap">
+              {fact}
+            </Text>
+          </Box>
+        </Box>
+        <Box flexGrow={1} />
       </Box>
-      <Box flexGrow={1} />
       {error && <Text color={theme.error}> ✗ {error}</Text>}
       {starting && <Text color={theme.muted}> ✻ Starting session…</Text>}
-      {/* The input panel — the SAME surface as the chat composer, stepping
-          onto the lighter active surface while ANY of its four rows is where
-          you are (a picker row, its open option list, or the prompt), no
-          rules, with a uniform 1-cell pad inside the tint. The run controls
-          live INSIDE it, one row each ABOVE the prompt (the dashboard card's
-          controls-inside-the-composer shape): Repository, Agent, Model, a
-          blank spacer row, then the prompt line. The ❯ selection glyph marks
-          whichever row is selected. →/enter opens a picker row IN PLACE —
-          its value collapses to a bare label and the option list unfolds
-          indented beneath it, inside the panel (the panel grows upward into
-          the spacer above; the prompt never moves). Repositories
+      {/* The input, laid out like the chat composer: the run controls one row
+          each ABOVE the prompt (the dashboard card's controls-inside-the-
+          composer shape) — Repository, Agent, Model, a blank row, then the
+          prompt line. The ❯ selection glyph marks whichever row is selected.
+          →/enter opens a picker row IN PLACE: its value collapses to a bare
+          label and the option list unfolds indented beneath it, growing upward
+          into the space above so the prompt never moves. Repositories
           multi-select ([x] toggles), the others pick one. */}
       <Box
         flexDirection="column"
-        backgroundColor={focused && !starting ? SURFACE_ACTIVE : SURFACE_ELEVATED}
+        backgroundColor={inputSurface}
         alignItems="flex-start"
-        paddingY={1}
+        paddingY={inputPad}
         paddingX={COMPOSER_PAD_X}
+        // Never squeezed. The pane clips its overflow, and the input is the LAST
+        // child, so without this a pane too short for the content above it takes
+        // the difference out of the input's bottom edge — which reads as a box
+        // with a top pad and no bottom one, its tint stopping flush against the
+        // prompt. The squeeze belongs on the spacers and the fact above instead.
+        flexShrink={0}
       >
         {PICKER_ROWS.map((r, i) => {
           const active = focused && openPicker === null && row === i
