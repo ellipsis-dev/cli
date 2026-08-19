@@ -207,11 +207,12 @@ describe('ConnectApp — the scrollback view', () => {
     expect(text).toContain('─')
   })
 
-  it('paints no background, so the terminal\'s own shows through', async () => {
+  it('paints no background on a FLUSHED row, so scrollback carries no stale fill', async () => {
     // A row printed into scrollback is never repainted, so a fill on it outlives
     // the frame that drew it: stale bands survive a resize or a shorter frame
-    // with nothing able to clean them up. The app therefore emits no background
-    // SGR at all (48;2;r;g;b truecolor, 48;5;n indexed, or 40-47/100-107).
+    // with nothing able to clean them up. The composer is the one painted
+    // surface, and it lives in the live frame — so the assertion is about the
+    // flushed rows specifically, not about the byte stream as a whole.
     const store = seededStore(
       [lifecycle('sandbox_ready', {}), say('hello'), say('and again')],
       'waiting',
@@ -219,14 +220,50 @@ describe('ConnectApp — the scrollback view', () => {
     const { stream, output } = fakeTty()
     const app = render(chat(store), { stdout: stream, stdin: fakeStdin(), patchConsole: false })
     await settle()
-    costTick(store, 50_000)
-    await settle()
     app.unmount()
+    // The flushed rows are everything written before the live frame's first
+    // cursor-hide, which is where ink starts painting the region it owns.
     const raw = output()
-    expect(raw).not.toMatch(/\u001B\[[0-9;]*4[0-7]m/)
-    expect(raw).not.toMatch(/\u001B\[[0-9;]*10[0-7]m/)
-    expect(raw).not.toContain('48;2;')
-    expect(raw).not.toContain('48;5;')
+    const flushed = raw.slice(0, raw.indexOf('\u001B[?25l'))
+    expect(flushed).toContain('hello')
+    expect(flushed).not.toMatch(/\u001B\[[0-9;]*4[0-7]m/)
+    expect(flushed).not.toMatch(/\u001B\[[0-9;]*10[0-7]m/)
+    expect(flushed).not.toContain('48;2;')
+    expect(flushed).not.toContain('48;5;')
+  })
+
+  it('opens the slash-command menu as you type, and completes with tab', async () => {
+    const store = seededStore([lifecycle('sandbox_ready', {}), say('hi')], 'waiting')
+    const { stream, output } = fakeTty()
+    const stdin = fakeStdin()
+    const app = render(chat(store), { stdout: stream, stdin, patchConsole: false })
+    await settle()
+    const before = output().length
+
+    // A bare slash offers every command, with its description.
+    stdin.write('/')
+    await settle()
+    let frame = stripAnsi(output().slice(before))
+    expect(frame).toContain('/stop')
+    expect(frame).toContain('/transcript')
+    expect(frame).toContain('interrupt the agent')
+
+    // Typing narrows it to one. Measured from HERE, not from the start: the byte
+    // stream keeps every earlier frame, so a cumulative slice would still hold
+    // the full list printed a moment ago.
+    const beforeNarrow = output().length
+    stdin.write('tr')
+    await settle()
+    frame = stripAnsi(output().slice(beforeNarrow))
+    expect(frame).toContain('/transcript')
+    expect(frame).not.toContain('/stop')
+
+    // Tab completes the highlighted command into the input.
+    const beforeTab = output().length
+    stdin.write('\t')
+    await settle()
+    expect(stripAnsi(output().slice(beforeTab))).toContain('/transcript')
+    app.unmount()
   })
 
   it('does not capture the mouse in the chat, so the terminal keeps the wheel', async () => {

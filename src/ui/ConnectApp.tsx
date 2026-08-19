@@ -36,8 +36,15 @@ import { applyEditShortcut } from '../lib/editing'
 import { CTRL_C_QUIT_HINT, useCtrlCQuit } from './ctrlC'
 import { fitLines, visibleWidth } from '../lib/markdown'
 import { SELECTION_GLYPH } from '../lib/sessions'
-import { theme } from '../lib/theme'
+import { inputSurface, theme } from '../lib/theme'
 import { useAltScreen } from './altScreen'
+import {
+  completedText,
+  isCommandInput,
+  matchCommands,
+  resolveCommand,
+  type SlashCommand,
+} from './commands'
 import { VERSION } from '../lib/constants'
 import {
   activityRows,
@@ -259,6 +266,11 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
 
   const [elapsed, setElapsed] = useState(0)
   const [notice, setNotice] = useState<string | null>(props.initialNotice ?? null)
+  // The slash-command menu's highlighted index. The menu itself is derived from
+  // what is typed (see `menu` below) rather than stored — it is open exactly when
+  // the line starts with `/` and something still matches — so this is the only
+  // state it needs, and it resets to the top whenever the matches change.
+  const [menuIndex, setMenuIndex] = useState(0)
   // The composer's text and caret position (0..text.length), one state so
   // rapid keypresses between renders can't desync them. Left/right move the
   // caret, up/down walk the lines of a multi-line input like a normal text
@@ -633,13 +645,35 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       const text = raw.trim()
       setComposer({ text: '', cursor: 0 })
       if (!text) return
-      if (text === '/exit' || text === '/quit') {
-        exit()
-        return
+      // A leading slash claims the line for the CLI. An unknown one is REFUSED,
+      // not forwarded: a typo'd command sent on as prose is a message you did
+      // not mean to send, and the agent cannot tell it from one you did.
+      if (isCommandInput(text)) {
+        const command = resolveCommand(text)
+        if (!command) {
+          setNotice(`✗ no such command: ${text.split(/\s/)[0]} · type / to see them`)
+          return
+        }
+        if (command.id === 'exit') {
+          exit()
+          return
+        }
+        if (command.id === 'transcript') {
+          setWindowed(true)
+          return
+        }
+        if (command.id === 'sessions') {
+          if (props.onFocusNav) props.onFocusNav()
+          else setNotice('no other sessions here · this is a single-session connect')
+          return
+        }
       }
+      // /stop is the one command that talks to the server, so it rides the async
+      // path below with the sends.
+      const stopping = resolveCommand(text)?.id === 'stop'
       void (async () => {
         try {
-          if (text === '/stop') {
+          if (stopping) {
             const { session: s } = await api.sessions.stop(sessionId)
             setNotice(null)
             setChatNotes((prev) => [
@@ -679,7 +713,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         }
       })()
     },
-    [api, exit, pump, sessionId],
+    [api, exit, pump, sessionId, props.onFocusNav],
   )
 
   // The composer renders whenever sending is possible.
@@ -691,6 +725,29 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // driven entirely by keys, esc included, so gating input on the composer
   // would strand you on the alt screen.
   const inputActive = (composerVisible || windowed) && focused
+
+  // The slash-command menu: the commands the typed line still matches. Derived,
+  // not stored, so it cannot get out of step with the input — it is open exactly
+  // while the line starts with `/` and something matches, and typing a character
+  // that matches nothing closes it (the line is then just prose, and submit will
+  // say so).
+  const menu = useMemo(
+    () => (composerVisible ? matchCommands(composer.text) : []),
+    [composerVisible, composer.text],
+  )
+  const menuOpen = menu.length > 0
+  // Clamped rather than stored-and-corrected: the matches shrink as you type, and
+  // an index left pointing past the end would highlight nothing.
+  const menuAt = Math.min(menuIndex, Math.max(0, menu.length - 1))
+  // Back to the top whenever the match set changes, so the highlight is on the
+  // best match for what you have typed rather than wherever it was left.
+  useEffect(() => {
+    setMenuIndex(0)
+  }, [menu.length])
+  const complete = useCallback((command: SlashCommand): void => {
+    const text = completedText(command)
+    setComposer({ text, cursor: text.length })
+  }, [])
 
   // Mouse reporting (SGR) — the browser's wheel scrolling, and ONLY the
   // browser's. It owns the alternate screen, whose scrollback is empty by
@@ -770,19 +827,8 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // the notice line, which is where the app's one line of transient guidance
   // already lives.
   const browserNotice = '↑↓ scroll · → open · ← close · ctrl+r expand all · esc back to the chat'
-  // With nothing else to say, the chat names the screens it can open — neither
-  // is visible from here, so without this they are undiscoverable. Only where
-  // the keyboard actually reaches us: a headless `--no-input` follow (piped into
-  // a script or an agent) would otherwise advertise keys nothing can press.
-  const restingHint = isRawModeSupported
-    ? `ctrl+r transcript${props.onFocusNav ? ' · ctrl+j sessions' : ''}`
-    : null
-  const shownNotice = windowed
-    ? browserNotice
-    : ctrlCArmed
-      ? CTRL_C_QUIT_HINT
-      : (notice ?? restingHint)
-  const { viewBudget, padRows, composerRows, noticeRows } = useMemo(() => {
+  const shownNotice = windowed ? browserNotice : ctrlCArmed ? CTRL_C_QUIT_HINT : notice
+  const { viewBudget, padRows, composerRows, noticeRows, menuRows } = useMemo(() => {
     // Both wrapping parts of the footer are measured as the rows they will
     // actually OCCUPY, not as the newlines they contain: a notice ("stream
     // error: …") and a typed paragraph both wrap, and counting either as one
@@ -799,6 +845,12 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       ? Math.max(0, Math.min(fitLines(`· ${shownNotice}`, cols).length, free - 2))
       : 0
     free -= noticeRows
+    // The command menu, one row per match, budgeted like everything else: it
+    // renders INSIDE the frame, so rows it takes are rows the chat yields. In a
+    // terminal with no room for it the list is cut short rather than pushing the
+    // composer off the bottom.
+    const menuRows = Math.max(0, Math.min(menu.length, free - 3))
+    free -= menuRows
     // The composer: its interior grows with the input, plus the 1-cell pad above
     // and below. In a terminal too short for all of it the pad goes, then the
     // interior shrinks toward a single row.
@@ -810,7 +862,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     // padding; the chat is content-sized and grows downward, so it has no window
     // edge to protect and takes none.
     const pad = windowed ? Math.max(0, Math.min(1, forContent - 1)) : 0
-    return { viewBudget: forContent - pad, padRows: pad, composerRows, noticeRows }
+    return { viewBudget: forContent - pad, padRows: pad, composerRows, noticeRows, menuRows }
   }, [
     rows,
     cols,
@@ -819,6 +871,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     composerVisible,
     composer.text,
     shownNotice,
+    menu.length,
   ])
 
   // The live tail: the in-progress response and the one activity line under
@@ -1199,6 +1252,36 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         if (windowed) scrollByRows(key.pageUp ? -view.capacity : view.capacity)
         return
       }
+      // The command menu is the INNERMOST modal, so it takes its keys before
+      // anything else: ↑/↓ walk it, tab/enter complete the highlighted command,
+      // esc dismisses it by clearing the slash that opened it. Everything else
+      // (typing, editing, ctrl+*) falls through to the composer below, which is
+      // what keeps the menu a suggestion rather than a mode you get stuck in.
+      if (menuOpen) {
+        if (key.upArrow || key.downArrow) {
+          const next = key.upArrow ? menuAt - 1 : menuAt + 1
+          // Wraps, because the list is short enough that walking off one end
+          // meaning "go to the other" is faster than reversing direction.
+          setMenuIndex((next + menu.length) % menu.length)
+          return
+        }
+        if (key.tab) {
+          complete(menu[menuAt])
+          return
+        }
+        // Enter COMPLETES rather than submits while the line is still a partial
+        // command ("/tr"), and submits once it names one exactly ("/transcript"):
+        // otherwise enter on a highlighted suggestion would refuse the very
+        // command the menu is pointing at.
+        if (key.return && !resolveCommand(composer.text)) {
+          complete(menu[menuAt])
+          return
+        }
+        if (key.escape) {
+          setComposer({ text: '', cursor: 0 })
+          return
+        }
+      }
       if (key.escape) {
         // Modal-first, outermost modal first: the browser is a screen of its
         // own, so esc closes it before anything inside it is considered.
@@ -1511,13 +1594,33 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             <Text color={theme.muted}>· {shownNotice}</Text>
           </Box>
         )}
-        {/* The composer. Unpainted, like everything else: what marks it as the
-            input is the ▶ prompt and the caret, not a tint. It is pinned to the
-            rows budgeted for it and clips, so a terminal too short for the whole
-            input scrolls it rather than painting the overflow across the meta
-            line. */}
+        {/* The slash-command menu, directly above the input it completes: one
+            row per match, the highlighted one wearing the same cyan ▶ as every
+            other selection in the app. It sits inside the budgeted rows
+            (menuRows), so a long list is cut rather than pushing the composer
+            off the bottom of the frame. */}
+        {menuRows > 0 && (
+          <Box flexDirection="column" height={menuRows} flexShrink={0} overflow="hidden">
+            {menu.slice(0, menuRows).map((command, i) => (
+              <Box key={command.id} width={cols}>
+                <Text wrap="truncate">
+                  <Text color={theme.cursor}>{i === menuAt ? SELECTION_GLYPH : ' '}</Text>{' '}
+                  <Text
+                    color={i === menuAt ? theme.foreground : theme.muted}
+                    bold={i === menuAt}
+                  >{`/${command.name}`}</Text>
+                  <Text color={theme.muted}>{`  ${command.detail}`}</Text>
+                </Text>
+              </Box>
+            ))}
+          </Box>
+        )}
+        {/* The composer. It is pinned to the rows budgeted for it and clips, so a
+            terminal too short for the whole input scrolls it rather than painting
+            the overflow across the meta line. */}
         {composerVisible && (
           <Box
+            backgroundColor={inputSurface}
             height={composerRows}
             flexShrink={0}
             overflow="hidden"
@@ -1665,7 +1768,11 @@ function sandboxRows(o: {
   rows.push({
     id: `${key}:hdr`,
     entryKey: key,
-    spans: [{ text: '✦ Connected to ellipsis.dev', bold: true }],
+    // The ✦ rides the GUTTER, like every other row's mark. Baked into the text
+    // span it sits one gutter-width right of every glyph below it, which reads
+    // as a stray indent on the app's very first line.
+    gutter: { text: '✦', dim: true },
+    spans: [{ text: 'Connected to ellipsis.dev', bold: true }],
   })
   rows.push(spacerRow(key, `${key}:hdr-sp`))
   const ready = (sandbox?.done ?? false) && !infraActivity

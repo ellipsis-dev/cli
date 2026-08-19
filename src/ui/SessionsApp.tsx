@@ -43,7 +43,7 @@ import {
 } from '../lib/sessions'
 import type { ResolvedSessionBar } from '../lib/config'
 import { randomFact } from '../lib/facts'
-import { theme } from '../lib/theme'
+import { inputSurface, theme } from '../lib/theme'
 import { useAltScreen } from './altScreen'
 import { ConnectApp } from './ConnectApp'
 
@@ -1149,6 +1149,7 @@ function NewSessionPane({
           multi-select ([x] toggles), the others pick one. */}
       <Box
         flexDirection="column"
+        backgroundColor={inputSurface}
         alignItems="flex-start"
         paddingY={1}
         paddingX={COMPOSER_PAD_X}
