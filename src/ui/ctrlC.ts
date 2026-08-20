@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useApp, useInput } from 'ink'
 
 // ctrl+c, everywhere in the UI: the first press interrupts (whatever the pane
@@ -10,10 +10,19 @@ import { useApp, useInput } from 'ink'
 // Every pane that owns the keyboard mounts this, and only the pane with focus
 // is active — so the armed flag is per-pane, and one press can't arm a handler
 // that a later press won't reach. Returns whether the quit is armed, for the
-// pane to prompt with.
+// pane to prompt with. The arm expires on its own after a few seconds, so the
+// prompt never lingers and a much-later ctrl+c interrupts again instead of
+// quitting.
+const ARM_MS = 3000
+
 export function useCtrlCQuit(active: boolean, onInterrupt?: () => void): boolean {
   const { exit } = useApp()
   const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    if (!armed) return
+    const t = setTimeout(() => setArmed(false), ARM_MS)
+    return () => clearTimeout(t)
+  }, [armed])
   useInput(
     (ch, key) => {
       if (key.ctrl && ch === 'c') {
