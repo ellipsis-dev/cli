@@ -815,14 +815,14 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       if (working && canSend) submit('/stop')
     },
   )
-  // The notice bar doubles as the ctrl+c prompt: armed, it says what a second
-  // press does, so the quit is never a surprise.
+  // Armed, the meta line below the composer becomes the ctrl+c prompt (it
+  // says what a second press does), and the arm expires after a few seconds.
   // The browser is for reading, not sending: it drops the composer for the rows
   // (a whole screen of conversation is the point of opening it) and says so on
   // the notice line, which is where the app's one line of transient guidance
   // already lives.
   const browserNotice = '↑↓ scroll · → open · ← close · ctrl+r expand all · esc back to the chat'
-  const shownNotice = windowed ? browserNotice : ctrlCArmed ? CTRL_C_QUIT_HINT : notice
+  const shownNotice = windowed ? browserNotice : notice
   const { viewBudget, padRows, composerRows, noticeRows, menuRows } = useMemo(() => {
     // Both wrapping parts of the footer are measured as the rows they will
     // actually OCCUPY, not as the newlines they contain: a notice ("stream
@@ -1479,9 +1479,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const totalStr = `$${(serverCostUsd ?? cost.total ?? 0).toFixed(2)}`
   // Sized to fit by construction: Ink measures the OSC-8 hyperlink's
   // invisible URL bytes as width, so a linked id only ships when the whole
-  // line — escape bytes included — fits the pane; otherwise the id renders
-  // as plain text, shortened if even that overflows. Never rely on Ink
-  // wrapping/truncating this line: it's budgeted at exactly one row.
+  // line — escape bytes included — fits the pane; otherwise the line renders
+  // as plain text, cut to the pane with a … if even that overflows. Never
+  // rely on Ink wrapping/truncating this line: it's budgeted at exactly one
+  // row.
   const metaParts = (id: string): string[] => [
     `${statusWord} · ${totalStr} total`,
     ...(props.model ? [props.model] : []),
@@ -1491,12 +1492,13 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   ]
   const linked = metaParts(hyperlink(props.sessionUrl, sessionId)).join(' · ')
   const plain = metaParts(sessionId).join(' · ')
-  const metaLine =
-    linked.length < cols
+  const metaLine = ctrlCArmed
+    ? CTRL_C_QUIT_HINT
+    : linked.length < cols
       ? linked
       : plain.length < cols
         ? plain
-        : metaParts(`${sessionId.slice(0, 20)}…`).join(' · ')
+        : `${plain.slice(0, Math.max(0, cols - 2))}…`
   return (
     // Hosted panes pin BOTH dimensions: without the width the root sizes to
     // its widest child (the unwrapped meta line) and smears rows across the
