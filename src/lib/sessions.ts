@@ -226,6 +226,28 @@ export function sessionBarQuery(
 // How many rows the session list fetches to fill its screen from.
 export const SESSION_BAR_FETCH = 50
 
+// The picker header's description of the bar's active filters — the answer to
+// "where are the rest of my sessions?". Mirrors sessionBarQuery exactly: a
+// clause appears here iff the matching filter went into the query. null when
+// the list is unfiltered.
+export function sessionBarFilterLabel(
+  bar: {
+    days: number
+    repo: 'cwd' | 'any'
+    statuses: 'all' | 'unfinished'
+    sources: string[] | undefined
+  },
+  detectedRepo: string | null,
+): string | null {
+  const clauses: string[] = []
+  if (bar.repo === 'cwd' && detectedRepo) clauses.push(detectedRepo)
+  if (bar.days > 0) clauses.push(`last ${bar.days === 1 ? 'day' : `${bar.days} days`}`)
+  if (bar.statuses === 'unfinished') clauses.push('unfinished')
+  if (bar.sources) clauses.push(`source ${bar.sources.join('/')}`)
+  if (clauses.length === 0) return null
+  return `filtering to ${clauses.join(' · ')}`
+}
+
 // Attention transitions: a session that WAS in flight and now waits for a
 // human (waiting/sleeping/idle) deserves the sidebar dot. Pure step function
 // over consecutive poll snapshots.
