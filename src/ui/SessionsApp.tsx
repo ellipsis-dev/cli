@@ -35,6 +35,7 @@ import {
   rowMeta,
   rowStatusWord,
   navSlice,
+  sessionBarFilterLabel,
   sessionBarQuery,
   sessionSource,
   SELECTION_GLYPH,
@@ -494,6 +495,10 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   const whoText = props.ghLogin
     ? `@${props.ghLogin} in ${customerLogin}`
     : customerLogin
+  // Over the picker the right edge answers "why is this list short?" instead
+  // of carrying the focused session's meta: the filters are why sessions are
+  // missing, and the list is the one screen where that question comes up.
+  const filterText = navOpen ? sessionBarFilterLabel(sessionBar, props.detectedRepo) : null
   const header = (
     // Unpainted, like every other surface: its own blank rows above and below
     // are what set the title apart, not a tint.
@@ -524,7 +529,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
             {/* Armed, the bar carries the ctrl+c prompt: the nav and the
                 new-session form have no notice line of their own, and the
                 header is the one band always on screen. */}
-            {navArmed || paneArmed ? CTRL_C_QUIT_HINT : (metaText ?? whoText)}
+            {navArmed || paneArmed ? CTRL_C_QUIT_HINT : (filterText ?? metaText ?? whoText)}
           </Text>
         </Box>
       </Box>
