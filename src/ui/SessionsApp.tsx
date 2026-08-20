@@ -27,9 +27,11 @@ import {
   attentionFlip,
   compactTokens,
   composerModelOptions,
+  composerPickerRows,
   configDisplayName,
   connectability,
   type ComposerChoices,
+  type ComposerModel,
   rowDescription,
   rowGlyph,
   rowMeta,
@@ -94,6 +96,11 @@ const NAV_GUTTER = 1
 // Horizontal breathing room inside the composer panel — wider than the 1-cell
 // vertical pad so the caret and text start well clear of the panel edge.
 const COMPOSER_PAD_X = 2
+
+// Everything an open picker's option row prints before its label: the row
+// indent, the selection cell and its space, then the "[x] " checkbox. What the
+// price column has to clear on the left.
+const OPTION_GUTTER = '  '.length + 2 + '[x] '.length
 
 export interface SessionsAppProps {
   api: Ellipsis
@@ -886,7 +893,10 @@ function NewSessionPane({
     null,
   )
 
-  const configOptions = useMemo(
+  // All three pickers deal in the same option shape (ComposerModel), so the
+  // renderer can ask any of them for a group heading or a subtext; only the
+  // model list fills those in.
+  const configOptions = useMemo<ComposerModel[]>(
     () => [
       { id: null as string | null, label: 'Default' },
       ...(configs ?? []).map((c) => ({ id: c.id as string | null, label: configDisplayName(c) })),
@@ -902,7 +912,7 @@ function NewSessionPane({
   // unchecked, or checked alongside any others (repositories multi-select).
   // Only with no detection does the null Default row appear (the server still
   // resolves the checkout, but there's no name to show).
-  const repoOptions = useMemo(() => {
+  const repoOptions = useMemo<ComposerModel[]>(() => {
     const listed = (repos ?? []).filter((r) => r !== detectedRepo)
     return detectedRepo
       ? [detectedRepo, ...listed].map((r) => ({ id: r as string | null, label: r }))
@@ -1094,6 +1104,15 @@ function NewSessionPane({
     return options[Math.min(idx, options.length - 1)]?.label ?? 'Default'
   }
 
+  // The muted tail after a collapsed row's value: the picked model's price, so
+  // the row still says what a run costs once the list is folded away. Only the
+  // model rows carry one.
+  const rowNote = (key: PickerRow['key']): string | null => {
+    if (key !== 'model') return null
+    const options = optionsFor(key)
+    return options[Math.min(modelIdx, options.length - 1)]?.rate ?? null
+  }
+
   // How many option rows an open picker shows inside the panel: the pane
   // minus the heading, notices, and the panel's other rows (~12); the panel
   // grows upward into the spacer above, so the prompt never moves.
@@ -1110,9 +1129,39 @@ function NewSessionPane({
   const open = openPicker
   const openOptions = open ? optionsFor(open.key) : []
   const openHover = open ? Math.min(open.hover, openOptions.length - 1) : 0
+  // What actually gets printed: the options plus their group headings (the
+  // model list has them; the other two pickers produce a row per option and
+  // nothing else). The window slides over THESE rows, not over the options, so
+  // a heading takes a row from the capacity like anything else.
+  const openRows = open ? composerPickerRows(openOptions) : []
+  const hoverRow = Math.max(
+    0,
+    openRows.findIndex((r) => r.kind === 'option' && r.at === openHover),
+  )
   const win = open
-    ? sidebarSlice(openOptions.length, dropdownCapacity, openHover)
+    ? sidebarSlice(openRows.length, dropdownCapacity, hoverRow)
     : { start: 0, end: 0 }
+  // A heading whose options all fell past the bottom edge labels nothing, so
+  // the window gives its last row back rather than print it; it returns with
+  // its group on the next scroll.
+  const visibleRows = (() => {
+    const rows = openRows.slice(win.start, win.end)
+    return rows.at(-1)?.kind === 'group' ? rows.slice(0, -1) : rows
+  })()
+  // The "… N more" counts name OPTIONS, never rows: a heading is not a model,
+  // and counting it would overstate what is hidden above and below.
+  const hiddenAbove = openRows.slice(0, win.start).filter((r) => r.kind === 'option').length
+  const hiddenBelow = openRows.slice(win.end).filter((r) => r.kind === 'option').length
+  // Where the price column starts: the widest label in the list, so the rates
+  // read down a column instead of ragged. Dropped (0 = one space after the
+  // label) when the panel is too narrow to hold label and price both, since a
+  // padded row would push the price off the right edge into the truncation.
+  const rateColumn = (() => {
+    if (!openOptions.some((o) => o.rate)) return 0
+    const label = Math.max(...openOptions.map((o) => o.label.length))
+    const rate = Math.max(...openOptions.map((o) => (o.rate ?? '').length))
+    return OPTION_GUTTER + label + 2 + rate <= inputWidth ? label : 0
+  })()
 
   return (
     // Bottom-docked, mirroring the chat layout: the heading floats centered
@@ -1177,11 +1226,27 @@ function NewSessionPane({
             return (
               <Box key={r.key} flexDirection="column" width={inputWidth}>
                 <Text color={theme.muted}>{'  '}{r.label}:</Text>
-                {win.start > 0 && (
-                  <Text color={theme.muted}>{'    '}… {win.start} more</Text>
+                {hiddenAbove > 0 && (
+                  <Text color={theme.muted}>{'    '}… {hiddenAbove} more</Text>
                 )}
-                {openOptions.slice(win.start, win.end).map((opt, j) => {
-                  const at = win.start + j
+                {visibleRows.map((pickerRow) => {
+                  // A group heading: the vendor that built the models under it,
+                  // upper-cased into an eyebrow the way the dashboard's
+                  // rate-card table sets its own, and muted so it reads as
+                  // structure rather than as another pickable row.
+                  if (pickerRow.kind === 'group') {
+                    return (
+                      <Box key={`group:${pickerRow.label}`} width={inputWidth}>
+                        <Text wrap="truncate" color={theme.muted}>
+                          {'    '}
+                          {pickerRow.label.toUpperCase()}
+                        </Text>
+                      </Box>
+                    )
+                  }
+                  const at = pickerRow.at
+                  const opt = openOptions[at]
+                  if (!opt) return null
                   const hovered = at === openHover
                   const picked = isPicked(r.key, at)
                   return (
@@ -1192,20 +1257,30 @@ function NewSessionPane({
                           {hovered ? SELECTION_GLYPH : ' '}
                         </Text>{' '}
                         <Text color={hovered || picked ? theme.foreground : theme.muted}>
-                          {`[${picked ? 'x' : ' '}] ${opt.label}`}
+                          {`[${picked ? 'x' : ' '}] ${rateColumn ? opt.label.padEnd(rateColumn) : opt.label}`}
                         </Text>
+                        {/* The price, always muted — subtext next to the id
+                            whether or not the row is the highlighted one, so
+                            walking the list never moves the eye off the name. */}
+                        {opt.rate && (
+                          <Text color={theme.muted}>
+                            {'  '}
+                            {opt.rate}
+                          </Text>
+                        )}
                       </Text>
                     </Box>
                   )
                 })}
-                {win.end < openOptions.length && (
+                {hiddenBelow > 0 && (
                   <Text color={theme.muted}>
-                    {'    '}… {openOptions.length - win.end} more
+                    {'    '}… {hiddenBelow} more
                   </Text>
                 )}
               </Box>
             )
           }
+          const note = rowNote(r.key)
           return (
             <Box key={r.key} width={inputWidth}>
               <Text wrap="truncate">
@@ -1216,6 +1291,12 @@ function NewSessionPane({
                 <Text color={active ? theme.foreground : theme.muted}>
                   {rowValue(r.key)}
                 </Text>
+                {note && (
+                  <Text color={theme.muted}>
+                    {'  '}
+                    {note}
+                  </Text>
+                )}
               </Text>
             </Box>
           )
