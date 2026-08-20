@@ -262,7 +262,6 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   // terminal rather than a fixed handful of rows.
   const [focus, setFocus] = useState<'nav' | 'chat'>('chat')
   const navOpen = focus === 'nav' && !hideNav
-  useAltScreen(navOpen)
   const [mainPane, setMainPane] = useState<MainPane>(
     props.initialSessionId ? { type: 'chat', sessionId: props.initialSessionId } : { type: 'new' },
   )
@@ -273,6 +272,19 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   // ------------------------------ chat entries ------------------------------
 
   const [entries, setEntries] = useState<ReadonlyMap<string, ChatEntry>>(new Map())
+  // Only a live chat runs on the primary buffer, printing into the terminal's
+  // real scrollback. Every other screen — the picker, the new-session
+  // composer, the loading placeholder — paints a full-height frame, and a
+  // frame repainted on the primary buffer pushes a stale copy of itself into
+  // scrollback on every repaint. So all of them live on the alternate buffer,
+  // and the primary buffer only ever holds transcript rows.
+  const chatOwnsScreen = mainPane.type === 'chat' && entries.has(mainPane.sessionId)
+  // `altScreenOn` trails the hop: it stays true until the terminal is actually
+  // back on the primary buffer. The chat may only mount once it is false —
+  // its transcript prints each row exactly ONCE (ink <Static>), and a row
+  // printed while the alt screen still has the terminal is destroyed with it.
+  const altScreenOn = useAltScreen(navOpen || !chatOwnsScreen)
+  const chatVisible = chatOwnsScreen && !altScreenOn
   // Sessions whose chat has already printed into this terminal's scrollback.
   // The NEXT one to open prints a rule naming itself first, so two conversations
   // in one scrollback don't run together (see ConnectApp's scrollbackBreak).
@@ -459,9 +471,8 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   // ctrl+c quits from the nav and from the panes that aren't a live chat (the
   // new-session form, a chat still loading) — the chat pane owns its own, where
   // the first press also interrupts the running turn.
-  const chatOwnsCtrlC = mainPane.type === 'chat' && entries.has(mainPane.sessionId)
   const navArmed = useCtrlCQuit(focus === 'nav' && isRawModeSupported)
-  const paneArmed = useCtrlCQuit(focus === 'chat' && !chatOwnsCtrlC && isRawModeSupported)
+  const paneArmed = useCtrlCQuit(focus === 'chat' && !chatOwnsScreen && isRawModeSupported)
 
   // With the session bar hidden there is nothing to hand focus to: esc and ↓
   // at the chat's bottom edge land where they started.
@@ -735,9 +746,10 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   // A LIVE CHAT owns the terminal outright: no box around it, no header, no
   // inset. All three would be frame furniture around a region that prints into
   // the terminal's scrollback, and the rows scrolling past would run straight
-  // through them.
-  const chatOwnsScreen = mainPane.type === 'chat' && entries.has(mainPane.sessionId)
-  if (chatOwnsScreen) return main
+  // through them. It mounts only once the alt-screen hop has finished (see
+  // chatVisible above); the one frame in between renders nothing.
+  if (chatVisible) return main
+  if (chatOwnsScreen) return <Box />
 
   // The remaining screens (the new-session composer, a chat still loading) do
   // own their frame, so they keep the inset and the header.
