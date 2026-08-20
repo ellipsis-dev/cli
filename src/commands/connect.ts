@@ -8,6 +8,7 @@ import { requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
 import { runAction } from '../lib/output'
 import { sessionUrl } from '../lib/urls'
 import { makeOpenSocket, resolveWsBase } from '../lib/stream'
+import { applyDetectedThemeMode } from '../lib/terminalBackground'
 import { ConnectApp } from '../ui/ConnectApp'
 import { canHostSessionsUi, defaultStartRequest, runSessionsUi } from '../ui/launch'
 
@@ -99,6 +100,8 @@ export async function runConnect(
   const [{ session }, me] = await Promise.all([
     client.sessions.get(sessionId),
     client.me(),
+    // Pick the palette for this terminal's background before the first frame.
+    applyDetectedThemeMode(),
   ])
   const c = connectability(session)
   // --no-input forces watch-only even when the session would accept messages.

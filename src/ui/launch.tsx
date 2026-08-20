@@ -4,6 +4,7 @@ import { api } from '../lib/api'
 import { requireToken, resolveApiBase, resolveAppBase, sessionBar } from '../lib/config'
 import { repoFromCwd } from '../lib/laptop'
 import { makeOpenSocket, resolveWsBase } from '../lib/stream'
+import { applyDetectedThemeMode } from '../lib/terminalBackground'
 import type { StartAgentSessionRequest } from '../lib/types'
 import { SessionsApp } from './SessionsApp'
 
@@ -51,7 +52,8 @@ export async function runSessionsUi(options: SessionsUiOptions): Promise<void> {
   const client = api()
   const token = requireToken()
   const openSocket = makeOpenSocket(token, resolveWsBase(resolveApiBase()))
-  const me = await client.me()
+  // Pick the palette for this terminal's background before the first frame.
+  const [me] = await Promise.all([client.me(), applyDetectedThemeMode()])
 
   // No screen-clearing dance: the chat prints its settled transcript into THIS
   // terminal's scrollback (see ConnectApp), so the conversation grows down the
