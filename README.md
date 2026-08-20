@@ -75,7 +75,12 @@ agent review init                 # scaffold a starter review pipeline (code_rev
 agent config list                 # list saved agent configs
 agent config get <config-id>      # show one config as YAML (--json for JSON)
 agent config init [path]          # scaffold a starter config (default: agents/my_agent.yaml)
-agent config create --repo api --file agents/foo.yaml   # create an agent via a pull request (or --template <slug>)
+agent config create --file agents/foo.yaml   # create an agent, live at once (or --template <slug>)
+agent config create --repo api --file agents/foo.yaml   # instead define it as a file, via a pull request
+agent config edit <config-id> --file agents/foo.yaml    # replace its definition, live at once
+agent config delete <config-id>   # delete it; the agent stops and its name is freed
+agent config link <config-id> --repo api   # move it into a repository, via a pull request
+agent config unlink <config-id>   # take it over from its file, so the API changes it
 agent config default              # the effective default agent for the repo you are standing in
 agent config default set <config-id>   # set the account default agent (--repo [owner/name] for one repo)
 agent config default clear        # clear the account default (--repo [owner/name] for one repo)

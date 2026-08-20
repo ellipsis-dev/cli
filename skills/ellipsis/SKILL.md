@@ -444,14 +444,24 @@ Author and deploy agents:
 agent config init agents/my_agent.yaml       # scaffold a starter config locally
 agent config list                            # saved configs with their source file
 agent config get <config-id>                 # one config as YAML
-agent config create --repo api --file agents/my_agent.yaml   # deploy via a pull request
+agent config create --file agents/my_agent.yaml   # create it, live at once
+agent config edit <id> --file agents/my_agent.yaml   # replace its definition, live at once
+agent config delete <id>                     # delete it; it stops and frees its name
+agent config link <id> --repo api            # move it into a repo, via a pull request
+agent config unlink <id>                     # take it over from its file
 agent config default set <config-id>         # the account default (--repo for one repo)
 agent template list                          # built-in templates and their slugs
 agent model list                             # the model ids valid under claude.model
 ```
 
-`agent config create` opens a pull request adding the file, exactly as the
-dashboard does; the agent goes live when it merges.
+An agent is owned by one of two writers, and that is what these verbs move.
+`agent config create` with no `--repo` creates it through the API alone: no
+file, live immediately, changed by `config edit`. With `--repo` it instead
+opens a pull request adding the file, exactly as the dashboard does, and the
+agent goes live when that merges — thereafter the file is what changes it, and
+`config edit` is refused. `config link` moves an API-owned agent into a
+repository (by pull request; it keeps running unchanged until the merge) and
+`config unlink` takes one back from its file, leaving the file in place, inert.
 
 Platform and integrations:
 
