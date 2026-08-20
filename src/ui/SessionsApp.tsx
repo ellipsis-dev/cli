@@ -80,7 +80,7 @@ import { ConnectApp } from './ConnectApp'
 const SIDEBAR_POLL_MS = 5_000
 // The nav clock driving the "12s" age tags.
 const AGE_TICK_MS = 5_000
-const NAV_NEW_LABEL = '+ New session'
+const NAV_NEW_LABEL = '+ New sesssion'
 // The header title pinned to the left edge, and its width — the meta line on
 // the right budgets itself against what's left of the row.
 const HEADER_TITLE = 'ellipsis.dev'
