@@ -43,6 +43,7 @@ import {
   mergeSidebarSessions,
 } from '../lib/sessions'
 import type { ResolvedSessionBar } from '../lib/config'
+import wrapAnsi from 'wrap-ansi'
 import { randomFact } from '../lib/facts'
 import { inputSurface, theme } from '../lib/theme'
 import { useAltScreen } from './altScreen'
@@ -1137,11 +1138,14 @@ function NewSessionPane({
         </Box>
         {/* The fact box is sized to the text (capped so long facts wrap at a
             readable measure) so short facts sit centered, not left-aligned
-            inside a fixed column. */}
+            inside a fixed column. Pre-wrapped with wrap-ansi rather than ink's
+            wrap="wrap": ink keeps whitespace at wrap points, so a line that
+            breaks after a double space starts with a space and looks ragged.
+            wrap-ansi trims it. */}
         <Box justifyContent="center" paddingTop={1} flexShrink={0}>
           <Box width={Math.min(fact.length, Math.max(8, width - 4), 72)}>
-            <Text color={theme.muted} wrap="wrap">
-              {fact}
+            <Text color={theme.muted}>
+              {wrapAnsi(fact, Math.min(fact.length, Math.max(8, width - 4), 72))}
             </Text>
           </Box>
         </Box>
@@ -1232,36 +1236,42 @@ function NewSessionPane({
             remounts the node so a stale measurement can't wrap the caret
             onto the border row. */}
         <Box width={inputWidth} minHeight={2} alignItems="flex-start">
+          {/* The ❯ lives in its own fixed gutter so wrapped prompt lines
+              align under the first typed character, not under the glyph. */}
+          <Box width={2} flexShrink={0}>
+            <Text color={theme.cursor}>
+              {focused && row === 'prompt' && openPicker === null ? SELECTION_GLYPH : ' '}
+            </Text>
+          </Box>
           {/* The colour on the parent is what the bare text children below
               inherit (ink would leave typed text on the terminal's default
               foreground, which a light theme paints near-black on our panel),
               and it gives the inverse caret a known pair to swap. */}
-          <Text
-            wrap="wrap"
-            key={`${text}:${cursor}:${focused && row === 'prompt'}`}
-            color={theme.foreground}
-          >
-            <Text color={theme.cursor}>
-              {focused && row === 'prompt' && openPicker === null ? SELECTION_GLYPH : ' '}{' '}
+          <Box width={inputWidth - 2}>
+            <Text
+              wrap="wrap"
+              key={`${text}:${cursor}:${focused && row === 'prompt'}`}
+              color={theme.foreground}
+            >
+              {text.slice(0, cursor)}
+              {caretVisible && text !== '' && (
+                <Text inverse>{cursor < text.length ? text[cursor] : ' '}</Text>
+              )}
+              {cursor < text.length ? text.slice(cursor + (caretVisible ? 1 : 0)) : ''}
+              {/* Empty input: the placeholder sits where typed text will land,
+                  its first character carrying the caret (inverse) instead of a
+                  caret cell of its own pushing it a column right. */}
+              {text === '' && caretVisible && (
+                <Text>
+                  <Text inverse>S</Text>
+                  <Text color={theme.muted}>tart a cloud agent…</Text>
+                </Text>
+              )}
+              {text === '' && !caretVisible && (
+                <Text color={theme.muted}>Start a cloud agent…</Text>
+              )}
             </Text>
-            {text.slice(0, cursor)}
-            {caretVisible && text !== '' && (
-              <Text inverse>{cursor < text.length ? text[cursor] : ' '}</Text>
-            )}
-            {cursor < text.length ? text.slice(cursor + (caretVisible ? 1 : 0)) : ''}
-            {/* Empty input: the placeholder sits where typed text will land,
-                its first character carrying the caret (inverse) instead of a
-                caret cell of its own pushing it a column right. */}
-            {text === '' && caretVisible && (
-              <Text>
-                <Text inverse>S</Text>
-                <Text color={theme.muted}>tart a cloud session…</Text>
-              </Text>
-            )}
-            {text === '' && !caretVisible && (
-              <Text color={theme.muted}>Start a cloud session…</Text>
-            )}
-          </Text>
+          </Box>
         </Box>
       </Box>
     </Box>
