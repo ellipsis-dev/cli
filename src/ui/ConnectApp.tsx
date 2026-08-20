@@ -50,6 +50,8 @@ import {
   activityRows,
   anchorAt,
   anchorIndex,
+  BRANCH_GLYPH,
+  BRANCH_TEXT_PAD,
   contentWidth,
   entryRange,
   GUTTER_COLS,
@@ -61,6 +63,7 @@ import {
   LIVE_GLYPH,
   MESSAGE_PAD,
   navKeyOf,
+  NEST_INDENT,
   pendingMessageRows,
   rowViewport,
   settledItemKeys,
@@ -387,13 +390,13 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
 
   // The sandbox startup timeline, derived from the lifecycle records of the
   // latest start (a session_starting wake/retry or sandbox_starting record
-  // resets it, so a wake tells a fresh story): a headline tracking the
-  // session's state, plus ONE FLAT LOG of every milestone and every line of
-  // build/setup output, newest last. While the session comes up the block
-  // shows the tail of that log; once ready it collapses to the bare headline,
-  // and → while highlighted re-opens the log to re-read it. The block persists
-  // after startup as the durable trace (the sandbox_ready transcript notice is
-  // suppressed below in its favour).
+  // resets it, so a wake tells a fresh story): a live headline, plus ONE FLAT
+  // LOG of every milestone and every line of build/setup output, newest last.
+  // While the session comes up the block shows the tail of that log; once ready
+  // it collapses to a static one-line summary of the start, and → while
+  // highlighted re-opens the log to re-read it. The block persists after startup
+  // as the durable trace (the sandbox_ready transcript notice is suppressed
+  // below in its favour).
   const sandbox = useMemo(
     () => deriveSandboxState(snapshot.records, props.minRenderFeedSeq),
     [snapshot.records, props.minRenderFeedSeq],
@@ -789,8 +792,8 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   }, [items, expanded, pendingTools, openedKeys])
 
   const infraActivity = statusActivityText(statusWord)
-  // The startup story has settled: the headline is final ("Session ready!"),
-  // nothing is live. This is when the block collapses to the bare headline.
+  // The startup story has settled: the start finished and nothing is live. This
+  // is when the block collapses to its static one-line summary.
   const sandboxSettled = (sandbox?.done ?? false) && !infraActivity
   useEffect(() => {
     // A fresh start (wake/retry) re-opens the live hierarchy and re-arms the
@@ -1096,8 +1099,8 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // live region, repainted each frame. See settledItemKeys for what "final"
   // means and why it is decided per message rather than per turn.
   //
-  // The startup block is final once it has settled (it collapses to its bare
-  // headline then, so the flushed copy is the one that lasts). It sits at the
+  // The startup block is final once it has settled (it collapses to its static
+  // summary then, so the flushed copy is the one that lasts). It sits at the
   // top of the list, so nothing below it can flush while it is still moving.
   const settledKeys = useMemo(() => {
     if (windowed) return new Set<string>()
@@ -1728,18 +1731,27 @@ function sessionBreakRow(sessionId: string, cols: number): TranscriptRow {
 // leading escape of the first report is already stripped by ink).
 const MOUSE_SEQ_RE = /^(?:\u001B?\[<\d+;\d+;\d+[Mm])+$/
 
-// The startup block as screen rows: the "Connected" opener, then the
-// session-first hierarchy on its message panel —
-//     ✻ Session starting…
-//       ✻ Sandbox starting…
-//         ✓ Preparing image · incremental build · 3.4s
-//         ✻ Running setup…
-// While in progress the whole hierarchy shows, the live level ticking with its
-// log tail. Once ready it collapses to the bare headline; highlighting it (↑
-// from the composer) and pressing → reveals the config + sandbox lines, →
-// again opens the phase panel, →/← on a phase shows/hides its logs. Its rows
-// sit at the top of the same flat list as everything else, so it scrolls out
-// of frame like any other content.
+// The startup block as screen rows, in TWO forms.
+//
+// While the agent comes up it is LIVE — the "Connected" opener, a ticking
+// headline, and the tail of the startup log under it:
+//     ✦ Connected to ellipsis.dev
+//
+//     ⏺ Starting cloud agent…                                            12s
+//       ✓ Preparing image, incremental build, 3.4s
+//       ⏺ Running setup…
+//         npm install
+//
+// Once it settles it becomes a STATIC record of one past event — a cloud agent
+// was started — compressed the way a tool call is, and it never moves again:
+//     ✦ Cloud agent session on ellipsis.dev
+//       ⎿  Sandbox ready in 42s · 31 log lines
+//
+// Live status (asleep/awake) deliberately stays OUT of it: the block narrates
+// the start, and a session that fell asleep an hour later says so on its own
+// transcript line and in the footer. A header that rendered live status told an
+// old session's reader "Session asleep" as its opening line, which is not what
+// happened first. → while highlighted re-opens the log to re-read it.
 function sandboxRows(o: {
   sandbox: SandboxState | null
   infraActivity: string | null
@@ -1757,11 +1769,10 @@ function sandboxRows(o: {
   const line = (spans: RowSpan[], extra: Partial<TranscriptRow> = {}): void => {
     rows.push({ id: `${key}:r${rows.length}`, entryKey: key, spans, ...extra })
   }
-  // The conversation's opening line: where it lives. Plain text — an OSC 8
-  // hyperlink here gets broken by ink's wrapping and swallows the label; the
-  // clickable dashboard link lives in the footer meta line. It introduces the
-  // block rather than being part of the startup story, so it keeps its own ✦
-  // and never takes the selection marker — the headline below does.
+  // The opening line. Plain text — an OSC 8 hyperlink here gets broken by ink's
+  // wrapping and swallows the label; the clickable dashboard link lives in the
+  // footer meta line. Live it reads as an address ("Connected to…"); settled it
+  // names the event the block stands for.
   rows.push({
     id: `${key}:hdr`,
     entryKey: key,
@@ -1769,39 +1780,43 @@ function sandboxRows(o: {
     // span it sits one gutter-width right of every glyph below it, which reads
     // as a stray indent on the app's very first line.
     gutter: { text: '✦', dim: true },
-    spans: [{ text: 'Connected to ellipsis.dev', bold: true }],
-  })
-  rows.push(spacerRow(key, `${key}:hdr-sp`))
-  const ready = (sandbox?.done ?? false) && !infraActivity
-  // A live status word overrides a stale done-headline: on a wake the status
-  // flips before the new session_starting record lands, and "Session ready!"
-  // must not linger.
-  const headline = ready
-    ? (sandbox?.headline ?? '')
-    : `${(!sandbox || sandbox.done ? (infraActivity ?? 'Session starting') : sandbox.headline).replace(/…$/, '')}…`
-  line(
-    [
-      // The settled headline ("Session ready!") reads bold in the default
-      // foreground over the dim trace beneath it; while starting it stays dim
-      // like the rest of the block.
-      { text: fit(headline, width - 18), dim: !ready, bold: ready },
-    ],
-    {
-      gutter: {
-        text: ready ? '✓' : LIVE_GLYPH,
-        color: ready ? theme.success : theme.foreground,
+    spans: [
+      {
+        text: fit(
+          settled ? 'Cloud agent session on ellipsis.dev' : 'Connected to ellipsis.dev',
+          width,
+        ),
+        bold: true,
       },
+    ],
+  })
+  if (settled) {
+    // The whole start, compressed to ONE branch line under the opener — the
+    // same idiom as a collapsed tool run ("Ran 3 shell commands"). No elapsed
+    // clock, no live glyph, nothing that can change after the fact.
+    line(
+      [{ text: fit(sandboxSummary(sandbox), width - NEST_INDENT - BRANCH_TEXT_PAD), dim: true }],
+      { gutter: { text: BRANCH_GLYPH, dim: true }, indent: NEST_INDENT, textPad: BRANCH_TEXT_PAD },
+    )
+  } else {
+    rows.push(spacerRow(key, `${key}:hdr-sp`))
+    // A live status word overrides a stale headline: on a wake the status flips
+    // before the new session_starting record lands.
+    const headline = `${(!sandbox || sandbox.done ? (infraActivity ?? 'Starting cloud agent') : sandbox.headline).replace(/…$/, '')}…`
+    line([{ text: fit(headline, width - 18), dim: true }], {
+      gutter: { text: LIVE_GLYPH, color: theme.foreground },
       // While starting, the headline pulses and carries the elapsed clock.
-      ...(ready ? {} : { tick: 'elapsed' as const, pulse: true }),
-    },
-  )
+      tick: 'elapsed' as const,
+      pulse: true,
+    })
+  }
 
-  // The log, ONE level under the headline: no phase tree, no per-phase tails,
-  // no drilling. While the session is coming up you see the last
-  // SANDBOX_LOG_ROWS lines of everything that has happened — including build
-  // and setup output, which is the whole point of showing it — headed by a
-  // count of what scrolled past. Once it settles the block collapses to the
-  // bare headline, and → re-opens the same log to re-read it.
+  // The log, ONE level under the opener: no phase tree, no per-phase tails, no
+  // drilling. While the agent is coming up you see the last SANDBOX_LOG_ROWS
+  // lines of everything that has happened — including build and setup output,
+  // which is the whole point of showing it — headed by a count of what scrolled
+  // past. Once it settles the block collapses to its summary line, and → on the
+  // highlighted block re-opens the same log to re-read it.
   if (!sandbox) return rows
   const show = settled && !o.expanded ? [] : lastLines(sandbox.log, SANDBOX_LOG_ROWS)
   const hidden = sandbox.log.length - show.length
@@ -1838,6 +1853,20 @@ function sandboxRows(o: {
     )
   }
   return rows
+}
+
+// The whole start compressed to one line, for the settled block: how long the
+// sandbox took and how much log it produced. Falls back to "Sandbox started"
+// when no timing can be derived — an old feed whose sandbox_ready carried no
+// phase_timings, or a wake, where the duration was never ours to know. Pure,
+// for tests.
+export function sandboxSummary(sandbox: SandboxState | null): string {
+  const seconds = sandbox?.readySeconds ?? null
+  const lines = sandbox?.log.length ?? 0
+  return [
+    seconds ? `Sandbox ready in ${humanDuration(seconds)}` : 'Sandbox started',
+    ...(lines > 0 ? [`${lines} log line${lines === 1 ? '' : 's'}`] : []),
+  ].join(' · ')
 }
 
 // The tail of the startup log: the last `max` lines, which is what you want
@@ -1917,10 +1946,16 @@ export type SandboxLogLine = {
 // Now every milestone and every line of build/setup output goes into one
 // ordered list, and the block shows the LAST few (SANDBOX_LOG_ROWS) of it.
 export type SandboxState = {
-  // The current top-level line ("Session scheduled…", "Session starting…",
-  // "Waking the session…", "Retrying…", "Session ready!").
+  // The current LIVE top-level line ("Session scheduled…", "Starting cloud
+  // agent…", "Waking the session…", "Retrying…"). Read only while the block is
+  // still moving: once it settles the block shows its static summary instead,
+  // so a session that later falls asleep doesn't rewrite its own opening line.
   headline: string
   done: boolean
+  // How long the sandbox took to come up, when the feed says (sandbox_ready's
+  // phase_timings). null on a wake or an old feed that carried no timings — the
+  // settled summary drops the duration rather than inventing one.
+  readySeconds: number | null
   // Whether the sandbox itself has finished provisioning, so the log's live
   // lines stop pulsing.
   sandboxDone: boolean
@@ -2188,13 +2223,17 @@ function stepLabel(phase: string, step: string | null): string {
   return sandboxPhaseLabel(phase)
 }
 
-// The startup story from the lifecycle records of the LATEST start: a headline
-// tracking the session's own state ("Session scheduled…" → "Session starting…"
-// / "Waking…" / "Retrying…" → "Session ready!"), plus ONE FLAT LOG of
-// everything that happened on the way up, in feed order — the config
-// resolving, each provisioning phase opening and closing (with its cache tier
-// and duration), and every line of output those phases produced (image builds,
-// clones, setup hooks).
+// The startup story from the lifecycle records of the LATEST start: a live
+// headline for while it is still coming up ("Session scheduled…" → "Starting
+// cloud agent…" / "Waking…" / "Retrying…"), plus ONE FLAT LOG of everything that
+// happened on the way up, in feed order — the config resolving, each
+// provisioning phase opening and closing (with its cache tier and duration), and
+// every line of output those phases produced (image builds, clones, setup
+// hooks).
+//
+// The headline tracks the START only, never later session status: session_idle
+// is a mid-conversation event with its own transcript line, and folding it in
+// here made an old session open with "Session asleep" as its first line.
 //
 // session_starting begins a fresh story: a wake or an infra retry drops the
 // previous start's log rather than appending to it. null when no lifecycle
@@ -2204,9 +2243,10 @@ export function deriveSandboxState(
   minFeedSeq: number,
 ): SandboxState | null {
   let seen = false
-  let headline = 'Session starting…'
+  let headline = 'Starting cloud agent…'
   let done = false
   let sandboxDone = false
+  let readySeconds: number | null = null
   let configName: string | null = null
   let configCommitSha: string | null = null
   let log: SandboxLogLine[] = []
@@ -2243,23 +2283,22 @@ export function deriveSandboxState(
       case 'session_retrying': {
         seen = true
         // Every claim starts a fresh story: the headline takes over and the
-        // previous start's log drops.
-        headline = lifecycleText(record.record_type, p) ?? 'Session starting…'
+        // previous start's log drops. A fresh first start is the one line the
+        // SDK's wording ("Session starting…") doesn't match — this block is
+        // about a CLOUD AGENT coming up, and that is worth saying once.
+        const text = lifecycleText(record.record_type, p)
+        headline = !text || text === 'Session starting…' ? 'Starting cloud agent…' : text
         done = false
+        readySeconds = null
         reset()
         break
       }
-      case 'session_resumed': {
-        seen = true
-        // The wake mounted its snapshots and the conversation continues — the
-        // session-level outcome, same beat as ready on a fresh start.
-        headline = 'Session ready!'
-        done = true
-        break
-      }
+      case 'session_resumed':
       case 'session_idle': {
         seen = true
-        headline = 'Session asleep'
+        // Both settle the block WITHOUT touching the headline: the wake mounted
+        // its snapshots, or the session parked between turns. Either way the
+        // start is over, and the chat log carries the event on its own line.
         done = true
         break
       }
@@ -2329,8 +2368,8 @@ export function deriveSandboxState(
           ].join(', '),
         )
         sandboxDone = true
+        readySeconds = totalSeconds > 0 ? totalSeconds : null
         // The box coming up is the session-level outcome too.
-        headline = 'Session ready!'
         done = true
         break
       }
@@ -2350,7 +2389,9 @@ export function deriveSandboxState(
         ...log,
       ]
     : log
-  return seen ? { headline, done, sandboxDone, configName, configCommitSha, log: full } : null
+  return seen
+    ? { headline, done, readySeconds, sandboxDone, configName, configCommitSha, log: full }
+    : null
 }
 
 // One screen row. Exactly one terminal line by construction: the text was

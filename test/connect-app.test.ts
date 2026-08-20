@@ -10,6 +10,7 @@ import {
   hookPhrase,
   humanDuration,
   reshapeTranscript,
+  sandboxSummary,
   sessionLogText,
 } from '../src/ui/ConnectApp'
 import {
@@ -50,7 +51,7 @@ describe('deriveSandboxState', () => {
     expect(deriveSandboxState([rec('assistant', {}, 'claude_code')], 0)).toBeNull()
   })
 
-  it('walks the session headline: scheduled → starting → ready', () => {
+  it('walks the live headline: scheduled → starting → done', () => {
     const scheduled = deriveSandboxState([rec('session_scheduled', { source: 'cli' })], 0)
     expect(scheduled?.headline).toBe('Session scheduled…')
     expect(scheduled?.done).toBe(false)
@@ -62,7 +63,7 @@ describe('deriveSandboxState', () => {
       ],
       0,
     )
-    expect(starting?.headline).toBe('Session starting…')
+    expect(starting?.headline).toBe('Starting cloud agent…')
     expect(starting?.done).toBe(false)
 
     const ready = deriveSandboxState(
@@ -73,7 +74,6 @@ describe('deriveSandboxState', () => {
       ],
       0,
     )
-    expect(ready?.headline).toBe('Session ready!')
     expect(ready?.done).toBe(true)
     expect(ready?.sandboxDone).toBe(true)
   })
@@ -91,7 +91,7 @@ describe('deriveSandboxState', () => {
       0,
     )
     // The config outlives the restart that clears the log below it.
-    expect(state?.headline).toBe('Session starting…')
+    expect(state?.headline).toBe('Starting cloud agent…')
     expect(state?.configName).toBe('deployer')
     expect(texts(state)[0]).toBe('Using deployer @ abc1234')
   })
@@ -202,9 +202,9 @@ describe('deriveSandboxState', () => {
       ],
       0,
     )
-    expect(state?.headline).toBe('Session ready!')
     expect(state?.done).toBe(true)
     expect(state?.sandboxDone).toBe(true)
+    expect(state?.readySeconds).toBe(29)
     expect(texts(state)).toEqual([
       'Starting sandbox…',
       'Preparing image…',
@@ -242,11 +242,13 @@ describe('deriveSandboxState', () => {
       ],
       0,
     )
-    expect(resumed?.headline).toBe('Session ready!')
     expect(resumed?.done).toBe(true)
   })
 
-  it('parks the headline on session_idle', () => {
+  it('settles on session_idle WITHOUT rewriting the headline', () => {
+    // The block narrates the START. Folding live status into it made an old
+    // session's opening line read "Session asleep", which is not what happened
+    // first — the sleep has its own transcript line further down.
     const state = deriveSandboxState(
       [
         rec('session_starting', { attempt: 0, wake_index: 0 }),
@@ -256,8 +258,29 @@ describe('deriveSandboxState', () => {
       ],
       0,
     )
-    expect(state?.headline).toBe('Session asleep')
+    expect(state?.headline).toBe('Starting cloud agent…')
     expect(state?.done).toBe(true)
+  })
+
+  it('summarizes a settled start in one line, dropping unknown timings', () => {
+    const timed = deriveSandboxState(
+      [
+        rec('session_starting', { attempt: 0, wake_index: 0 }),
+        rec('sandbox_starting'),
+        rec('sandbox_ready', { phase_timings: { image: 12, clone: 30 } }),
+      ],
+      0,
+    )
+    expect(timed?.readySeconds).toBe(42)
+    expect(sandboxSummary(timed)).toBe('Sandbox ready in 42s · 2 log lines')
+
+    // An old feed whose sandbox_ready carried no timings: no invented duration.
+    const untimed = deriveSandboxState(
+      [rec('session_starting', { attempt: 0, wake_index: 0 }), rec('sandbox_ready', {})],
+      0,
+    )
+    expect(untimed?.readySeconds).toBeNull()
+    expect(sandboxSummary(untimed)).toBe('Sandbox started · 1 log line')
   })
 
   it('shows Retrying as the headline and drops the failed start log', () => {
