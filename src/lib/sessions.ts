@@ -5,6 +5,8 @@ import type {
   AgentSession,
   AgentSessionSource,
   ListAgentSessionsQuery,
+  ModelManufacturer,
+  ModelRateCard,
   StartAgentSessionRequest,
   SupportedModel,
 } from './types'
@@ -259,35 +261,150 @@ export function attentionFlip(prevWord: string | undefined, nextWord: string): b
 
 // --------------------------- new-session picker ---------------------------
 
-export type ComposerModel = { id: string | null; label: string }
+// One row of a composer picker. `group` and `rate` are what the model list
+// uses and the other two pickers leave unset: repositories and agent configs
+// are flat lists of names with no vendor to group under and no price to quote.
+export type ComposerModel = {
+  id: string | null
+  label: string
+  // The heading this row sits under. Consecutive rows sharing a group print
+  // one heading between them; an unset group prints none.
+  group?: string | null
+  // The muted subtext printed after the label: what the model charges per 1M
+  // tokens. Unset when there is no rate to quote (see modelRateHint).
+  rate?: string | null
+}
+
+// The vendor groups, in the order their headings appear, and the names those
+// headings carry. Both are copies of the dashboard's rate-card table
+// (frontend ModelsRateCardTab + manufacturerLabel), so a model sits under the
+// same vendor with the same spelling in the terminal as on the web.
+//
+// Ranked, not sorted: alphabetical would put OpenAI above Anthropic, and price
+// would reshuffle the groups every time one rate card moves. A manufacturer
+// the server adds before this build knows about it lands last, under its raw
+// enum name, which is wrong-looking but never missing.
+const MANUFACTURER_ORDER: readonly string[] = [
+  'anthropic',
+  'openai',
+  'zai',
+  'minimax',
+  'moonshot',
+]
+const MANUFACTURER_LABELS: Readonly<Record<string, string>> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  zai: 'Z.ai',
+  minimax: 'MiniMax',
+  moonshot: 'Moonshot AI',
+}
+
+function manufacturerLabel(manufacturer: ModelManufacturer | string): string {
+  return MANUFACTURER_LABELS[manufacturer] ?? manufacturer
+}
+
+function manufacturerRank(manufacturer: ModelManufacturer | string): number {
+  const at = MANUFACTURER_ORDER.indexOf(manufacturer)
+  return at === -1 ? MANUFACTURER_ORDER.length : at
+}
+
+// Rate-card cents per 1M tokens → "$5", "$0.75". Whole dollars drop the
+// ".00": at a glance "$5" is a price, where "$5.00" reads as a table cell.
+export function rateDollars(cents: number): string {
+  return cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`
+}
+
+// A model's price as one line of subtext: the two lanes that decide what a
+// session costs, read and written. The three cache lanes are deliberately
+// left out — five numbers on a picker row is a rate card, not a hint, and
+// `agent model list` (plus the dashboard's Models tab) is where the full card
+// belongs. Null when the server sent no card, which is the honest answer: a
+// stale hardcoded price is worse than no price.
+export function modelRateHint(rate: ModelRateCard | null | undefined): string | null {
+  if (!rate) return null
+  const input = rateDollars(rate.input_cents_per_1m_tokens)
+  const output = rateDollars(rate.output_cents_per_1m_tokens)
+  return `in ${input} · out ${output} per 1M`
+}
 
 // The composer's model list when GET /models is unavailable (an older
 // server): the agent-selectable set as of this build, most expensive first.
 // `null` id = let the server pick (DEFAULT_AGENT_MODEL). Labels are the raw
-// model ids — the CLI speaks the API's vocabulary, not marketing names.
+// model ids — the CLI speaks the API's vocabulary, not marketing names. Every
+// id here is Anthropic-built, so the one heading is hardcoded; no rates,
+// because a price this list can't refresh would go stale silently.
 export const COMPOSER_MODELS: ReadonlyArray<ComposerModel> = [
   { id: null, label: 'Default' },
-  { id: 'claude-fable-5', label: 'claude-fable-5' },
-  { id: 'claude-opus-5', label: 'claude-opus-5' },
-  { id: 'claude-opus-4-8', label: 'claude-opus-4-8' },
-  { id: 'claude-sonnet-5', label: 'claude-sonnet-5' },
-  { id: 'claude-haiku-4-5-20251001', label: 'claude-haiku-4-5-20251001' },
+  { id: 'claude-fable-5', label: 'claude-fable-5', group: 'Anthropic' },
+  { id: 'claude-opus-5', label: 'claude-opus-5', group: 'Anthropic' },
+  { id: 'claude-opus-4-8', label: 'claude-opus-4-8', group: 'Anthropic' },
+  { id: 'claude-sonnet-5', label: 'claude-sonnet-5', group: 'Anthropic' },
+  {
+    id: 'claude-haiku-4-5-20251001',
+    label: 'claude-haiku-4-5-20251001',
+    group: 'Anthropic',
+  },
 ]
 
-// The composer's model options from the server's list, keeping its order.
-// Labels are raw model ids; the null "let the server pick" entry IS the
-// default model's row — labelled with the id it resolves to
-// (DEFAULT_AGENT_MODEL), replacing that model's own entry so the id appears
-// once in the list.
+// The composer's model options from the server's list, grouped by who BUILT
+// each model (MANUFACTURER_ORDER) and, inside a group, left in the server's
+// order — which is most expensive first, so every group reads down from its
+// flagship. Labels are raw model ids, each carrying its rate as subtext.
+//
+// The null "let the server pick" entry IS the default model's row — labelled
+// with the id it resolves to (DEFAULT_AGENT_MODEL) and quoting that model's
+// rate, replacing its own entry so the id appears once in the list. It heads
+// the list under its own heading rather than sitting inside its vendor's
+// group, because what it selects is "the account default", not that id: the
+// server is still the one resolving it, and it may resolve to something else
+// tomorrow.
 export function composerModelOptions(models: readonly SupportedModel[]): ComposerModel[] {
   if (models.length === 0) return [...COMPOSER_MODELS]
   const fallback = models.find((m) => m.is_default_agent_model)
   return [
-    { id: null, label: fallback ? fallback.id : 'Default' },
+    {
+      id: null,
+      label: fallback ? fallback.id : 'Default',
+      // Nothing to head a group of one with when no model claims the flag:
+      // the row already reads "Default".
+      group: fallback ? 'Agent default' : null,
+      rate: modelRateHint(fallback?.rate_card),
+    },
     ...models
       .filter((m) => !m.is_default_agent_model)
-      .map((m) => ({ id: m.id as string | null, label: m.id })),
+      // Stable, so the server's within-vendor ordering survives the regroup.
+      .sort((a, b) => manufacturerRank(a.manufacturer) - manufacturerRank(b.manufacturer))
+      .map((m) => ({
+        id: m.id as string | null,
+        label: m.id,
+        group: manufacturerLabel(m.manufacturer),
+        rate: modelRateHint(m.rate_card),
+      })),
   ]
+}
+
+// A picker's display rows: each group's heading, then the options under it.
+// Headings are DECORATION — they carry no index, ↑/↓ never lands on one, and
+// activating a row can't select one — so the list scrolls over these rows
+// while the highlight stays an option index. A heading therefore scrolls away
+// with its group instead of pinning to the top of the window, which is what
+// keeps this a plain list and not a sticky-header layout.
+export type ComposerPickerRow =
+  | { kind: 'group'; label: string }
+  | { kind: 'option'; at: number }
+
+export function composerPickerRows(
+  options: readonly ComposerModel[],
+): ComposerPickerRow[] {
+  const rows: ComposerPickerRow[] = []
+  let group: string | null = null
+  options.forEach((option, at) => {
+    const next = option.group ?? null
+    if (next !== null && next !== group) rows.push({ kind: 'group', label: next })
+    group = next
+    rows.push({ kind: 'option', at })
+  })
+  return rows
 }
 
 // A saved config's display name (the YAML's ellipsis.name), falling back to

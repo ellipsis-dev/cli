@@ -5,7 +5,10 @@ import {
   compactTokens,
   COMPOSER_MODELS,
   composerModelOptions,
+  composerPickerRows,
   connectability,
+  modelRateHint,
+  rateDollars,
   isActiveStatusWord,
   lastEventAt,
   navSlice,
@@ -23,7 +26,7 @@ import {
   mergeSidebarSessions,
 } from '../src/lib/sessions'
 import { theme } from '../src/lib/theme'
-import type { AgentSession } from '../src/lib/types'
+import type { AgentSession, SupportedModel } from '../src/lib/types'
 
 function session(overrides: Partial<AgentSession>): AgentSession {
   return {
@@ -358,27 +361,177 @@ describe('navSlice', () => {
   })
 })
 
+function model(
+  id: string,
+  manufacturer: SupportedModel['manufacturer'],
+  overrides: Partial<SupportedModel> = {},
+): SupportedModel {
+  return {
+    id,
+    display_name: id,
+    manufacturer,
+    is_default_agent_model: false,
+    rate_card: {
+      input_cents_per_1m_tokens: 5_00,
+      cache_write_5m_cents_per_1m_tokens: 6_25,
+      cache_write_1h_cents_per_1m_tokens: 10_00,
+      cache_read_cents_per_1m_tokens: 50,
+      output_cents_per_1m_tokens: 25_00,
+    },
+    ...overrides,
+  }
+}
+
+describe('rateDollars', () => {
+  it('drops the cents on a whole dollar and keeps them otherwise', () => {
+    expect(rateDollars(5_00)).toBe('$5')
+    expect(rateDollars(75)).toBe('$0.75')
+    expect(rateDollars(14_25)).toBe('$14.25')
+    expect(rateDollars(0)).toBe('$0')
+  })
+})
+
+describe('modelRateHint', () => {
+  it('quotes the input and output lanes only', () => {
+    expect(
+      modelRateHint({
+        input_cents_per_1m_tokens: 3_00,
+        cache_write_5m_cents_per_1m_tokens: 3_75,
+        cache_write_1h_cents_per_1m_tokens: 6_00,
+        cache_read_cents_per_1m_tokens: 30,
+        output_cents_per_1m_tokens: 15_00,
+      }),
+    ).toBe('in $3 · out $15 per 1M')
+  })
+
+  it('says nothing when the server sent no rate card', () => {
+    expect(modelRateHint(undefined)).toBeNull()
+    expect(modelRateHint(null)).toBeNull()
+  })
+})
+
 describe('composerModelOptions', () => {
   it('labels rows with raw model ids and folds the default model into the null entry', () => {
     const options = composerModelOptions([
-      { id: 'claude-fable-5', display_name: 'Claude Fable 5', is_default_agent_model: false },
-      { id: 'claude-opus-5', display_name: 'Claude Opus 5', is_default_agent_model: true },
+      model('claude-fable-5', 'anthropic'),
+      model('claude-opus-5', 'anthropic', { is_default_agent_model: true }),
     ])
     expect(options.map((o) => o.id)).toEqual([null, 'claude-fable-5'])
     expect(options[0].label).toBe('claude-opus-5')
     expect(options[1].label).toBe('claude-fable-5')
   })
 
+  it('heads the list with the account default, under its own group', () => {
+    const options = composerModelOptions([
+      model('claude-opus-5', 'anthropic', { is_default_agent_model: true }),
+      model('gpt-5.6-sol', 'openai'),
+    ])
+    expect(options[0].group).toBe('Agent default')
+    expect(options[1].group).toBe('OpenAI')
+  })
+
+  it('groups by manufacturer, ranked, keeping the server order inside a group', () => {
+    const options = composerModelOptions([
+      model('gpt-5.6-sol', 'openai'),
+      model('kimi-k3', 'moonshot'),
+      model('claude-fable-5', 'anthropic'),
+      model('gpt-5.6-luna', 'openai'),
+      model('claude-sonnet-5', 'anthropic'),
+    ])
+    expect(options.slice(1).map((o) => [o.group, o.label])).toEqual([
+      ['Anthropic', 'claude-fable-5'],
+      ['Anthropic', 'claude-sonnet-5'],
+      ['OpenAI', 'gpt-5.6-sol'],
+      ['OpenAI', 'gpt-5.6-luna'],
+      ['Moonshot AI', 'kimi-k3'],
+    ])
+  })
+
+  it('groups an unranked manufacturer last, under its raw name', () => {
+    const options = composerModelOptions([
+      model('some-new-model', 'nvidia' as SupportedModel['manufacturer']),
+      model('claude-fable-5', 'anthropic'),
+    ])
+    expect(options.slice(1).map((o) => o.group)).toEqual(['Anthropic', 'nvidia'])
+  })
+
+  it('carries each row rate as subtext, the default row included', () => {
+    const options = composerModelOptions([
+      model('claude-opus-5', 'anthropic', { is_default_agent_model: true }),
+      model('claude-haiku-4-5-20251001', 'anthropic', {
+        rate_card: {
+          input_cents_per_1m_tokens: 1_00,
+          cache_write_5m_cents_per_1m_tokens: 1_25,
+          cache_write_1h_cents_per_1m_tokens: 2_00,
+          cache_read_cents_per_1m_tokens: 10,
+          output_cents_per_1m_tokens: 5_00,
+        },
+      }),
+    ])
+    expect(options[0].rate).toBe('in $5 · out $25 per 1M')
+    expect(options[1].rate).toBe('in $1 · out $5 per 1M')
+  })
+
   it('falls back to the built-in list when the server returns none', () => {
     expect(composerModelOptions([])).toEqual([...COMPOSER_MODELS])
   })
 
-  it('leaves Default unnamed when no model claims the flag', () => {
-    const options = composerModelOptions([
-      { id: 'claude-opus-5', display_name: 'Claude Opus 5', is_default_agent_model: false },
-    ])
+  it('quotes no price it cannot refresh in the built-in list', () => {
+    expect(COMPOSER_MODELS.every((o) => !o.rate)).toBe(true)
+  })
+
+  it('leaves Default unnamed and ungrouped when no model claims the flag', () => {
+    const options = composerModelOptions([model('claude-opus-5', 'anthropic')])
     expect(options[0].label).toBe('Default')
+    expect(options[0].group).toBeNull()
     expect(options[1].label).toBe('claude-opus-5')
+  })
+})
+
+describe('composerPickerRows', () => {
+  it('prints one heading per group, above the options it covers', () => {
+    expect(
+      composerPickerRows([
+        { id: null, label: 'claude-opus-5', group: 'Agent default' },
+        { id: 'claude-fable-5', label: 'claude-fable-5', group: 'Anthropic' },
+        { id: 'claude-sonnet-5', label: 'claude-sonnet-5', group: 'Anthropic' },
+        { id: 'gpt-5.6-sol', label: 'gpt-5.6-sol', group: 'OpenAI' },
+      ]),
+    ).toEqual([
+      { kind: 'group', label: 'Agent default' },
+      { kind: 'option', at: 0 },
+      { kind: 'group', label: 'Anthropic' },
+      { kind: 'option', at: 1 },
+      { kind: 'option', at: 2 },
+      { kind: 'group', label: 'OpenAI' },
+      { kind: 'option', at: 3 },
+    ])
+  })
+
+  it('heads a flat list with nothing at all', () => {
+    expect(
+      composerPickerRows([
+        { id: null, label: 'Default' },
+        { id: 'acme/api', label: 'acme/api' },
+      ]),
+    ).toEqual([
+      { kind: 'option', at: 0 },
+      { kind: 'option', at: 1 },
+    ])
+  })
+
+  it('opens a group again when a later row returns to it', () => {
+    expect(
+      composerPickerRows([
+        { id: 'a', label: 'a', group: 'Anthropic' },
+        { id: 'b', label: 'b', group: 'OpenAI' },
+        { id: 'c', label: 'c', group: 'Anthropic' },
+      ]).filter((r) => r.kind === 'group'),
+    ).toEqual([
+      { kind: 'group', label: 'Anthropic' },
+      { kind: 'group', label: 'OpenAI' },
+      { kind: 'group', label: 'Anthropic' },
+    ])
   })
 })
 
