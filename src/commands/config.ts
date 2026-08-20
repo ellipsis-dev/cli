@@ -12,6 +12,7 @@ import type {
   AgentConfig,
   AgentDefaultView,
   CreateAgentConfigRequest,
+  CreatedAgentConfig,
   SavedAgentConfig,
 } from '../lib/types'
 
@@ -82,18 +83,20 @@ export function registerConfig(program: Command): void {
       })
     })
 
-  // Create an agent config the same way the dashboard does: Ellipsis opens a
-  // pull request adding the YAML to the repo, and the agent goes live when it
-  // merges. Distinct from `config init`, which scaffolds a local file.
+  // Create an agent. Two shapes, chosen by --repo: with it, Ellipsis opens a
+  // pull request adding the YAML to that repo and the agent goes live when it
+  // merges (what the dashboard has always done); without it, the agent is
+  // created through the API alone — no file, live at once, changed by `config
+  // edit`. Distinct from `config init`, which scaffolds a local file.
   apiRoutes(
     config
       .command('create')
-      .description('Create an agent config by opening a pull request that adds it to a repo'),
+      .description('Create an agent, live immediately or by pull request with --repo'),
     'POST /agents/configs',
   )
-    .requiredOption(
+    .option(
       '-r, --repo <name>',
-      'repository in your account to open the pull request against',
+      'define the agent as a file in this repository, by pull request (default: no file, live at once)',
     )
     .option('-f, --file <path>', 'agent config file (.yaml/.yml or .json) to add')
     .option(
@@ -102,12 +105,12 @@ export function registerConfig(program: Command): void {
     )
     .option(
       '--path <path>',
-      'file path within the repo for the config (default: agents/<slug>.yaml; must be a synced location)',
+      'file path within the repo for the config (default: agents/<slug>.yaml; must be a synced location; needs --repo)',
     )
     .option('--json', 'output raw JSON')
     .action(
       async (opts: {
-        repo: string
+        repo?: string
         file?: string
         template?: string
         path?: string
@@ -118,6 +121,9 @@ export function registerConfig(program: Command): void {
           // pre-check locally for a clearer error than a bare 400.
           if (!opts.file === !opts.template) {
             throw new Error('provide exactly one of --file <path> or --template <slug>')
+          }
+          if (opts.path && !opts.repo) {
+            throw new Error('--path names a location in a repository, so it needs --repo <name>')
           }
           const req: CreateAgentConfigRequest = {
             repository: opts.repo,
@@ -130,12 +136,108 @@ export function registerConfig(program: Command): void {
             printJson(created)
             return
           }
-          console.log(`✓ opened a pull request adding the agent config (${created.path})`)
-          console.log(created.pull_request_url)
-          console.log('Merge it to deploy the agent.')
+          printCreated(created)
         })
       },
     )
+
+  // Replace an API-managed agent's whole definition, live at once. Refused for
+  // an agent defined by a repository file (the next push would revert it) —
+  // `config unlink` takes ownership first.
+  apiRoutes(
+    alsoKnownAs(
+      config
+        .command('edit <config-id>')
+        .description("Replace an API-managed agent's definition from a file, live immediately"),
+      'update',
+    ),
+    'PUT /agents/configs/{id}',
+  )
+    .requiredOption('-f, --file <path>', 'agent config file (.yaml/.yml or .json) to replace it with')
+    .option('--json', 'output raw JSON')
+    .action(async (configId: string, opts: { file: string; json?: boolean }) => {
+      await runAction(async () => {
+        const { config: updated } = await api().agents.configs.update(configId, {
+          config: readConfigFile(opts.file) as AgentConfig,
+        })
+        if (opts.json) {
+          printJson(updated)
+          return
+        }
+        console.log(`✓ updated "${configName(updated)}" (${updated.id}) — live now`)
+      })
+    })
+
+  apiRoutes(
+    alsoKnownAs(
+      config
+        .command('delete <config-id>')
+        .description('Delete an API-managed agent; it stops running and frees its name'),
+      'rm',
+    ),
+    'DELETE /agents/configs/{id}',
+  )
+    .option('--json', 'output raw JSON')
+    .action(async (configId: string, opts: { json?: boolean }) => {
+      await runAction(async () => {
+        await api().agents.configs.delete(configId)
+        // 204 No Content — nothing to echo, so confirm with what was addressed.
+        if (opts.json) printJson({ id: configId, deleted: true })
+        else console.log(`✓ deleted ${configId}`)
+      })
+    })
+
+  // The two ownership moves. `link` hands an API-managed agent over to a file
+  // (by pull request; it keeps running unchanged until that merges); `unlink`
+  // takes one back from its file (immediate, and the file is left inert).
+  apiRoutes(
+    config
+      .command('link <config-id>')
+      .description('Move an agent into a repository by opening a pull request that adds its file'),
+    'POST /agents/configs/{id}/link',
+  )
+    .requiredOption('-r, --repo <name>', 'repository in your account to move the agent into')
+    .option(
+      '--path <path>',
+      'file path within the repo for the config (default: agents/<slug>.yaml; must be a synced location)',
+    )
+    .option('--json', 'output raw JSON')
+    .action(
+      async (configId: string, opts: { repo: string; path?: string; json?: boolean }) => {
+        await runAction(async () => {
+          const linked = await api().agents.configs.link(configId, {
+            repository: opts.repo,
+            path: opts.path,
+          })
+          if (opts.json) {
+            printJson(linked)
+            return
+          }
+          console.log(`✓ opened a pull request adding the agent config (${linked.path})`)
+          console.log(linked.pull_request_url)
+          console.log('The agent keeps running meanwhile; merging hands it over to the file.')
+        })
+      },
+    )
+
+  apiRoutes(
+    config
+      .command('unlink <config-id>')
+      .description('Take an agent over from its file, so this API changes it instead'),
+    'POST /agents/configs/{id}/unlink',
+  )
+    .option('--json', 'output raw JSON')
+    .action(async (configId: string, opts: { json?: boolean }) => {
+      await runAction(async () => {
+        const { config: unlinked } = await api().agents.configs.unlink(configId)
+        if (opts.json) {
+          printJson(unlinked)
+          return
+        }
+        console.log(`✓ took over "${configName(unlinked)}" (${unlinked.id})`)
+        console.log('Its file no longer governs it and is left in place, inert.')
+      })
+    })
 
   // ------------------------------- defaults --------------------------------
   // The default-config ladder a bare session start resolves: repo default ->
@@ -313,14 +415,13 @@ export function registerConfig(program: Command): void {
             return
           }
           await runAction(async () => {
-            const created = await api().agents.configs.create({
-              template_id: opts.template,
-              repository: opts.repo!,
-              path: opts.path,
-            })
-            console.log(`✓ opened a pull request adding the agent config (${created.path})`)
-            console.log(created.pull_request_url)
-            console.log('Merge it to deploy the agent.')
+            printCreated(
+              await api().agents.configs.create({
+                template_id: opts.template,
+                repository: opts.repo!,
+                path: opts.path,
+              }),
+            )
           })
           return
         }
@@ -341,6 +442,23 @@ export function registerConfig(program: Command): void {
 
 const COMMIT_HINT =
   'Commit it to your default branch. Ellipsis syncs agent configs from GitHub.'
+
+// A create answers two ways: with a repository the agent waits on a pull
+// request, without one it is already live and has no file.
+function printCreated(created: CreatedAgentConfig): void {
+  if (created.pull_request_url) {
+    console.log(`✓ opened a pull request adding the agent config (${created.path})`)
+    console.log(created.pull_request_url)
+    console.log('Merge it to deploy the agent.')
+    return
+  }
+  console.log(`✓ created "${configName(created.config)}" (${created.config.id}) — live now`)
+  console.log('It has no file; change it with `agent config edit`, or `agent config link` to move it into a repo.')
+}
+
+function configName(c: SavedAgentConfig): string {
+  return c.agent_config.ellipsis.name ?? c.id
+}
 
 // --repo semantics on defaults mutations: absent -> the account rung; bare
 // --repo -> the repo you're standing in (from the origin remote, an error
@@ -397,13 +515,15 @@ claude:
 }
 
 // GitHub source as `path@branch` (repo is only an opaque numeric id in the API).
-// Prefixed with ⚠ when the last sync failed so it stands out in the list.
+// Prefixed with ⚠ when the last sync failed so it stands out in the list. An
+// API-managed agent has no file at all, which is a different thing from a
+// github-managed one whose source is momentarily unknown — so name it.
 function configSource(c: SavedAgentConfig): string {
   const s = c.agent_config_source_details as
     | { repo_id: number; path: string; branch: string }
     | null
     | undefined
-  const base = s ? `${s.path}@${s.branch}` : '—'
+  const base = s ? `${s.path}@${s.branch}` : c.managed_by === 'api' ? 'api' : '—'
   return c.last_sync_error ? `⚠ ${base}` : base
 }
 
