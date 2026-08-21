@@ -28,7 +28,7 @@ describe('matchCommands', () => {
   it('narrows by prefix', () => {
     expect(names('/st')).toEqual(['stop'])
     expect(names('/s')).toEqual(['stop', 'sessions'])
-    expect(names('/tr')).toEqual(['transcript'])
+    expect(names('/e')).toEqual(['exit'])
   })
 
   it('matches aliases but shows the canonical name', () => {

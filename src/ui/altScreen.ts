@@ -5,8 +5,8 @@ import { useApp, useStdout } from 'ink'
 // `alternateScreen` only as a render()-time option and this app has to hop
 // buffers at runtime under ONE live ink instance: the default view lives in the
 // primary buffer with its settled transcript flushed to real scrollback, and
-// the full-frame screens (picker, composer, browser) take over the alt screen
-// and hand the primary buffer back untouched on exit.
+// the full-frame screens (picker, composer) take over the alt screen and hand
+// the primary buffer back untouched on exit.
 //
 // The switch goes through ink's suspendTerminal, which is the only way to keep
 // ink's picture of the screen honest across it: suspend ERASES the current
@@ -27,7 +27,7 @@ export function useAltScreen(active: boolean): boolean {
   const { suspendTerminal } = useApp()
   const { stdout } = useStdout()
   // Transitions are serialized: suspendTerminal throws if the terminal is
-  // already suspended, and two fast toggles (ctrl+r then esc) would otherwise
+  // already suspended, and two fast toggles (esc then enter) would otherwise
   // overlap. Errors are swallowed — failing to hop buffers must not take the
   // session down.
   const queue = useRef<Promise<void>>(Promise.resolve())

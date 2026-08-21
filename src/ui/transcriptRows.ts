@@ -3,26 +3,22 @@ import { fitLines, hasMarkdown, renderMarkdown, visibleWidth } from '../lib/mark
 import { SELECTION_GLYPH } from '../lib/sessions'
 import { theme } from '../lib/theme'
 
-// The transcript as a flat list of SCREEN ROWS — the unit the chat window
-// scrolls by. Everything in the window (the startup block, messages, tool
-// chatter, in-flight sends, the live activity lines) is flattened to rows
-// before it renders, each row exactly one terminal line tall and no wider
-// than the pane.
+// The transcript as a flat list of SCREEN ROWS. Everything on screen (the
+// startup block, messages, tool chatter, in-flight sends, the live activity
+// lines) is flattened to rows before it renders, each row exactly one terminal
+// line tall and no wider than the pane.
 //
-// Rows, not entries, because a message can be taller than the window: an
-// entry-granular viewport can only show an entry whole or not at all, so a
-// long message becomes unreadable — it fills the frame, and one scroll notch
-// throws all of it away. Row-granular, the window can sit anywhere inside it.
+// Rows, not entries, because the live frame is capped in ROWS: an entry-granular
+// cap could only keep or drop a whole message, so one long message would either
+// overflow the frame or vanish from it.
 //
-// Rows are also EXACT, which is what lets the window pack itself full: text is
-// pre-wrapped here at the width it will occupy (fitLines) and the renderer
-// truncates instead of wrapping, so a slice of N rows always paints N lines.
-// An estimate-based budget has to leave slack for its own rounding errors, and
-// that slack shows up as dead space and phantom "… 1 newer" markers.
+// Rows are also EXACT: text is pre-wrapped here at the width it will occupy
+// (fitLines) and the renderer truncates instead of wrapping, so a slice of N rows
+// always paints N lines. That is what lets the live frame be budgeted precisely —
+// an over-tall frame scrolls ink's render region and smears stale rows.
 
 // The 2-column gutter a transcript line reserves for its sender glyph (▶/●/⎿),
-// so the selection marker can replace the glyph in place without the text
-// shifting, and a wrapped line's continuation aligns under its first.
+// so a wrapped line's continuation aligns under its first.
 export const GUTTER_COLS = 2
 
 // Horizontal pad on EVERY transcript row — the text sits one cell off the
@@ -30,8 +26,9 @@ export const GUTTER_COLS = 2
 // share one left edge instead of stepping in and out by a column.
 export const MESSAGE_PAD = 1
 
-// Long bodies collapse to this many lines until ctrl+r (or → on the line)
-// expands them.
+// Long bodies collapse to this many lines. Nothing un-collapses them: the full
+// text printed into the terminal's scrollback on its way past, which is where it
+// is read.
 const COLLAPSE_LINES = 6
 
 // A run of same-styled text inside a row. Rows carry spans rather than one
@@ -72,23 +69,14 @@ export function spanColor(
 export type TranscriptRow = {
   // Unique per row, for React keys.
   id: string
-  // The entry (a transcript item's key, or 'sandbox') this row belongs to:
-  // what the scroll anchor holds onto so streamed appends and re-wraps can't
-  // slide the window.
+  // The entry (a transcript item's key, or 'sandbox') this row belongs to: the
+  // unit the scrollback flush is decided by, so an entry is printed once, whole.
   entryKey: string
-  // The entry ↑/↓ selects when this row is highlighted, when that is not the
-  // row's own entry: a tool call nested under a message is part of THAT
-  // message's block, so the walk lands on the message and the call comes with
-  // it. Absent means the row is its own nav stop.
-  navKey?: string
-  // For a row that IS a stop nested inside another (a tool call revealed under
-  // an opened message): the stop ← steps out to.
-  parentKey?: string
   // The gutter glyph, set on an entry's FIRST row only — a multi-row item
   // shows one sender icon, and its continuation rows align under it.
   gutter?: RowSpan
-  // Blank columns before the gutter: an opened fold's children sit one level
-  // in, so they read as the fold's children.
+  // Blank columns before the gutter: a nested tool line sits one level in, so it
+  // reads as a branch off the message above.
   indent?: number
   // Extra blank columns BETWEEN the gutter and the text. Set on every row of a
   // ⎿ item, continuation rows included, so the whole body stays aligned — see
@@ -100,10 +88,7 @@ export type TranscriptRow = {
   right?: RowSpan
   // A blank separator row: the gap between blocks.
   spacer?: boolean
-  // The "+N lines" marker under a clamped body. The key that opens it depends
-  // on whether the line is highlighted (→) or not (ctrl+r), which the renderer
-  // knows and the row builder deliberately doesn't — otherwise every arrow
-  // keypress would rebuild the whole transcript.
+  // The "+N lines" count on the marker row under a clamped body.
   clampedLines?: number
   // A ticking duration, appended to the row's text at render time. Kept out of
   // the row's spans so the once-a-second tick repaints one line instead of
@@ -151,20 +136,13 @@ export function spacerRow(entryKey: string, id: string): TranscriptRow {
   return { id, entryKey, spans: [], spacer: true }
 }
 
-// The entry ↑/↓ lands on for a row: the block it belongs to, which for a
-// nested tool line is the message (or the call) it hangs off rather than its
-// own entry.
-export function navKeyOf(row: TranscriptRow): string {
-  return row.navKey ?? row.entryKey
-}
-
 // One transcript item as its screen rows: the separator above it, its body
 // pre-wrapped to the column it occupies, and the "+N lines" marker when a long
 // body is clamped.
 export function itemRows(
   item: TranscriptItem,
   cols: number,
-  opts: { indent?: number; clamp: boolean; nested?: boolean; attach?: boolean },
+  opts: { indent?: number; nested?: boolean; attach?: boolean } = {},
 ): TranscriptRow[] {
   const indent = opts.indent ?? 0
   // Nested lines are marked by their INDENT, so each keeps the glyph that says
@@ -177,10 +155,9 @@ export function itemRows(
   const textPad = gutter === BRANCH_GLYPH ? BRANCH_TEXT_PAD : 0
   const width = contentWidth(cols, { indent, textPad })
   const shown = withRenderedMarkdown(item, width)
-  const clamped =
-    opts.clamp && isCollapsible(shown)
-      ? clampLines(shown.text, COLLAPSE_LINES)
-      : { body: shown.text, more: 0 }
+  const clamped = isCollapsible(shown)
+    ? clampLines(shown.text, COLLAPSE_LINES)
+    : { body: shown.text, more: 0 }
   const { gutterColor, textColor, dim, bold } = styleFor(shown)
 
   const rows: TranscriptRow[] = []
@@ -229,88 +206,34 @@ export function itemRows(
 // glyph, attached with no blank row between. Prose, user messages and notices
 // keep their own gutter mark and their spacing.
 //
-// INDENT and OWNERSHIP are decided separately, because they answer different
-// questions. A run belongs to (is opened by, travels with) whatever message
-// came last, YOURS INCLUDED — the agent often opens a turn with a tool call,
-// and a run that belonged to nothing could not be reached with →. But it only
-// INDENTS under something the AGENT said (isAgentSpeech: prose or ✻ thinking):
-// a ⎿ branch under your own message would read as work YOU did, so a
-// turn-opening run stays flat and separated by its own blank row.
-// Only a run at the very top of the transcript, with no message above it at
-// all, belongs to nothing.
-//
-// Ownership is what ↑/↓ can LAND on, because a tool call is not a stop of its
-// own — it belongs to the message that made it. Three levels, each opened by →
-// on the level above:
-//
-//   ● the message            a stop; ↑/↓ walk these
-//     ⎿ Ran 3 tool calls     part of the message's block (navKey → the message)
-//
-// opened with → the fold is REPLACED by what it stood for, at the same indent:
-//
-//   ● the message            a stop
-//     ● Bash(pytest)         a stop of its own now
-//     ⎿ output               part of that call's block (navKey → the call)
-//
-// So ↑ lands on the message with its tool chatter in tow; → swaps the fold for
-// the calls and ↑/↓ then step through them one at a time; → on a call opens its
-// output; ← walks back out (parentKey). Pure, for tests.
+// INDENT is decided by what came last: a run only indents under something the
+// AGENT said (isAgentSpeech: prose or ✻ thinking), because a ⎿ branch under your
+// own message would read as work YOU did — so a turn-opening run stays flat and
+// separated by its own blank row. Pure, for tests.
 export type PlacedItem = {
   item: TranscriptItem
   indent: number
   nested: boolean
   attach: boolean
-  // The block this line belongs to, when that is not the line itself. Absent
-  // means the line is its own ↑/↓ stop.
-  navKey?: string
-  // The stop ← steps out to, for a line that IS a stop nested inside another.
-  parentKey?: string
 }
-export function layOutItems(
-  items: readonly TranscriptItem[],
-  // `openedKeys` are the lines opened with →: an opened MESSAGE reveals its
-  // calls as stops. `revealAll` is ctrl+r, which reveals every one of them.
-  opts: { openedKeys?: ReadonlySet<string>; revealAll?: boolean } = {},
-): PlacedItem[] {
+export function layOutItems(items: readonly TranscriptItem[]): PlacedItem[] {
   const out: PlacedItem[] = []
-  // The message the current run BELONGS to — what → opens and ↑/↓ land on.
-  // Either sender's; null only at the head of the transcript.
-  let parent: string | null = null
-  // Whether that message was the agent's, which is what decides the visual
+  // Whether the last message was the agent's, which is what decides the visual
   // nesting: only what the agent said gets a ⎿ branch under it.
-  let parentIsAgent = false
-  // The call a ⎿ result belongs to, so a result travels with its own call.
-  let call: string | null = null
+  let nestUnder = false
   for (const item of items) {
     if (!isToolActivity(item)) {
       out.push({ item, indent: 0, nested: false, attach: false })
-      parent = item.key
-      parentIsAgent = isAgentSpeech(item)
-      call = null
+      nestUnder = isAgentSpeech(item)
       continue
     }
-    const nested = parent !== null && parentIsAgent
-    const revealed =
-      opts.revealAll === true || (parent !== null && opts.openedKeys?.has(parent) === true)
-    if (item.kind === 'tool') call = item.key
-    // Who owns this line — the stop it travels with, or null when it IS one.
-    // Collapsed, everything belongs to the message. Revealed, each ● call
-    // becomes a stop and its ⎿ result travels with it. A fold ("Ran N …") is
-    // never a stop either way: it stands in for the run, so it reads as part of
-    // the message, and → on the message is what opens it.
-    let owner = parent
-    if (revealed && item.kind === 'tool') owner = null
-    else if (revealed && item.kind === 'tool_result') owner = call
     out.push({
       item,
-      indent: nested ? NEST_INDENT : 0,
-      nested,
+      indent: nestUnder ? NEST_INDENT : 0,
+      nested: nestUnder,
       // Attach every line of the run: the first to its parent message, the
       // rest to the line above.
-      attach: nested,
-      navKey: owner ?? undefined,
-      // ← on a revealed call steps back out to the message it hangs off.
-      parentKey: owner === null ? (parent ?? undefined) : undefined,
+      attach: nestUnder,
     })
   }
   return out
@@ -408,102 +331,19 @@ export function pendingMessageRows(
   return rows
 }
 
-// The window of rows on screen, and how many are hidden beyond each edge.
-//
-// `anchor` is the index of the row pinned to the TOP, or null to follow the
-// bottom (the default, so streamed content stays in view). The window is
-// always packed FULL: anchored near the end of the list it backs up to fill
-// the budget rather than leaving the bottom of the frame empty.
-//
-// The "… N earlier/newer" markers live inside the budget, so their rows come
-// out of the window that needs them — resolved by re-fitting until it stops
-// changing (there are at most two, so it settles at once).
-//
-// GUARANTEE: content rows plus marker rows never exceed `budget`, for any
-// input. The whole layout rests on it — one row too many and ink's frame
-// outgrows the pane, which scrolls the render region and smears stale rows up
-// the terminal. A budget with no room to spare drops a marker rather than
-// overflow, which is why showAbove/showBelow are separate from the hidden
-// counts. Pure, for tests.
-export function rowViewport(
-  total: number,
-  budget: number,
-  anchor: number | null,
-): {
-  start: number
-  end: number
-  capacity: number
-  hiddenAbove: number
-  hiddenBelow: number
-  showAbove: boolean
-  showBelow: boolean
-} {
-  const room = Math.max(1, budget)
-  if (total === 0) {
-    return {
-      start: 0,
-      end: 0,
-      capacity: room,
-      hiddenAbove: 0,
-      hiddenBelow: 0,
-      showAbove: false,
-      showBelow: false,
-    }
-  }
-  // One content row always shows, so the markers can claim what the budget has
-  // beyond it and no more.
-  const markerRoom = Math.max(0, room - 1)
-  let markers = 0
-  let start = 0
-  let end = 0
-  let capacity = room
-  for (let pass = 0; pass < 3; pass++) {
-    capacity = room - markers
-    if (anchor === null) {
-      end = total
-      start = Math.max(0, end - capacity)
-    } else {
-      start = Math.max(0, Math.min(anchor, total - 1))
-      end = Math.min(total, start + capacity)
-      // Packed full against the bottom edge: back up rather than leave the
-      // last rows of the frame blank.
-      if (end === total) start = Math.max(0, total - capacity)
-    }
-    const want = (start > 0 ? 1 : 0) + (end < total ? 1 : 0)
-    const next = Math.min(want, markerRoom)
-    if (next === markers) break
-    markers = next
-  }
-  // With room for only one marker, "earlier" wins: that there is history above
-  // is the more useful fact, and following the bottom is the common case.
-  const showAbove = start > 0 && markers >= 1
-  const showBelow = end < total && markers >= (start > 0 ? 2 : 1)
-  return {
-    start,
-    end,
-    capacity,
-    hiddenAbove: start,
-    hiddenBelow: total - end,
-    showAbove,
-    showBelow,
-  }
-}
-
 // ---------------------------------------------------------------- scrollback
 //
-// In scrollback mode the settled part of the transcript is printed ONCE, into
-// the terminal's own scrollback, and never repainted (ink's <Static>). That
-// buys native wheel/trackpad scrolling and native select/copy, and it costs
-// mutability: a row that has been flushed can't re-wrap, re-fold, or take a
-// selection marker. So the flush point has to be a row that CANNOT change
-// again, and these two helpers are what decide it.
+// The settled part of the transcript is printed ONCE, into the terminal's own
+// scrollback, and never repainted (ink's <Static>). That buys native
+// wheel/trackpad scrolling and native select/copy, and it costs mutability: a
+// row that has been flushed can't re-wrap or re-fold. So the flush point has to
+// be a row that CANNOT change again, and these two helpers are what decide it.
 
-// The items whose rows are final. An item's rows can still change for two
-// reasons: a collapsed fold ("Ran 2 tool calls") grows as more tool activity
-// lands under the same message, and the message that owns the open run is the
-// one → can still unfold. So while a turn is in flight the LAST message and
-// everything after it stay live, and everything before it is final. With no
-// turn in flight nothing can grow, so all of it is final.
+// The items whose rows are final. An item's rows can still change while a turn
+// is in flight: a collapsed fold ("Ran 2 tool calls") grows as more tool activity
+// lands under the same message. So the LAST message and everything after it stay
+// live, and everything before it is final. With no turn in flight nothing can
+// grow, so all of it is final.
 //
 // Note this is per-MESSAGE, not per-turn: the moment the agent starts a new
 // message the previous one and its whole tool run flush together, which is what
@@ -537,102 +377,6 @@ export function settledRowCount(
   return n
 }
 
-// The scroll position as (entry, row within that entry) rather than a flat row
-// index, so appends, re-wraps and expansions can't slide the window: the row
-// you parked on stays the row on screen.
-export type ScrollAnchor = { entryKey: string; rowOffset: number }
-
-// The flat row index an anchor points at, or null when its entry is gone (the
-// caller falls back to following the bottom).
-export function anchorIndex(rows: readonly TranscriptRow[], anchor: ScrollAnchor): number | null {
-  const first = rows.findIndex((r) => r.entryKey === anchor.entryKey)
-  if (first < 0) return null
-  return Math.max(0, Math.min(first + anchor.rowOffset, rows.length - 1))
-}
-
-// The anchor for a flat row index.
-export function anchorAt(rows: readonly TranscriptRow[], index: number): ScrollAnchor | null {
-  const row = rows[index]
-  if (!row) return null
-  const first = rows.findIndex((r) => r.entryKey === row.entryKey)
-  return { entryKey: row.entryKey, rowOffset: Math.max(0, index - first) }
-}
-
-// The row range a nav BLOCK occupies — the entry's own rows plus any nested
-// under it (a message's tool calls travel with it, so the snap brings the whole
-// block into frame) — skipping its leading spacer: that blank row is a
-// separator, so bringing a block to the top of the window should land on its
-// first line of content, not on the gap above it. Pure, for tests.
-export function entryRange(
-  rows: readonly TranscriptRow[],
-  entryKey: string,
-): { first: number; last: number } | null {
-  let first = -1
-  let last = -1
-  for (const [i, row] of rows.entries()) {
-    if (navKeyOf(row) !== entryKey) continue
-    if (first < 0 && row.spacer) continue
-    if (first < 0) first = i
-    last = i
-  }
-  return first < 0 ? null : { first, last }
-}
-
-// Where the window must sit for `entryKey` to be readable, given where it sits
-// now and which way the highlight is travelling (`dir`: 1 for ↓, -1 for ↑) —
-// the ↑/↓ snap.
-//
-// An entry already fully in frame doesn't move the window at all. One that
-// FITS but sits off-frame comes in from the side it is on: from above to the
-// top of the window, from below to the bottom edge. One TOO TALL to fit lands
-// on the edge you are heading towards, so the walk keeps its direction of
-// travel: ↓ lands on its FIRST line (you read a long message from its
-// beginning) and ↑ on its LAST (you back into the end of it). From there
-// ↑/↓ scroll THROUGH the rest of it a row at a time — see revealMore — so the
-// two together read the entry continuously in whichever direction you started.
-//
-// Returns the flat row index to pin to the top, or null to leave the window
-// alone. Pure, for tests.
-export function snapToEntry(
-  rows: readonly TranscriptRow[],
-  entryKey: string,
-  view: { start: number; end: number },
-  capacity: number,
-  dir: 1 | -1 = 1,
-): number | null {
-  const range = entryRange(rows, entryKey)
-  if (!range) return null
-  // Already readable whole: don't jostle the window.
-  if (range.first >= view.start && range.last < view.end) return null
-  const bottomAligned = Math.max(0, range.last - capacity + 1)
-  const height = range.last - range.first + 1
-  if (height >= capacity) return dir < 0 ? bottomAligned : range.first
-  return range.first < view.start ? range.first : bottomAligned
-}
-
-// snapToEntry's row index as the scroll move to apply: null to leave the window
-// where it is, or the anchor to park on — itself null when the snap lands on the
-// last screenful, which means following the bottom again so streamed content
-// keeps arriving in view.
-//
-// That bottom-follow is keyed on WHERE THE SNAP LANDS, not on the entry being
-// the newest one: an entry taller than the window is snapped to an interior row
-// (its first line, when walking down into it), and pinning to the bottom there
-// would throw the snap away and show the entry's end instead of its beginning.
-// Pure, for tests.
-export function snapAnchorForEntry(
-  rows: readonly TranscriptRow[],
-  entryKey: string,
-  view: { start: number; end: number },
-  capacity: number,
-  dir: 1 | -1 = 1,
-): { anchor: ScrollAnchor | null } | null {
-  const target = snapToEntry(rows, entryKey, view, capacity, dir)
-  if (target === null) return null
-  if (target >= rows.length - capacity) return { anchor: null }
-  return { anchor: anchorAt(rows, target) }
-}
-
 // Agent and user prose rendered as markdown (bold, headings, bullets, tables,
 // fenced code), pre-wrapped to the column it will occupy. Only these two kinds
 // go through it: tool lines and system notices are the SDK's own formatting,
@@ -647,7 +391,7 @@ export function withRenderedMarkdown(item: TranscriptItem, width: number): Trans
 
 // Which items collapse when long: tool results and user turns (the latter carry
 // the re-injected run context, which is bulky). Assistant prose stays full.
-export function isCollapsible(item: TranscriptItem): boolean {
+function isCollapsible(item: TranscriptItem): boolean {
   return (
     (item.kind === 'tool_result' || item.kind === 'user') &&
     item.text.split('\n').length > COLLAPSE_LINES

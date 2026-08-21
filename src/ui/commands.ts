@@ -6,7 +6,7 @@
 // forwarded. Silently sending "/stpo" to the agent as prose is the failure mode
 // that rule exists to prevent.
 
-export type CommandId = 'stop' | 'transcript' | 'sessions' | 'exit'
+export type CommandId = 'stop' | 'sessions' | 'exit'
 
 export type SlashCommand = {
   id: CommandId
@@ -18,12 +18,11 @@ export type SlashCommand = {
   detail: string
 }
 
-// Every command, in menu order: the two that act on the session first, then the
-// screens, then the way out.
+// Every command, in menu order: the one that acts on the session first, then the
+// screen, then the way out.
 export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { id: 'stop', name: 'stop', detail: 'interrupt the agent, keeping the conversation' },
-  { id: 'transcript', name: 'transcript', detail: 'browse the full transcript (ctrl+r)' },
-  { id: 'sessions', name: 'sessions', detail: 'switch sessions (ctrl+j)' },
+  { id: 'sessions', name: 'sessions', detail: 'switch sessions (esc)' },
   { id: 'exit', name: 'exit', aliases: ['quit'], detail: 'leave the CLI; the session keeps running' },
 ]
 

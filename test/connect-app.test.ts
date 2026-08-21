@@ -6,7 +6,6 @@ import {
   deliveredUnechoedSends,
   deriveSandboxState,
   lastLines,
-  foldRun,
   hookPhrase,
   humanDuration,
   reshapeTranscript,
@@ -14,17 +13,11 @@ import {
   sessionLogText,
 } from '../src/ui/ConnectApp'
 import {
-  anchorAt,
-  anchorIndex,
-  entryRange,
   gutterFor,
   itemRows,
   layOutItems,
-  rowViewport,
   settledItemKeys,
   settledRowCount,
-  snapAnchorForEntry,
-  snapToEntry,
   spanColor,
   withRenderedMarkdown,
   type TranscriptRow,
@@ -592,68 +585,13 @@ describe('layOutItems', () => {
     // every run in the transcript.
     const think: TranscriptItem = { key: 'th', kind: 'thinking', text: 'hmm', gutter: '✻' }
     const out = layOutItems([think, fold('t1')])
-    expect(out[1]).toMatchObject({ indent: 2, nested: true, attach: true, navKey: 'th' })
-  })
-
-  it('still lets that flat run BELONG to your message, so → can open it', () => {
-    // Indent and ownership are separate: the run doesn't branch off your
-    // message visually, but it is reached by opening it. Owning nothing would
-    // make the run unreachable without ctrl+r.
-    const out = layOutItems([user('u'), fold('t1')])
-    expect(out[1].navKey).toBe('u')
+    expect(out[1]).toMatchObject({ indent: 2, nested: true, attach: true })
   })
 
   it('leaves a run with no parent above it flat', () => {
     // Replayed history can start mid-burst; there is nothing to hang off.
     const out = layOutItems([call('t1'), res('r1'), prose('a')])
     expect(out.map((p) => p.nested)).toEqual([false, false, false])
-  })
-
-  it("keeps an opened message's revealed calls at the fold's own indent", () => {
-    // The fold is REPLACED by its calls (see `visible` in ConnectApp), so there
-    // is no header above them to step in from.
-    const out = layOutItems([prose('a'), call('t1'), res('r1')], {
-      openedKeys: new Set(['a']),
-    })
-    expect(out.map((p) => p.indent)).toEqual([0, 2, 2])
-  })
-
-  it('makes a tool call part of its message block, not a stop of its own', () => {
-    // ↑ lands on the message; the call and its result travel with it.
-    const out = layOutItems([prose('a'), call('t1'), res('r1')])
-    expect(out.map((p) => p.navKey)).toEqual([undefined, 'a', 'a'])
-  })
-
-  it('makes a collapsed fold part of the message block too', () => {
-    const out = layOutItems([prose('a'), fold('t1')])
-    expect(out[1].navKey).toBe('a')
-  })
-
-  it('promotes revealed calls to stops of their own, results still travelling with them', () => {
-    const out = layOutItems([prose('a'), call('t1'), res('r1')], {
-      openedKeys: new Set(['a']),
-    })
-    // The call becomes its own stop and owns its result.
-    expect(out.map((p) => p.navKey)).toEqual([undefined, undefined, 't1'])
-  })
-
-  it('points a revealed call back at its message, so ← steps out', () => {
-    const out = layOutItems([prose('a'), call('t1'), res('r1')], {
-      openedKeys: new Set(['a']),
-    })
-    expect(out[1].parentKey).toBe('a')
-  })
-
-  it('promotes every call when ctrl+r reveals the whole transcript', () => {
-    const out = layOutItems([prose('a'), call('t1'), res('r1')], { revealAll: true })
-    expect(out.map((p) => p.navKey)).toEqual([undefined, undefined, 't1'])
-  })
-
-  it('leaves an unopened message closed, so its calls stay off the walk', () => {
-    const out = layOutItems([prose('a'), fold('t1'), prose('b'), fold('t2')], {
-      openedKeys: new Set(['b']),
-    })
-    expect(out.map((p) => p.navKey)).toEqual([undefined, 'a', undefined, 'b'])
   })
 
   it('keeps prose, user messages and notices flat', () => {
@@ -809,82 +747,9 @@ describe('settledRowCount', () => {
   })
 })
 
-describe('rowViewport', () => {
-  it('follows the bottom by default, filling the window', () => {
-    expect(rowViewport(10, 4, null)).toMatchObject({ start: 7, end: 10, hiddenBelow: 0 })
-    // The "N above" marker costs a row, so only 3 content rows fit in 4.
-    expect(rowViewport(10, 4, null).hiddenAbove).toBe(7)
-  })
-
-  it('shows everything when it fits, with no markers', () => {
-    expect(rowViewport(3, 10, null)).toMatchObject({
-      start: 0,
-      end: 3,
-      hiddenAbove: 0,
-      hiddenBelow: 0,
-    })
-  })
-
-  it('anchors a row to the top when scrolled', () => {
-    // Rows 4..6 with both markers eating a row each out of the 5-row budget.
-    expect(rowViewport(20, 5, 4)).toMatchObject({ start: 4, end: 7 })
-  })
-
-  it('packs the window full at the bottom edge instead of leaving dead rows', () => {
-    // Anchoring row 18 of 20 in a 6-row budget would show 2 rows and waste 4;
-    // it backs up so the frame is full.
-    const view = rowViewport(20, 6, 18)
-    expect(view.end).toBe(20)
-    expect(view.end - view.start).toBe(5) // one row goes to the "above" marker
-    expect(view.hiddenBelow).toBe(0)
-  })
-
-  it('handles an empty list', () => {
-    expect(rowViewport(0, 5, null)).toMatchObject({ start: 0, end: 0 })
-  })
-
-  // The layout's load-bearing invariant: one row too many and ink's frame
-  // outgrows the pane, which scrolls the render region and smears stale rows.
-  it('never renders more rows than the budget, for any input', () => {
-    const bad: string[] = []
-    for (let total = 0; total <= 40; total++) {
-      for (let budget = 1; budget <= 20; budget++) {
-        const anchors: (number | null)[] = [null]
-        for (let a = -2; a <= total + 2; a++) anchors.push(a)
-        for (const anchor of anchors) {
-          const v = rowViewport(total, budget, anchor)
-          const rendered =
-            v.end - v.start + (v.showAbove ? 1 : 0) + (v.showBelow ? 1 : 0)
-          if (total > 0 && rendered > budget) {
-            bad.push(`total=${total} budget=${budget} anchor=${anchor}: ${rendered} rows`)
-          }
-          if (v.hiddenAbove !== v.start || v.hiddenBelow !== total - v.end) {
-            bad.push(`counts disagree with slice: ${JSON.stringify(v)}`)
-          }
-          if (v.start > v.end) bad.push(`inverted slice: ${JSON.stringify(v)}`)
-        }
-      }
-    }
-    expect(bad.slice(0, 10)).toEqual([])
-  })
-
-  it('can always reach the very top and the very bottom', () => {
-    for (let total = 1; total <= 30; total++) {
-      for (let budget = 1; budget <= 12; budget++) {
-        // Anchored at row 0 the window starts at the top, with nothing hidden
-        // above it; following the bottom, nothing is hidden below.
-        expect(rowViewport(total, budget, 0).hiddenAbove).toBe(0)
-        expect(rowViewport(total, budget, null).hiddenBelow).toBe(0)
-      }
-    }
-  })
-})
-
 describe('itemRows', () => {
   it('spends no rows on vertical padding, so exchanges pack tightly', () => {
-    const rows = itemRows({ key: 'a', kind: 'assistant', text: 'hi' }, 40, {
-      clamp: false,
-    })
+    const rows = itemRows({ key: 'a', kind: 'assistant', text: 'hi' }, 40)
     expect(rows).toHaveLength(1)
   })
 
@@ -893,27 +758,23 @@ describe('itemRows', () => {
   // sender is carried by the gutter glyph alone.
   it('marks the sender with a gutter glyph and paints no background', () => {
     const gutterOf = (kind: TranscriptItem['kind'], nested = false): string | undefined =>
-      itemRows({ key: 'a', kind, text: 'x' } as TranscriptItem, 40, { clamp: false, nested })[0]
+      itemRows({ key: 'a', kind, text: 'x' } as TranscriptItem, 40, { nested })[0]
         .gutter?.text
     expect(gutterOf('user')).toBe('▶')
     expect(gutterOf('assistant')).toBe('●')
     expect(gutterOf('notice')).toBe('✦')
-    for (const row of itemRows({ key: 'a', kind: 'user', text: 'x' }, 40, { clamp: false })) {
+    for (const row of itemRows({ key: 'a', kind: 'user', text: 'x' }, 40)) {
       expect(row).not.toHaveProperty('panel')
     }
   })
 
   it('emits one row per line of a multi-line body', () => {
-    const rows = itemRows({ key: 'a', kind: 'assistant', text: 'one\ntwo\nthree' }, 40, {
-      clamp: false,
-    })
+    const rows = itemRows({ key: 'a', kind: 'assistant', text: 'one\ntwo\nthree' }, 40)
     expect(rows.map((r) => r.spans[0].text)).toEqual(['one', 'two', 'three'])
   })
 
   it('never emits a row wider than the pane', () => {
-    const rows = itemRows({ key: 'a', kind: 'assistant', text: 'x'.repeat(200) }, 40, {
-      clamp: false,
-    })
+    const rows = itemRows({ key: 'a', kind: 'assistant', text: 'x'.repeat(200) }, 40)
     for (const row of rows) {
       const width = row.spans.reduce((n, s) => n + stripAnsi(s.text).length, 0)
       expect(width).toBeLessThanOrEqual(40)
@@ -921,9 +782,7 @@ describe('itemRows', () => {
   })
 
   it('puts the gutter glyph on the first content row only', () => {
-    const rows = itemRows({ key: 'a', kind: 'user', text: 'one\ntwo' }, 40, {
-      clamp: false,
-    })
+    const rows = itemRows({ key: 'a', kind: 'user', text: 'one\ntwo' }, 40)
     const withGutter = rows.filter((r) => r.gutter)
     expect(withGutter).toHaveLength(1)
     expect(withGutter[0].gutter?.text).toBe('▶')
@@ -932,162 +791,41 @@ describe('itemRows', () => {
   it('marks a fold ⎿ whether or not it nests, since a flat one is still a fold', () => {
     const foldItem: TranscriptItem = { key: 'grp:t1', kind: 'notice', text: 'Ran 1 shell command' }
     for (const nested of [true, false]) {
-      const rows = itemRows(foldItem, 40, { clamp: false, nested })
+      const rows = itemRows(foldItem, 40, { nested })
       expect(rows[0].gutter?.text, `nested=${nested}`).toBe('⎿')
     }
     // A real ✦ notice keeps its own mark either way.
     const notice: TranscriptItem = { key: 'n', kind: 'notice', text: 'Session asleep' }
-    expect(itemRows(notice, 40, { clamp: false, nested: true })[0].gutter?.text).toBe('✦')
+    expect(itemRows(notice, 40, { nested: true })[0].gutter?.text).toBe('✦')
   })
 
   it('pads every row of a ⎿ item, so a wrapped body stays aligned', () => {
-    const rows = itemRows({ key: 'r', kind: 'tool_result', text: 'a\nb', gutter: '⎿' }, 40, {
-      clamp: false,
-    })
+    const rows = itemRows({ key: 'r', kind: 'tool_result', text: 'a\nb', gutter: '⎿' }, 40)
     expect(rows.map((r) => r.textPad)).toEqual([1, 1])
     // And nothing else gets it.
-    expect(itemRows({ key: 'a', kind: 'assistant', text: 'hi' }, 40, { clamp: false })[0].textPad)
+    expect(itemRows({ key: 'a', kind: 'assistant', text: 'hi' }, 40)[0].textPad)
       .toBe(0)
   })
 
   it('leads with a spacer row when the item wants space before it', () => {
-    const rows = itemRows({ key: 'a', kind: 'notice', text: 'note', spaceBefore: true }, 40, {
-      clamp: false,
-    })
+    const rows = itemRows({ key: 'a', kind: 'notice', text: 'note', spaceBefore: true }, 40)
     expect(rows[0].spacer).toBe(true)
   })
 
   it('clamps a long body, marking how many lines are hidden', () => {
     const text = Array.from({ length: 10 }, (_, i) => `l${i}`).join('\n')
-    const item = { key: 'r', kind: 'tool_result' as const, text }
-    const collapsed = itemRows(item, 40, { clamp: true })
-    expect(collapsed).toHaveLength(7) // 6 lines + the "+N lines" marker
-    // The row carries the COUNT; the renderer writes the hint, because which
-    // key opens it (→ vs ctrl+r) depends on the highlight — a render concern.
-    expect(collapsed[6].clampedLines).toBe(4)
-    expect(itemRows(item, 40, { clamp: false })).toHaveLength(10)
+    const rows = itemRows({ key: 'r', kind: 'tool_result' as const, text }, 40)
+    expect(rows).toHaveLength(7) // 6 lines + the "+N lines" marker
+    // The row carries the COUNT; the renderer writes the text around it.
+    expect(rows[6].clampedLines).toBe(4)
   })
 
   it('measures visible columns, not escape sequences', () => {
     // A markdown-rendered line carries ANSI codes that occupy no columns.
     // Counting them would over-count rows and desync the window.
     const styled = `\u001b[1m${'x'.repeat(30)}\u001b[22m`
-    const rows = itemRows({ key: 'a', kind: 'assistant', text: styled }, 40, {
-      clamp: false,
-    })
+    const rows = itemRows({ key: 'a', kind: 'assistant', text: styled }, 40)
     expect(rows.filter((r) => r.spans.length > 0)).toHaveLength(1)
-  })
-})
-
-describe('row anchors', () => {
-  const rows: TranscriptRow[] = [
-    { id: '0', entryKey: 'a', spans: [] },
-    { id: '1', entryKey: 'b', spans: [], spacer: true },
-    { id: '2', entryKey: 'b', spans: [] },
-    { id: '3', entryKey: 'b', spans: [] },
-    { id: '4', entryKey: 'c', spans: [] },
-  ]
-
-  it('round-trips a row index through an entry-relative anchor', () => {
-    const anchor = anchorAt(rows, 3)
-    expect(anchor).toEqual({ entryKey: 'b', rowOffset: 2 })
-    expect(anchorIndex(rows, anchor!)).toBe(3)
-  })
-
-  it('survives rows being prepended above the anchor', () => {
-    const anchor = anchorAt(rows, 3)!
-    const grown = [{ id: 'x', entryKey: 'z', spans: [] }, ...rows]
-    // Same content row, new flat index — this is what keeps a streamed
-    // append from sliding the window.
-    expect(anchorIndex(grown, anchor)).toBe(4)
-  })
-
-  it('reports a vanished entry so the caller can follow the bottom', () => {
-    expect(anchorIndex(rows, { entryKey: 'gone', rowOffset: 0 })).toBeNull()
-  })
-
-  it('skips an entry leading spacer, which is a separator not content', () => {
-    expect(entryRange(rows, 'b')).toEqual({ first: 2, last: 3 })
-  })
-})
-
-describe('snapToEntry', () => {
-  // Entry 'b' is 10 rows tall, taller than a 4-row window.
-  const rows: TranscriptRow[] = [
-    { id: 'a', entryKey: 'a', spans: [] },
-    ...Array.from({ length: 10 }, (_, i) => ({ id: `b${i}`, entryKey: 'b', spans: [] })),
-    { id: 'c', entryKey: 'c', spans: [] },
-  ]
-
-  it('brings an entry entered from above to the top of the window', () => {
-    expect(snapToEntry(rows, 'a', { start: 5, end: 9 }, 4)).toBe(0)
-  })
-
-  it('shows a too-tall entry from its FIRST line, so it reads from the top', () => {
-    expect(snapToEntry(rows, 'b', { start: 0, end: 4 }, 4)).toBe(1)
-  })
-
-  it('aligns an entry arriving from below to the bottom edge', () => {
-    // 'c' is one row at index 11, entering a 4-row window that ends at 8.
-    expect(snapToEntry(rows, 'c', { start: 4, end: 8 }, 4)).toBe(8)
-  })
-
-  it('leaves the window alone for an entry already fully in frame', () => {
-    const short: TranscriptRow[] = [
-      { id: 'a', entryKey: 'a', spans: [] },
-      { id: 'b', entryKey: 'b', spans: [] },
-      { id: 'c', entryKey: 'c', spans: [] },
-    ]
-    expect(snapToEntry(short, 'b', { start: 0, end: 3 }, 3)).toBeNull()
-  })
-
-  it('backs ↑ into a too-tall entry at its LAST line, keeping the walk going up', () => {
-    // 'b' spans rows 1..10. Walking UP out of 'c' lands on 'b's bottom edge
-    // (rows 7..10 on a 4-row window), not its far-away first line.
-    expect(snapToEntry(rows, 'b', { start: 8, end: 12 }, 4, -1)).toBe(7)
-  })
-
-  it('walks ↓ into a too-tall entry at its FIRST line', () => {
-    expect(snapToEntry(rows, 'b', { start: 0, end: 4 }, 4, 1)).toBe(1)
-  })
-})
-
-describe('snapAnchorForEntry', () => {
-  // A short entry, then one 10 rows tall — taller than the 4-row window.
-  const shortThenLong: TranscriptRow[] = [
-    { id: 'a', entryKey: 'a', spans: [] },
-    ...Array.from({ length: 10 }, (_, i) => ({ id: `b${i}`, entryKey: 'b', spans: [] })),
-  ]
-
-  it('parks on the TOP of a trailing too-tall entry walked into from above', () => {
-    // ↓ off the short entry onto the long last one: its first line, NOT the
-    // bottom-follow that being the newest entry used to force.
-    expect(snapAnchorForEntry(shortThenLong, 'b', { start: 0, end: 4 }, 4, 1)).toEqual({
-      anchor: { entryKey: 'b', rowOffset: 0 },
-    })
-  })
-
-  it('follows the bottom when the snap really does land on the last screenful', () => {
-    // The same trailing entry, but short enough to fit: bottom-aligning it IS
-    // the bottom of the log, so keep streaming content in view.
-    const shortTail: TranscriptRow[] = [
-      ...Array.from({ length: 6 }, (_, i) => ({ id: `a${i}`, entryKey: 'a', spans: [] })),
-      { id: 'b0', entryKey: 'b', spans: [] },
-    ]
-    expect(snapAnchorForEntry(shortTail, 'b', { start: 0, end: 4 }, 4, 1)).toEqual({ anchor: null })
-  })
-
-  it('parks on the BOTTOM of a too-tall entry walked into from below', () => {
-    // (short) (long) (short) with the highlight on the trailing short one: ↑
-    // lands on the long entry's END — rows 7..10 of an 11-row block.
-    const withTail: TranscriptRow[] = [...shortThenLong, { id: 'c', entryKey: 'c', spans: [] }]
-    expect(snapAnchorForEntry(withTail, 'b', { start: 8, end: 12 }, 4, -1)).toEqual({
-      anchor: { entryKey: 'b', rowOffset: 6 },
-    })
-  })
-
-  it('reports no move for an entry already fully in frame', () => {
-    expect(snapAnchorForEntry(shortThenLong, 'a', { start: 0, end: 4 }, 4, -1)).toBeNull()
   })
 })
 
@@ -1117,21 +855,6 @@ describe('withRenderedMarkdown', () => {
     for (const line of out.text.split('\n')) {
       expect(stripAnsi(line).length).toBeLessThanOrEqual(40)
     }
-  })
-})
-
-describe('foldRun', () => {
-  const tool = (key: string): TranscriptItem => ({ key, kind: 'tool', text: 'Bash' })
-  const result = (key: string): TranscriptItem => ({ key, kind: 'tool_result', text: 'ok' })
-  const prose = (key: string): TranscriptItem => ({ key, kind: 'assistant', text: 'hi' })
-
-  it('returns the consecutive tool run starting at the fold anchor', () => {
-    const items = [prose('a'), tool('t1'), result('r1'), tool('t2'), result('r2'), prose('b')]
-    expect(foldRun('grp:t1', items).map((i) => i.key)).toEqual(['t1', 'r1', 't2', 'r2'])
-  })
-
-  it('is empty when the anchor is gone from the unfolded list', () => {
-    expect(foldRun('grp:missing', [prose('a')])).toEqual([])
   })
 })
 
@@ -1177,7 +900,7 @@ describe('itemRows colours', () => {
 
   it('resolves each kind to its brand colour, never to the terminal default', () => {
     for (const [kind, expected] of bodyColor) {
-      const rows = itemRows({ key: `k:${kind}`, kind, text: 'some text' }, 60, { clamp: false })
+      const rows = itemRows({ key: `k:${kind}`, kind, text: 'some text' }, 60)
       const body = rows.filter((r) => r.spans.some((s) => s.text.includes('some text')))
       expect(body.length, kind).toBeGreaterThan(0)
       for (const row of body) {
