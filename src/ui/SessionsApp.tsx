@@ -103,6 +103,9 @@ const COMPOSER_PAD_X = 2
 // price column has to clear on the left.
 const OPTION_GUTTER = '  '.length + 2 + '[x] '.length
 
+// The unit the price columns are quoted in, printed once on their column head.
+const RATE_UNIT = '  per 1M'
+
 export interface SessionsAppProps {
   api: Ellipsis
   openSocket: OpenSocket
@@ -893,7 +896,10 @@ function NewSessionPane({
   const [row, setRow] = useState<'prompt' | number>('prompt')
   // Single-pick indices; 0 is always "Default" (server-resolved).
   const [configIdx, setConfigIdx] = useState(0)
-  const [modelIdx, setModelIdx] = useState(0)
+  // null = the model row is untouched, so it tracks whichever row carries the
+  // server-resolved pick (see modelIdx). The list arrives async, so there is no
+  // index to seed this with at mount.
+  const [modelPick, setModelPick] = useState<number | null>(null)
   // The multi-select repository set ("owner/name" full names). null = the
   // picker is untouched: the run inherits the server's resolution (the
   // detected repo + whatever the resolved config declares). The first toggle
@@ -919,6 +925,13 @@ function NewSessionPane({
   // The server's selectable set (GET /models); before it lands — and on an
   // older server that has no such route — the built-in fallback list.
   const modelOptions = useMemo(() => composerModelOptions(models ?? []), [models])
+  // The checked model row: the explicit pick, else the account default's row
+  // (the one carrying the null id), else the first.
+  const modelIdx = useMemo(() => {
+    if (modelPick !== null) return Math.min(modelPick, modelOptions.length - 1)
+    const at = modelOptions.findIndex((o) => o.id === null)
+    return at === -1 ? 0 : at
+  }, [modelPick, modelOptions])
   // When the cwd names a repo there is no "Default" row: the detected repo
   // heads the list as a normal checkable entry — it reads [x] while the
   // selection is untouched (the server checks it out by default) and can be
@@ -963,7 +976,7 @@ function NewSessionPane({
       setConfigIdx(at)
       setOpenPicker(null)
     } else if (key === 'model') {
-      setModelIdx(at)
+      setModelPick(at)
       setOpenPicker(null)
     } else {
       const id = repoOptions[at]?.id
@@ -985,7 +998,7 @@ function NewSessionPane({
   const submit = (): void => {
     onSubmit(text.trim(), {
       configId: configOptions[Math.min(configIdx, configOptions.length - 1)]?.id ?? null,
-      model: modelOptions[Math.min(modelIdx, modelOptions.length - 1)]?.id ?? null,
+      model: modelOptions[modelIdx]?.id ?? null,
       repos: repoSel === null ? null : [...repoSel],
     })
   }
@@ -1117,15 +1130,6 @@ function NewSessionPane({
     return options[Math.min(idx, options.length - 1)]?.label ?? 'Default'
   }
 
-  // The muted tail after a collapsed row's value: the picked model's price, so
-  // the row still says what a run costs once the list is folded away. Only the
-  // model rows carry one.
-  const rowNote = (key: PickerRow['key']): string | null => {
-    if (key !== 'model') return null
-    const options = optionsFor(key)
-    return options[Math.min(modelIdx, options.length - 1)]?.rate ?? null
-  }
-
   // How many option rows an open picker shows inside the panel: the pane
   // minus the heading, notices, and the panel's other rows (~12); the panel
   // grows upward into the spacer above, so the prompt never moves.
@@ -1165,16 +1169,29 @@ function NewSessionPane({
   // and counting it would overstate what is hidden above and below.
   const hiddenAbove = openRows.slice(0, win.start).filter((r) => r.kind === 'option').length
   const hiddenBelow = openRows.slice(win.end).filter((r) => r.kind === 'option').length
-  // Where the price column starts: the widest label in the list, so the rates
-  // read down a column instead of ragged. Dropped (0 = one space after the
-  // label) when the panel is too narrow to hold label and price both, since a
-  // padded row would push the price off the right edge into the truncation.
-  const rateColumn = (() => {
-    if (!openOptions.some((o) => o.rate)) return 0
+  // The price table's column widths: the label column, then one numeric column
+  // per lane, each as wide as its widest cell (its heading included) so the
+  // dollars read down a right-aligned column. null when there is no price to
+  // quote, or when the panel is too narrow to hold the whole table — a padded
+  // row would push the last column off the right edge into the truncation.
+  const rateTable = (() => {
+    if (!openOptions.some((o) => o.rate)) return null
     const label = Math.max(...openOptions.map((o) => o.label.length))
-    const rate = Math.max(...openOptions.map((o) => (o.rate ?? '').length))
-    return OPTION_GUTTER + label + 2 + rate <= inputWidth ? label : 0
+    const input = Math.max(2, ...openOptions.map((o) => (o.rate?.input ?? '').length))
+    const output = Math.max(3, ...openOptions.map((o) => (o.rate?.output ?? '').length))
+    const total = OPTION_GUTTER + label + 2 + input + 2 + output + RATE_UNIT.length
+    return total <= inputWidth ? { label, input, output } : null
   })()
+  // A row's price cells, right-aligned into the table's columns. A model the
+  // server quoted no card for prints blank cells rather than shifting the ones
+  // below it out of column.
+  const rateCells = (rate: ComposerModel['rate']): string =>
+    rateTable
+      ? '  ' +
+        (rate?.input ?? '').padStart(rateTable.input) +
+        '  ' +
+        (rate?.output ?? '').padStart(rateTable.output)
+      : ''
 
   return (
     // Bottom-docked, mirroring the chat layout: the heading floats centered
@@ -1242,6 +1259,18 @@ function NewSessionPane({
             return (
               <Box key={r.key} flexDirection="column" width={inputWidth}>
                 <Text color={theme.muted}>{'  '}{r.label}:</Text>
+                {/* The price table's column heads, over the numeric columns
+                    they name, with the unit stated once here instead of on
+                    every row. */}
+                {rateTable && (
+                  <Box width={inputWidth}>
+                    <Text wrap="truncate" color={theme.muted}>
+                      {' '.repeat(OPTION_GUTTER + rateTable.label)}
+                      {rateCells({ input: 'IN', output: 'OUT' })}
+                      {RATE_UNIT}
+                    </Text>
+                  </Box>
+                )}
                 {hiddenAbove > 0 && (
                   <Text color={theme.muted}>{'    '}… {hiddenAbove} more</Text>
                 )}
@@ -1273,17 +1302,13 @@ function NewSessionPane({
                           {hovered ? SELECTION_GLYPH : ' '}
                         </Text>{' '}
                         <Text color={hovered || picked ? theme.foreground : theme.muted}>
-                          {`[${picked ? 'x' : ' '}] ${rateColumn ? opt.label.padEnd(rateColumn) : opt.label}`}
+                          {`[${picked ? 'x' : ' '}] ${rateTable ? opt.label.padEnd(rateTable.label) : opt.label}`}
                         </Text>
-                        {/* The price, always muted — subtext next to the id
-                            whether or not the row is the highlighted one, so
-                            walking the list never moves the eye off the name. */}
-                        {opt.rate && (
-                          <Text color={theme.muted}>
-                            {'  '}
-                            {opt.rate}
-                          </Text>
-                        )}
+                        {/* The prices, always muted — the table's numbers next
+                            to the id whether or not the row is the highlighted
+                            one, so walking the list never moves the eye off the
+                            name. */}
+                        <Text color={theme.muted}>{rateCells(opt.rate)}</Text>
                       </Text>
                     </Box>
                   )
@@ -1296,7 +1321,6 @@ function NewSessionPane({
               </Box>
             )
           }
-          const note = rowNote(r.key)
           return (
             <Box key={r.key} width={inputWidth}>
               <Text wrap="truncate">
@@ -1307,12 +1331,6 @@ function NewSessionPane({
                 <Text color={active ? theme.foreground : theme.muted}>
                   {rowValue(r.key)}
                 </Text>
-                {note && (
-                  <Text color={theme.muted}>
-                    {'  '}
-                    {note}
-                  </Text>
-                )}
               </Text>
             </Box>
           )

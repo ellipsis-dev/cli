@@ -270,9 +270,9 @@ export type ComposerModel = {
   // The heading this row sits under. Consecutive rows sharing a group print
   // one heading between them; an unset group prints none.
   group?: string | null
-  // The muted subtext printed after the label: what the model charges per 1M
-  // tokens. Unset when there is no rate to quote (see modelRateHint).
-  rate?: string | null
+  // The two price cells printed after the label, already formatted as dollars.
+  // Unset when there is no rate to quote (see modelRate).
+  rate?: { input: string; output: string } | null
 }
 
 // The vendor groups, in the order their headings appear, and the names those
@@ -314,17 +314,20 @@ export function rateDollars(cents: number): string {
   return cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`
 }
 
-// A model's price as one line of subtext: the two lanes that decide what a
-// session costs, read and written. The three cache lanes are deliberately
-// left out — five numbers on a picker row is a rate card, not a hint, and
-// `agent model list` (plus the dashboard's Models tab) is where the full card
-// belongs. Null when the server sent no card, which is the honest answer: a
-// stale hardcoded price is worse than no price.
-export function modelRateHint(rate: ModelRateCard | null | undefined): string | null {
+// A model's price as two table cells: the two lanes that decide what a session
+// costs, read and written. The three cache lanes are deliberately left out —
+// five numbers on a picker row is a rate card, not a hint, and `agent model
+// list` (plus the dashboard's Models tab) is where the full card belongs. Null
+// when the server sent no card, which is the honest answer: a stale hardcoded
+// price is worse than no price.
+export function modelRate(
+  rate: ModelRateCard | null | undefined,
+): { input: string; output: string } | null {
   if (!rate) return null
-  const input = rateDollars(rate.input_cents_per_1m_tokens)
-  const output = rateDollars(rate.output_cents_per_1m_tokens)
-  return `in ${input} · out ${output} per 1M`
+  return {
+    input: rateDollars(rate.input_cents_per_1m_tokens),
+    output: rateDollars(rate.output_cents_per_1m_tokens),
+  }
 }
 
 // The composer's model list when GET /models is unavailable (an older
@@ -349,38 +352,29 @@ export const COMPOSER_MODELS: ReadonlyArray<ComposerModel> = [
 // The composer's model options from the server's list, grouped by who BUILT
 // each model (MANUFACTURER_ORDER) and, inside a group, left in the server's
 // order — which is most expensive first, so every group reads down from its
-// flagship. Labels are raw model ids, each carrying its rate as subtext.
+// flagship. Labels are raw model ids, each carrying its rate as price cells.
 //
-// The null "let the server pick" entry IS the default model's row — labelled
-// with the id it resolves to (DEFAULT_AGENT_MODEL) and quoting that model's
-// rate, replacing its own entry so the id appears once in the list. It heads
-// the list under its own heading rather than sitting inside its vendor's
-// group, because what it selects is "the account default", not that id: the
-// server is still the one resolving it, and it may resolve to something else
-// tomorrow.
+// The account default's row carries the null "let the server pick" id, so
+// leaving the picker alone keeps the server as the one resolving the model.
+// It sits in its vendor's group like any other row: it is one entry in one
+// table, marked by being the checked one, not by a heading of its own.
+//
+// Only when NO model claims the flag does a separate "Default" row appear at
+// the top, because then there is no id to attach the null pick to.
 export function composerModelOptions(models: readonly SupportedModel[]): ComposerModel[] {
   if (models.length === 0) return [...COMPOSER_MODELS]
-  const fallback = models.find((m) => m.is_default_agent_model)
-  return [
-    {
-      id: null,
-      label: fallback ? fallback.id : 'Default',
-      // Nothing to head a group of one with when no model claims the flag:
-      // the row already reads "Default".
-      group: fallback ? 'Agent default' : null,
-      rate: modelRateHint(fallback?.rate_card),
-    },
-    ...models
-      .filter((m) => !m.is_default_agent_model)
-      // Stable, so the server's within-vendor ordering survives the regroup.
-      .sort((a, b) => manufacturerRank(a.manufacturer) - manufacturerRank(b.manufacturer))
-      .map((m) => ({
-        id: m.id as string | null,
-        label: m.id,
-        group: manufacturerLabel(m.manufacturer),
-        rate: modelRateHint(m.rate_card),
-      })),
-  ]
+  const hasDefault = models.some((m) => m.is_default_agent_model)
+  const rows = models
+    // Stable, so the server's within-vendor ordering survives the regroup.
+    .slice()
+    .sort((a, b) => manufacturerRank(a.manufacturer) - manufacturerRank(b.manufacturer))
+    .map((m) => ({
+      id: (m.is_default_agent_model ? null : m.id) as string | null,
+      label: m.id,
+      group: manufacturerLabel(m.manufacturer),
+      rate: modelRate(m.rate_card),
+    }))
+  return hasDefault ? rows : [{ id: null, label: 'Default', group: null }, ...rows]
 }
 
 // A picker's display rows: each group's heading, then the options under it.
