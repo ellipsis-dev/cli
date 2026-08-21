@@ -167,7 +167,7 @@ is migrated on first use — your existing login becomes a host named for its AP
 base.
 
 The config file also carries UI preferences. `"sessionBar"` scopes the session
-list, which the interactive UI opens as a full screen with `ctrl+j`:
+list, which the interactive UI opens as a full screen with `esc`:
 
 ```json
 {

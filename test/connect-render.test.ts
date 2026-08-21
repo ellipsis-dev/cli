@@ -260,24 +260,24 @@ describe('ConnectApp — the scrollback view', () => {
     await settle()
     let frame = stripAnsi(output().slice(before))
     expect(frame).toContain('/stop')
-    expect(frame).toContain('/transcript')
+    expect(frame).toContain('/sessions')
     expect(frame).toContain('interrupt the agent')
 
     // Typing narrows it to one. Measured from HERE, not from the start: the byte
     // stream keeps every earlier frame, so a cumulative slice would still hold
     // the full list printed a moment ago.
     const beforeNarrow = output().length
-    stdin.write('tr')
+    stdin.write('se')
     await settle()
     frame = stripAnsi(output().slice(beforeNarrow))
-    expect(frame).toContain('/transcript')
+    expect(frame).toContain('/sessions')
     expect(frame).not.toContain('/stop')
 
     // Tab completes the highlighted command into the input.
     const beforeTab = output().length
     stdin.write('\t')
     await settle()
-    expect(stripAnsi(output().slice(beforeTab))).toContain('/transcript')
+    expect(stripAnsi(output().slice(beforeTab))).toContain('/sessions')
     app.unmount()
   })
 

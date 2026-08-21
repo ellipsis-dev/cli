@@ -59,18 +59,14 @@ import { ConnectApp } from './ConnectApp'
 //     the trackpad and select/copy are the terminal's own — which is the reason
 //     for the screen split. Nothing may be pinned above or below it: rows
 //     scrolling past would run straight through any such band.
-//   * the session picker (ctrl+j, or esc / ↓ out of the chat) takes over the
+//   * the session picker (esc or ↓ out of the chat) takes over the
 //     ALTERNATE screen: the full session list, with the chat left untouched on
 //     the primary buffer behind it. enter opens a session and returns.
-//   * the transcript browser (ctrl+r, owned by ConnectApp) is the other
-//     alternate-screen view: the windowed transcript with folding and ↑/↓ nav,
-//     which the scrollback view cannot do.
 //   * the new-session composer and the loading placeholder do own their frame,
 //     so they keep the header band and the frame inset.
 //
-// Focus is modal and esc steps outward: inside the chat esc closes the browser,
-// then transcript navigation, then opens the picker. Exactly one useInput
-// handler is active at a time.
+// Focus is modal: esc in the chat opens the picker, esc in the picker goes back.
+// Exactly one useInput handler is active at a time.
 //
 // Liveness: ONE WebSocket — the focused session's, owned by its ConnectApp —
 // plus a 5s REST poll of the session list for the nav. Transcript stores are
@@ -130,7 +126,7 @@ export interface SessionsAppProps {
   initialConfigName?: string
   initialNotice?: string
   // Which sessions reach the picker. `hidden` drops it entirely — focus then
-  // never leaves the chat, so esc, ↓ at the bottom edge and ctrl+j do nothing.
+  // never leaves the chat, so esc and ↓ at the bottom edge do nothing.
   // Set under "sessionBar" in the config file.
   sessionBar: ResolvedSessionBar
   // Builds the start request for a composer-spawned session (the entry point
@@ -255,8 +251,8 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   // Both openings start with the main pane focused: a connect lands you in
   // the conversation, a bare `agent` lands you in the new-session composer.
   // 'nav' = the session picker owns the keyboard, which now means it is OPEN:
-  // the session list is a screen of its own on the alternate buffer (ctrl+j, or
-  // ↓/esc out of the chat) rather than a band pinned under every frame.
+  // the session list is a screen of its own on the alternate buffer (↓ or esc
+  // out of the chat) rather than a band pinned under every frame.
   //
   // It moved there because the chat gave up its viewport: the transcript is
   // printed into the terminal's real scrollback now, and scrollback is
@@ -609,11 +605,10 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       shownChats.current.add(mainPane.sessionId)
       main = (
         // The chat, owning the terminal rather than sitting in a pane: no
-        // width/height box around it and no pane props, which is what puts
-        // ConnectApp in its scrollback view (settled transcript printed into the
-        // terminal's own scrollback, native wheel and select/copy, and ctrl+r for
-        // the full-screen browser). It renders its own meta line again, since
-        // there is no header band above it to carry one.
+        // width/height box around it and no pane props, so its settled transcript
+        // prints into the terminal's own scrollback and the wheel and select/copy
+        // are the terminal's. It renders its own meta line again, since there is
+        // no header band above it to carry one.
         <ConnectApp
           key={mainPane.sessionId}
           scrollbackBreak={needsBreak}
