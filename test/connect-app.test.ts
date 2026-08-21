@@ -788,12 +788,10 @@ describe('itemRows', () => {
     expect(withGutter[0].gutter?.text).toBe('▶')
   })
 
-  it('marks a fold ⎿ whether or not it nests, since a flat one is still a fold', () => {
+  it('marks a fold ⎿ only when it branches off a message, ● when it opens a turn', () => {
     const foldItem: TranscriptItem = { key: 'grp:t1', kind: 'notice', text: 'Ran 1 shell command' }
-    for (const nested of [true, false]) {
-      const rows = itemRows(foldItem, 40, { nested })
-      expect(rows[0].gutter?.text, `nested=${nested}`).toBe('⎿')
-    }
+    expect(itemRows(foldItem, 40, { nested: true })[0].gutter?.text).toBe('⎿')
+    expect(itemRows(foldItem, 40, { nested: false })[0].gutter?.text).toBe('●')
     // A real ✦ notice keeps its own mark either way.
     const notice: TranscriptItem = { key: 'n', kind: 'notice', text: 'Session asleep' }
     expect(itemRows(notice, 40, { nested: true })[0].gutter?.text).toBe('✦')

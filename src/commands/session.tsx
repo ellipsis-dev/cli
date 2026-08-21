@@ -79,8 +79,8 @@ export function registerSession(program: Command): void {
 
   apiRoutes(
     session.command('start').description('Start a new agent session in the cloud'),
-    'POST /sessions',
-    'WS /sessions/{id}/stream with --watch or --connect',
+    'POST /v1/sessions',
+    'WS /v1/sessions/{id}/stream with --watch or --connect',
   )
     .argument(
       '[prompt...]',
@@ -318,8 +318,8 @@ export function registerSession(program: Command): void {
       '\nSources: react, manual, api, cli, mention, cron. ' +
         '--since/--until accept ISO 8601 or "today", "yesterday", "N days ago".',
     ),
-    'GET /sessions',
-    'GET /integrations/github/members to resolve --author',
+    'GET /v1/sessions',
+    'GET /v1/integrations/github/members to resolve --author',
   )
     .option('-c, --config <config-id>', 'only sessions run by this saved agent config')
     .option(
@@ -394,8 +394,8 @@ export function registerSession(program: Command): void {
           'Sources: react, manual, api, cli, mention, cron. ' +
           '--since/--until accept ISO 8601 or "today", "yesterday", "N days ago".',
       ),
-    'GET /sessions/search',
-    'GET /integrations/github/members to resolve --author',
+    'GET /v1/sessions/search',
+    'GET /v1/integrations/github/members to resolve --author',
   )
     .option(
       '-a, --author <login>',
@@ -491,7 +491,7 @@ export function registerSession(program: Command): void {
         .description("Print a session's stored transcript, one line per record"),
       'records',
     ),
-    'GET /sessions/{id}/records',
+    'GET /v1/sessions/{id}/records',
   )
     .option('--json', 'output raw JSON (full record payloads)')
     .action(async (sessionId: string, opts: { json?: boolean }) => {
@@ -520,7 +520,7 @@ export function registerSession(program: Command): void {
       'log',
       'logs',
     ),
-    'GET /sessions/{id}/export',
+    'GET /v1/sessions/{id}/export',
   )
     .option('-o, --output <path>', 'write to a file instead of stdout')
     .option('--gzip', 'keep the concatenated .jsonl.gz bytes as-is (skip gunzip)')
@@ -574,8 +574,8 @@ export function registerSession(program: Command): void {
     session
       .command('get <session-id>')
       .description("Show one session's status, cost, and dashboard link"),
-    'GET /sessions/{id}',
-    'WS /sessions/{id}/stream with --watch',
+    'GET /v1/sessions/{id}',
+    'WS /v1/sessions/{id}/stream with --watch',
   )
     .option(
       '-w, --watch',
@@ -622,8 +622,8 @@ export function registerSession(program: Command): void {
     session
       .command('replay <session-id>')
       .description("Re-run an existing session's trigger input as a fresh session"),
-    'POST /sessions/{id}/replay',
-    'WS /sessions/{id}/stream with --watch',
+    'POST /v1/sessions/{id}/replay',
+    'WS /v1/sessions/{id}/stream with --watch',
   )
     .option(
       '-c, --config <config-id>',
@@ -704,7 +704,7 @@ export function registerSession(program: Command): void {
 
   apiRoutes(
     session.command('stop <session-id>').description('Stop an in-flight session'),
-    'POST /sessions/{id}/stop',
+    'POST /v1/sessions/{id}/stop',
   )
     .option('--json', 'output raw JSON')
     .action(async (sessionId: string, opts: { json?: boolean }) => {

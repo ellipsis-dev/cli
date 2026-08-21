@@ -15,7 +15,7 @@ export function registerLinear(program: Command): void {
         .description('List the Linear teams, marking which have Ellipsis enabled'),
       'team',
     ),
-    'GET /integrations/linear/teams',
+    'GET /v1/integrations/linear/teams',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {

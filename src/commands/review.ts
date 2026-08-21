@@ -51,9 +51,9 @@ export function registerReview(program: Command): void {
     review
       .command('start <pull-request>', { isDefault: true })
       .description('Review a pull request by number'),
-    'POST /reviews',
-    'WS /sessions/{id}/stream',
-    'GET /reviews/{id}',
+    'POST /v1/reviews',
+    'WS /v1/sessions/{id}/stream',
+    'GET /v1/reviews/{id}',
   )
     .option('--repo <owner/name>', 'repository to review (default: this git remote)')
     .option('--full', 're-review the whole pull request, not just the new commits')
@@ -111,7 +111,7 @@ export function registerReview(program: Command): void {
     review
       .command('get <review-id>')
       .description("Print a review's findings, scope, and whether it posted"),
-    'GET /reviews/{id}',
+    'GET /v1/reviews/{id}',
   )
     .option('--json', 'output raw JSON')
     .action(async (reviewId: string, opts: { json?: boolean }) => {
@@ -127,7 +127,7 @@ export function registerReview(program: Command): void {
       review.command('list').description("List a pull request's reviews, newest first"),
       'ls',
     ),
-    'GET /reviews',
+    'GET /v1/reviews',
   )
     .option('--repo <owner/name>', 'only reviews of this repository')
     .option('--pr <number>', 'only reviews of this pull request', parsePositiveInt)

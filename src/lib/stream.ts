@@ -21,11 +21,15 @@ export function resolveWsBase(apiBase?: string): string {
   return DEFAULT_WS_BASE
 }
 
-// The bearer door's stream URL: /sessions/{id}/stream plus the SDK's
+// The bearer door's stream URL: /v1/sessions/{id}/stream plus the SDK's
 // handshake query (`protocol`, `after_seq` when resuming) — the version comes
 // from the SDK, so a protocol bump ships with an SDK bump.
+//
+// The /v1 prefix is spelled out here because this is the one route the CLI still
+// builds by hand: every REST path comes from the SDK, which carries its own
+// prefix, so the base URL a host stores is the bare origin.
 export function buildStreamUrl(wsBase: string, sessionId: string, query: string): string {
-  return `${wsBase}/sessions/${encodeURIComponent(sessionId)}/stream?${query}`
+  return `${wsBase}/v1/sessions/${encodeURIComponent(sessionId)}/stream?${query}`
 }
 
 // An OpenSocket over the `ws` package with bearer auth — what every CLI

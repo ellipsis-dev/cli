@@ -78,7 +78,7 @@ export function registerAnalytics(program: Command): void {
         .description('Rank who reviews the most PRs, people and apps alike'),
       'reviewers',
     ),
-    'GET /analytics/metrics',
+    'GET /v1/analytics/metrics',
   )
     .option(
       '-r, --repo <owner/name>',
@@ -148,7 +148,7 @@ export function registerAnalytics(program: Command): void {
         .description('Show pull request volume and trend, split human vs bot'),
       'prs',
     ),
-    'GET /analytics/pull-requests',
+    'GET /v1/analytics/pull-requests',
   )
     .option(
       '--account-type <type>',
@@ -211,7 +211,7 @@ export function registerAnalytics(program: Command): void {
         .description('Show review totals, verdicts, and the top reviewers'),
       'reviews',
     ),
-    'GET /analytics/reviews',
+    'GET /v1/analytics/reviews',
   )
     .option(
       '-r, --repo <name>',

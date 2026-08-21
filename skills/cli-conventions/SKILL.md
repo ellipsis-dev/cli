@@ -50,7 +50,7 @@ const file = alsoKnownAs(
 
 apiRoutes(
   alsoKnownAs(file.command('delete <file-id>').description('...'), 'rm'),
-  'DELETE /files/{id}',
+  'DELETE /v1/files/{id}',
 )
 ```
 
@@ -98,7 +98,7 @@ Other rules:
 One line, imperative verb first, no trailing period.
 
 - **Say what the caller gets, not which endpoint answers.** `List your stored
-  files, newest first` — not `List files (GET /files)`.
+  files, newest first` — not `List files (GET /v1/files)`.
 - **Routes go in the long help**, last, via `apiRoutes(cmd, 'GET /...')`.
   When a command also has an `addHelpText('after', ...)` usage note, chain the
   note *inside* the `apiRoutes()` call so the route line still lands last.
