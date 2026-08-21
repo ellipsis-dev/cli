@@ -42,7 +42,7 @@ export function resolveConnectSessionId(
 
 // Whether the composer can send to this session (and why not) — shared with
 // the multi-session UI; re-exported so existing imports keep working.
-import { connectability } from '../lib/sessions'
+import { connectability, sessionConfigName } from '../lib/sessions'
 export { connectability }
 
 export function registerConnect(session: Command): void {
@@ -88,9 +88,9 @@ export async function runConnect(
   // An extra opening notice from the caller — shown in the app instead of
   // printed beforehand, which would land in scrollback behind the app.
   startupNotice?: string,
-  // The agent config name from the caller (e.g. `start --connect`, whose
-  // start response carries resolved_config_name); when absent it is derived
-  // from the fetched session. Shown in the footer meta line.
+  // The agent config name from the caller (e.g. `start --connect`); when
+  // absent it is derived from the fetched session. Shown in the footer meta
+  // line.
   configName?: string,
 ): Promise<void> {
   const client = api()
@@ -112,7 +112,7 @@ export async function runConnect(
   const url = sessionUrl(resolveAppBase(), me.customer_login, sessionId)
   // The config identity for the footer meta line: the caller's resolved name
   // first, then whatever the session itself carries.
-  const config = configName ?? session.config_id ?? null
+  const config = configName ?? sessionConfigName(session)
 
   // No scrollback preamble: the app owns the whole surface, Claude Code-style.
   // The footer carries the session identity/status; a watch-only reason

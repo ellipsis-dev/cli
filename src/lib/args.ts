@@ -34,7 +34,6 @@ export function toNumber(value: string): number {
 // Values the server accepts for the session facets, mirrored here so a typo
 // fails fast with the full list instead of a server-side 422.
 export const SESSION_SOURCES = [
-  'laptop',
   'react',
   'manual',
   'api',

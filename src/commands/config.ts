@@ -4,13 +4,13 @@ import { basename, dirname, extname } from 'node:path'
 import { api } from '../lib/api'
 import { resolveAppBase } from '../lib/config'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
-import { repoFromCwd } from '../lib/laptop'
+import { repoFromCwd } from '../lib/git'
 import { formatTs, printJson, printTable, printYaml, runAction } from '../lib/output'
 import { configUrl } from '../lib/urls'
 import { readConfigFile } from './session'
 import type {
   AgentConfig,
-  AgentDefaultView,
+  AgentDefaults,
   CreateAgentConfigRequest,
   CreatedAgentConfig,
   SavedAgentConfig,
@@ -262,15 +262,12 @@ export function registerConfig(program: Command): void {
     // (the same ladder session start resolves server-side).
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
-        const { defaults: rungs } = await api().agents.defaults.list()
+        const ladder = await api().agents.defaults.list()
         const repo = repoFromCwd(process.cwd())
-        const repoRung = repo
-          ? rungs.find((d) => d.repository?.toLowerCase() === repo.toLowerCase())
-          : undefined
-        const accountRung = rungs.find((d) => d.repository === null)
-        const effective = repoRung ?? accountRung
+        const repoRung = repo ? repoDefault(ladder, repo) : undefined
+        const effective = repoRung ?? ladder.account ?? null
         if (opts.json) {
-          printJson({ repository: repo ?? null, effective: effective ?? null })
+          printJson({ repository: repo ?? null, effective })
           return
         }
         if (!effective) {
@@ -281,10 +278,8 @@ export function registerConfig(program: Command): void {
           )
           return
         }
-        const rung = effective.repository
-          ? `repo default for ${effective.repository}`
-          : 'account default'
-        console.log(`using config "${defaultName(effective)}" (${rung})${brokenSuffix(effective)}`)
+        const rung = repoRung ? `repo default for ${repo}` : 'account default'
+        console.log(`using config "${effective}" (${rung})`)
       })
     })
 
@@ -303,24 +298,28 @@ export function registerConfig(program: Command): void {
     // merged view, not just this command's own opts.
     .action(async (_opts: { json?: boolean }, cmd: Command) => {
       await runAction(async () => {
-        const { defaults: rungs } = await api().agents.defaults.list()
+        const client = api()
+        const ladder = await client.agents.defaults.list()
         if (cmd.optsWithGlobals().json) {
-          printJson(rungs)
+          printJson(ladder)
           return
         }
+        const rungs: [string, string][] = [
+          ...(ladder.account ? ([['account', ladder.account]] as [string, string][]) : []),
+          ...Object.entries(ladder.repositories),
+        ]
         if (rungs.length === 0) {
           console.log('No defaults set. Sessions start on the bare config.')
           return
         }
+        // The ladder carries ids only, but a human reads this table — so join
+        // the account's configs to show each rung's name.
+        const names = new Map(
+          (await client.agents.configs.list()).configs.map((c) => [c.id, configName(c)]),
+        )
         printTable(
-          ['RUNG', 'CONFIG', 'CONFIG ID', 'STATUS', 'UPDATED'],
-          rungs.map((d) => [
-            d.repository ?? 'account',
-            d.config_name ?? '—',
-            d.config_id,
-            d.broken ? `broken: ${d.broken}` : 'ok',
-            formatTs(d.updated_at),
-          ]),
+          ['RUNG', 'CONFIG', 'CONFIG ID'],
+          rungs.map(([rung, id]) => [rung, names.get(id) ?? id, id]),
         )
       })
     })
@@ -340,16 +339,17 @@ export function registerConfig(program: Command): void {
       async (configId: string, opts: { repo?: string | boolean; json?: boolean }, cmd: Command) => {
         await runAction(async () => {
           const repository = resolveRepoFlag(opts.repo)
-          const { default: set } = await api().agents.defaults.set({
+          const ladder = await api().agents.defaults.set({
             config_id: configId,
             ...(repository ? { repository } : {}),
           })
           if (cmd.optsWithGlobals().json) {
-            printJson(set)
+            printJson(ladder)
             return
           }
-          const rung = set.repository ? `default for ${set.repository}` : 'account default'
-          console.log(`✓ set ${rung} to "${defaultName(set)}" (${set.config_id})`)
+          const rung = repository ? `default for ${repository}` : 'account default'
+          const id = repository ? repoDefault(ladder, repository) : ladder.account
+          console.log(`✓ set ${rung} to ${id ?? configId}`)
         })
       },
     )
@@ -478,14 +478,11 @@ export function resolveRepoFlag(repo: string | boolean | undefined): string | un
   return repo
 }
 
-function defaultName(d: AgentDefaultView): string {
-  return d.config_name ?? d.config_id
-}
-
-// A set-but-broken rung fails session starts closed (never a silent
-// fall-through), so surface it wherever the rung is shown.
-function brokenSuffix(d: AgentDefaultView): string {
-  return d.broken ? ` (broken: ${d.broken})` : ''
+// The repo rung's config id. Rungs are keyed "owner/name" as GitHub spells it,
+// so match case-insensitively rather than indexing directly.
+function repoDefault(ladder: AgentDefaults, repo: string): string | undefined {
+  const want = repo.toLowerCase()
+  return Object.entries(ladder.repositories).find(([r]) => r.toLowerCase() === want)?.[1]
 }
 
 // A minimal valid agent config. `claude.system` is the only required field;

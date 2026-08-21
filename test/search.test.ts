@@ -46,7 +46,7 @@ describe('searchSessions', () => {
       q: 'shift trade webhook',
       scope: 'both',
       author_id: [5201153],
-      source: ['laptop', 'cli'],
+      source: ['cron', 'cli'],
       session_ids: ['session_1', 'session_2'],
       limit: 20,
     })
@@ -55,7 +55,7 @@ describe('searchSessions', () => {
     expect(url).toContain('q=shift+trade+webhook')
     expect(url).toContain('scope=both')
     expect(url).toContain('author_id=5201153')
-    expect(url).toContain('source=laptop&source=cli')
+    expect(url).toContain('source=cron&source=cli')
     expect(url).toContain('session_ids=session_1&session_ids=session_2')
     expect(url).toContain('limit=20')
   })

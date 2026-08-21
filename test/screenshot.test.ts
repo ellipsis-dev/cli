@@ -28,6 +28,7 @@ function stubSession(id: string, prompt: string, minutesAgo: number): AgentSessi
     updated_at: at,
     last_activity_at: at,
     prompting: { enabled: true },
+    agent: { config: { ellipsis: { name: null } }, config_id: null, override: null, source: 'platform_default' },
     tokens: { total: 12_400 },
     cost: { total: 42_000 },
   } as unknown as AgentSession

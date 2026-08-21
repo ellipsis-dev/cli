@@ -18,7 +18,6 @@ import {
   rowStatusWord,
   SESSION_BAR_FETCH,
   sessionBarQuery,
-  sessionSource,
   shortAge,
   sidebarSlice,
   sortSidebarSessions,
@@ -26,7 +25,10 @@ import {
   mergeSidebarSessions,
 } from '../src/lib/sessions'
 import { theme } from '../src/lib/theme'
-import type { AgentSession, SupportedModel } from '../src/lib/types'
+import type { AgentConfig, AgentSession, SupportedModel } from '../src/lib/types'
+
+// The session fixtures only read the config's name, so the rest is a stub.
+const BARE_CONFIG = { ellipsis: { name: null } } as unknown as AgentConfig
 
 function session(overrides: Partial<AgentSession>): AgentSession {
   return {
@@ -35,7 +37,7 @@ function session(overrides: Partial<AgentSession>): AgentSession {
     updated_at: '2026-07-07T00:00:00Z',
     status: 'running',
     status_reason: null,
-    config_id: null,
+    agent: { config: BARE_CONFIG, config_id: null, override: null, source: 'platform_default' },
     source: 'api',
     harness: 'claude_code',
     prompting: { enabled: true },
@@ -112,7 +114,10 @@ describe('rowStatusWord / rowGlyph', () => {
 
 describe('rowDescription', () => {
   it('prefers the live summary, collapsed to one line', () => {
-    const s = session({ live_summary: 'fixing the\n  webhook tests', prompt: 'do a thing' })
+    const s = session({
+      summary: { description: 'fixing the\n  webhook tests', created_at: null },
+      prompt: 'do a thing',
+    })
     expect(rowDescription(s)).toBe('fixing the webhook tests')
   })
 
@@ -124,7 +129,9 @@ describe('rowDescription', () => {
   })
 
   it('ignores whitespace-only summaries', () => {
-    expect(rowDescription(session({ live_summary: '  \n ', prompt: 'p' }))).toBe('p')
+    expect(
+      rowDescription(session({ summary: { description: '  \n ', created_at: null }, prompt: 'p' })),
+    ).toBe('p')
   })
 })
 
@@ -177,14 +184,6 @@ describe('rowMeta', () => {
   it('drops the work bits a fresh session has none of', () => {
     const s = session({ updated_at: '2026-07-23T11:59:48Z' })
     expect(rowMeta(s, now)).toBe('12s ago')
-  })
-})
-
-describe('sessionSource', () => {
-  it('reads laptop off the session\'s top-level source', () => {
-    expect(sessionSource(session({ source: 'laptop' }))).toBe('laptop')
-    expect(sessionSource(session({ source: 'react' }))).toBe('cloud')
-    expect(sessionSource(session({}))).toBe('cloud')
   })
 })
 

@@ -24,12 +24,11 @@ function configFile(): string {
 // `apiBase` by default (api. -> app.), but stored explicitly so a self-hosted
 // instance whose dashboard host isn't a mechanical swap can set it directly
 // (`agent host add … --app-base`). `token` is the credential minted against
-// THIS instance; `enrolledRepos` is this instance's laptop-sync consent set.
+// THIS instance.
 export interface Host {
   apiBase: string
   appBase?: string
   token?: string
-  enrolledRepos?: string[]
 }
 
 // How the interactive UI's session bar is scoped. Every field is optional; a
@@ -68,7 +67,6 @@ export interface CliConfig {
 interface CliConfigV1 {
   token?: string
   apiBase?: string
-  enrolledRepos?: string[]
 }
 
 // Swap the `api` host label for `app` (api.ellipsis.dev -> app.ellipsis.dev,
@@ -98,14 +96,13 @@ function migrate(raw: unknown): CliConfig {
   const v1 = obj as CliConfigV1
   const hosts: Record<string, Host> = {}
   let activeHost: string | undefined
-  if (v1.token || v1.apiBase || (v1.enrolledRepos && v1.enrolledRepos.length > 0)) {
+  if (v1.token || v1.apiBase) {
     const apiBase = (v1.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, '')
     const name = hostNameForBase(apiBase)
     hosts[name] = {
       apiBase,
       appBase: deriveAppBase(apiBase),
       ...(v1.token ? { token: v1.token } : {}),
-      ...(v1.enrolledRepos ? { enrolledRepos: v1.enrolledRepos } : {}),
     }
     activeHost = name
   }
@@ -249,7 +246,7 @@ export const SESSION_BAR_DEFAULTS: Required<Omit<SessionBarConfig, 'sources'>> &
 
 export type ResolvedSessionBar = typeof SESSION_BAR_DEFAULTS
 
-const SESSION_SOURCES = ['react', 'manual', 'api', 'cli', 'mention', 'cron', 'laptop']
+const SESSION_SOURCES = ['react', 'manual', 'api', 'cli', 'mention', 'cron']
 
 // The session bar's settings, defaults filled in — set them under
 // `"sessionBar"` in ~/.ellipsis/config.json. A value of the wrong type or
@@ -276,17 +273,6 @@ export function sessionBar(): ResolvedSessionBar {
     // as "every source", the same as leaving the key out.
     sources: sources && sources.length > 0 ? sources : undefined,
   }
-}
-
-export function getEnrolledRepos(): string[] {
-  return (activeHost()?.enrolledRepos ?? []).map((r) => r.toLowerCase())
-}
-
-export function setEnrolledRepos(repos: string[]): void {
-  const name = ensureActiveHost()
-  const cfg = loadConfig()
-  cfg.hosts[name].enrolledRepos = repos
-  saveConfig(cfg)
 }
 
 // --- credential / URL resolution --------------------------------------------

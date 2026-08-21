@@ -2,7 +2,7 @@ import type { Command } from 'commander'
 import { api, APIError } from '../lib/api'
 import { apiRoutes } from '../lib/help'
 import { runAction } from '../lib/output'
-import { repoFromCwd } from '../lib/laptop'
+import { repoFromCwd } from '../lib/git'
 import { startConnect } from './session'
 import type { StartAgentSessionRequest } from '../lib/types'
 

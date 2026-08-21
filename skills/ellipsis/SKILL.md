@@ -69,8 +69,6 @@ fee. There are no seats.
   The built-in responder needs no configuration and answers in the thread.
 - **Catching bugs before merge**: turn code review on and every pull request is
   reviewed, or commit a pipeline file to scope and customize it.
-- **A task that should not block the laptop**: `agent session handoff` pushes a
-  snapshot of the working tree and continues the work in a cloud session.
 - **Delegation from scripts or CI**: `agent session start` or
   `POST /sessions`. With `--watch` it streams into the log and exits nonzero
   unless the session completes, so it works as a gate.
@@ -473,22 +471,6 @@ agent github repos                           # also github members, slack channe
                                              # linear teams, sentry orgs
 agent file upload shot.png                   # store a PNG, print an org-gated link
 ```
-
-Sync local Claude Code sessions into the same searchable history, then hand work
-off:
-
-```sh
-agent hook install                           # Stop and SessionEnd hooks
-agent hook enroll                            # opt this repository in; sync is per-repo
-agent hook status                            # what is installed and enrolled
-agent session handoff "finish the retry backoff and add tests" --parent <session-id>
-```
-
-Sync is opt-in per repository: installing the hooks alone uploads nothing.
-Transcripts are redacted locally before upload, so local work becomes auditable
-without shipping credentials. `handoff` requires `--parent`, pushes the
-working-tree snapshot to a hidden ref rather than a branch, and leaves your tree
-undisturbed.
 
 Most singular commands accept the plural spelling as a hidden alias, and
 `review` also answers to `cr`. `agent --help` and `agent <command> --help` are

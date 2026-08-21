@@ -36,10 +36,10 @@ import {
   rowGlyph,
   rowMeta,
   rowStatusWord,
+  sessionConfigName,
   navSlice,
   sessionBarFilterLabel,
   sessionBarQuery,
-  sessionSource,
   SELECTION_GLYPH,
   sidebarSlice,
   mergeSidebarSessions,
@@ -237,12 +237,8 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     return () => clearInterval(t)
   }, [])
 
-  // Cloud sessions only. A laptop session is a local `claude` run synced up for
-  // the record; opening one here has nothing to connect to, so it would be a
-  // dead row taking a slot from a session worth showing. Client-side because
-  // it holds whatever `sessionBar.sources` says.
   const rows = useMemo(
-    () => mergeSidebarSessions(sessions, localSessions).filter((s) => sessionSource(s) !== 'laptop'),
+    () => mergeSidebarSessions(sessions, localSessions),
     [localSessions, sessions],
   )
 
@@ -320,7 +316,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
           canSend: c.canSend,
           notice: [notice, c.reason].filter(Boolean).join(' · ') || null,
           model: session.tokens?.model || null,
-          configName: configName ?? session.config_id ?? null,
+          configName: configName ?? sessionConfigName(session),
           url: sessionUrl(appBase, customerLogin, sessionId),
         }
         setEntries((prev) => new Map(prev).set(sessionId, entry))
@@ -391,14 +387,14 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       setStartError(null)
       try {
         const req = applyComposerChoices(props.buildStartRequest(prompt), choices)
-        const { session, resolved_config_name } = await api.sessions.start(req)
+        const { session } = await api.sessions.start(req)
         lastWords.current.set(session.id, rowStatusWord(session))
         setLocalSessions((prev) => [session, ...prev])
         setSelected(session.id)
         setMainPane({ type: 'chat', sessionId: session.id })
         setFocus('chat')
         // Seed the entry from the start response's resolved config identity.
-        void loadEntry(session.id, resolved_config_name ?? session.config_id ?? undefined)
+        void loadEntry(session.id, sessionConfigName(session) ?? undefined)
       } catch (err) {
         setStartError(errorDetail(err))
       } finally {

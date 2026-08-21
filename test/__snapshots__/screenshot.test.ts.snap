@@ -24,7 +24,8 @@ exports[`interactive UI screenshots > a bare \`agent\` opens on the new-session 
 `;
 
 exports[`interactive UI screenshots > enter on a picked session opens its chat 1`] = `
-" ✦ Cloud agent session on ellipsis.dev
+"
+ ✦ Cloud agent session on ellipsis.dev
    ⎿  Sandbox started · 1 log line
 
  ● I found the login bug: the token refresh races the redirect.
