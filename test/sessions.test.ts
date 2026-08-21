@@ -7,7 +7,7 @@ import {
   composerModelOptions,
   composerPickerRows,
   connectability,
-  modelRateHint,
+  modelRate,
   rateDollars,
   isActiveStatusWord,
   lastEventAt,
@@ -391,54 +391,46 @@ describe('rateDollars', () => {
   })
 })
 
-describe('modelRateHint', () => {
+describe('modelRate', () => {
   it('quotes the input and output lanes only', () => {
     expect(
-      modelRateHint({
+      modelRate({
         input_cents_per_1m_tokens: 3_00,
         cache_write_5m_cents_per_1m_tokens: 3_75,
         cache_write_1h_cents_per_1m_tokens: 6_00,
         cache_read_cents_per_1m_tokens: 30,
         output_cents_per_1m_tokens: 15_00,
       }),
-    ).toBe('in $3 · out $15 per 1M')
+    ).toEqual({ input: '$3', output: '$15' })
   })
 
   it('says nothing when the server sent no rate card', () => {
-    expect(modelRateHint(undefined)).toBeNull()
-    expect(modelRateHint(null)).toBeNull()
+    expect(modelRate(undefined)).toBeNull()
+    expect(modelRate(null)).toBeNull()
   })
 })
 
 describe('composerModelOptions', () => {
-  it('labels rows with raw model ids and folds the default model into the null entry', () => {
+  it('gives the account default row the null id, in its own vendor group', () => {
     const options = composerModelOptions([
       model('claude-fable-5', 'anthropic'),
       model('claude-opus-5', 'anthropic', { is_default_agent_model: true }),
     ])
-    expect(options.map((o) => o.id)).toEqual([null, 'claude-fable-5'])
-    expect(options[0].label).toBe('claude-opus-5')
-    expect(options[1].label).toBe('claude-fable-5')
-  })
-
-  it('heads the list with the account default, under its own group', () => {
-    const options = composerModelOptions([
-      model('claude-opus-5', 'anthropic', { is_default_agent_model: true }),
-      model('gpt-5.6-sol', 'openai'),
+    expect(options.map((o) => [o.label, o.id, o.group])).toEqual([
+      ['claude-fable-5', 'claude-fable-5', 'Anthropic'],
+      ['claude-opus-5', null, 'Anthropic'],
     ])
-    expect(options[0].group).toBe('Agent default')
-    expect(options[1].group).toBe('OpenAI')
   })
 
   it('groups by manufacturer, ranked, keeping the server order inside a group', () => {
     const options = composerModelOptions([
       model('gpt-5.6-sol', 'openai'),
       model('kimi-k3', 'moonshot'),
-      model('claude-fable-5', 'anthropic'),
+      model('claude-fable-5', 'anthropic', { is_default_agent_model: true }),
       model('gpt-5.6-luna', 'openai'),
       model('claude-sonnet-5', 'anthropic'),
     ])
-    expect(options.slice(1).map((o) => [o.group, o.label])).toEqual([
+    expect(options.map((o) => [o.group, o.label])).toEqual([
       ['Anthropic', 'claude-fable-5'],
       ['Anthropic', 'claude-sonnet-5'],
       ['OpenAI', 'gpt-5.6-sol'],
@@ -452,10 +444,10 @@ describe('composerModelOptions', () => {
       model('some-new-model', 'nvidia' as SupportedModel['manufacturer']),
       model('claude-fable-5', 'anthropic'),
     ])
-    expect(options.slice(1).map((o) => o.group)).toEqual(['Anthropic', 'nvidia'])
+    expect(options.map((o) => o.group)).toEqual([null, 'Anthropic', 'nvidia'])
   })
 
-  it('carries each row rate as subtext, the default row included', () => {
+  it('carries each row price as its two table cells', () => {
     const options = composerModelOptions([
       model('claude-opus-5', 'anthropic', { is_default_agent_model: true }),
       model('claude-haiku-4-5-20251001', 'anthropic', {
@@ -468,8 +460,8 @@ describe('composerModelOptions', () => {
         },
       }),
     ])
-    expect(options[0].rate).toBe('in $5 · out $25 per 1M')
-    expect(options[1].rate).toBe('in $1 · out $5 per 1M')
+    expect(options[0].rate).toEqual({ input: '$5', output: '$25' })
+    expect(options[1].rate).toEqual({ input: '$1', output: '$5' })
   })
 
   it('falls back to the built-in list when the server returns none', () => {
@@ -480,11 +472,11 @@ describe('composerModelOptions', () => {
     expect(COMPOSER_MODELS.every((o) => !o.rate)).toBe(true)
   })
 
-  it('leaves Default unnamed and ungrouped when no model claims the flag', () => {
+  it('heads the list with a bare Default row when no model claims the flag', () => {
     const options = composerModelOptions([model('claude-opus-5', 'anthropic')])
-    expect(options[0].label).toBe('Default')
-    expect(options[0].group).toBeNull()
+    expect(options[0]).toEqual({ id: null, label: 'Default', group: null })
     expect(options[1].label).toBe('claude-opus-5')
+    expect(options[1].id).toBe('claude-opus-5')
   })
 })
 
