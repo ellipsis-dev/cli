@@ -34,12 +34,9 @@ export type SessionExecution = S['SessionExecution']
 export type ListSessionRecordsResponse = S['SessionRecordsListResponse']
 export type ListAgentSessionsResponse = S['SessionsListResponse']
 export type StartAgentSessionRequest = NonNullable<Parameters<Ellipsis['sessions']['start']>[0]>
-export type StartAgentSessionResponse = S['StartAgentSessionResponse']
+export type SessionResponse = S['SessionResponse']
 export type ReplayAgentSessionRequest = NonNullable<Parameters<Ellipsis['sessions']['replay']>[1]>
 export type SendSessionMessageRequest = S['SendSessionMessageRequest']
-export type HandoffAgentSessionParams = S['HandoffAgentSessionParams']
-export type SyncAgentSessionRequest = Parameters<Ellipsis['sessions']['sync']>[0]
-export type SyncAgentSessionResponse = S['SyncAgentSessionResponse']
 export type SessionLogSegment = S['SessionLogSegment']
 export type GetSessionLogResponse = S['GetSessionLogResponse']
 
@@ -60,8 +57,7 @@ export type CreateAgentConfigRequest = Parameters<Ellipsis['agents']['configs'][
 export type CreatedAgentConfig = S['CreateAgentConfigResponse']
 export type ConfigManagedBy = S['ConfigManagedBy']
 export type LinkedAgentConfig = S['LinkAgentConfigResponse']
-export type AgentDefaultView = S['AgentDefault']
-export type ListAgentDefaultsResponse = S['AgentDefaultsListResponse']
+export type AgentDefaults = S['AgentDefaults']
 export type PutAgentDefaultRequest = S['PutAgentDefaultRequest']
 
 // -------------------------------- templates -------------------------------

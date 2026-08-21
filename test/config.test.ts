@@ -8,7 +8,6 @@ import {
   addHost,
   clearActiveHostToken,
   deleteHost,
-  getEnrolledRepos,
   listHosts,
   loadConfig,
   requireToken,
@@ -18,7 +17,6 @@ import {
   SESSION_BAR_DEFAULTS,
   sessionBar,
   setActiveHostToken,
-  setEnrolledRepos,
   updateHost,
   useHost,
 } from '../src/lib/config'
@@ -210,15 +208,6 @@ describe('host management', () => {
     expect(resolveToken()).toBeUndefined()
     expect(activeHostName()).toBe('beta') // entry survives
   })
-
-  it('enrolled repos are scoped to the active host', () => {
-    addHost('beta', 'https://beta-api.ellipsis.dev')
-    setEnrolledRepos(['acme/api'])
-    addHost('prod', 'https://api.ellipsis.dev')
-    expect(getEnrolledRepos()).toEqual([])
-    useHost('beta')
-    expect(getEnrolledRepos()).toEqual(['acme/api'])
-  })
 })
 
 describe('sessionBar', () => {
@@ -306,11 +295,6 @@ describe('v1 -> v2 config migration', () => {
   it('names a prod-based v1 config "prod"', () => {
     writeConfig({ token: 'file_tok' }) // no apiBase -> prod default
     expect(loadConfig().activeHost).toBe('prod')
-  })
-
-  it('carries enrolled repos onto the migrated host', () => {
-    writeConfig({ apiBase: 'https://api.ellipsis.dev', enrolledRepos: ['acme/api'] })
-    expect(getEnrolledRepos()).toEqual(['acme/api'])
   })
 
   it('an empty v1 config migrates to no hosts', () => {

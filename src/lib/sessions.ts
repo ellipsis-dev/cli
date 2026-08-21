@@ -73,11 +73,11 @@ export function rowGlyph(word: string): { glyph: string; color?: string; dim: bo
   return { glyph: '●', color: theme.success, dim: true }
 }
 
-// The row's one-line description: what the session is doing right now
-// (live_summary), else what it was asked to do (prompt), else where it came
+// The row's one-line description: what the session is doing right now (its
+// live summary), else what it was asked to do (prompt), else where it came
 // from. Whitespace collapsed; the caller truncates to the column.
 export function rowDescription(session: AgentSession): string {
-  const summary = session.live_summary
+  const summary = session.summary?.description
   if (typeof summary === 'string' && summary.trim()) return oneLineText(summary)
   const prompt = session.prompt
   if (typeof prompt === 'string' && prompt.trim()) return oneLineText(prompt)
@@ -143,10 +143,11 @@ export function rowMeta(session: AgentSession, now: Date = new Date()): string {
   return bits.join(' · ')
 }
 
-// Where the session runs — laptop syncs are the only non-cloud kind the nav
-// distinguishes. Every session-returning route carries `source` top-level.
-export function sessionSource(session: AgentSession): string {
-  return session.source === 'laptop' ? 'laptop' : 'cloud'
+// The agent identity to show for a session: the config's own name, else the id
+// of the saved config its snapshot came from. Both are absent for inline,
+// platform-default, and built-in configs, which have nothing to name.
+export function sessionConfigName(session: AgentSession): string | null {
+  return session.agent.config.ellipsis.name ?? session.agent.config_id ?? null
 }
 
 // The sidebar's status bands, top to bottom: live conversations, then parked

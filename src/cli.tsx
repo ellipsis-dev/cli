@@ -8,7 +8,6 @@ import { registerReview } from './commands/review'
 import { registerConfig } from './commands/config'
 import { registerVariable } from './commands/variable'
 import { registerFile } from './commands/file'
-import { registerHook } from './commands/hooks'
 import { registerTemplate } from './commands/template'
 import { registerModel } from './commands/model'
 import { registerIntegration } from './commands/integrations'
@@ -45,7 +44,6 @@ registerReview(program)
 registerConfig(program)
 registerVariable(program)
 registerFile(program)
-registerHook(program)
 registerTemplate(program)
 registerModel(program)
 registerIntegration(program)

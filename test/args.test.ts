@@ -56,14 +56,14 @@ describe('collectKeyValue', () => {
 
 describe('collectSource / collectStatus / parseScope', () => {
   it('accumulate valid values like collect', () => {
-    expect(collectSource('cli', collectSource('laptop', []))).toEqual(['laptop', 'cli'])
+    expect(collectSource('cli', collectSource('cron', []))).toEqual(['cron', 'cli'])
     expect(collectStatus('completed', [])).toEqual(['completed'])
     expect(parseScope('recaps')).toBe('recaps')
     expect(parseScope('records')).toBe('records')
   })
 
   it('reject unknown values listing the valid ones', () => {
-    expect(() => collectSource('slack', [])).toThrow(/source must be one of: laptop, react/)
+    expect(() => collectSource('slack', [])).toThrow(/source must be one of: react, manual/)
     expect(() => collectStatus('done', [])).toThrow(/status must be one of: scheduled/)
     expect(() => parseScope('all')).toThrow(/scope must be one of: records, recaps, both/)
   })

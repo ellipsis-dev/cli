@@ -192,7 +192,7 @@ out for all of them.
 Every field is optional and the defaults above are what you get with no
 `sessionBar` at all. Two caveats on `repo`: a shell outside a repository lists
 every repository rather than nothing, and sessions that name their repository
-only inside their agent config — dashboard starts, cron runs, handoffs — do not
+only inside their agent config — dashboard starts, cron runs — do not
 match a repo filter, so `"repo": "any"` is the way to see those alongside the
 rest.
 

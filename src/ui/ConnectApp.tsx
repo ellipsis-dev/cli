@@ -1323,6 +1323,7 @@ function sandboxRows(o: {
   // wrapping and swallows the label; the clickable dashboard link lives in the
   // footer meta line. Live it reads as an address ("Connected to…"); settled it
   // names the event the block stands for.
+  rows.push(spacerRow(key, `${key}:hdr-top`))
   rows.push({
     id: `${key}:hdr`,
     entryKey: key,
