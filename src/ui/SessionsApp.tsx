@@ -734,10 +734,19 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     </Box>
   )
 
+  // Every full-height frame below may only paint once the terminal is ON the
+  // alternate buffer, and the hop is an effect: a frame committed before it
+  // settles lands on the PRIMARY buffer instead, shoving the shell's history
+  // (and any earlier transcript) a screenful up into scrollback — exactly the
+  // rows the chat's scrollback view promises to leave in place. So the frames
+  // in the hop gap render nothing, same as the chat's own gap below.
+  const fullFrameHopGap = !altScreenOn
+
   // The picker, open, IS the screen: it took over the alternate buffer, so it
   // renders alone (header + list) and the chat is left untouched on the primary
   // buffer, waiting behind it.
   if (navOpen) {
+    if (fullFrameHopGap) return <Box />
     return (
       <Box flexDirection="column" height={height} padding={APP_INSET}>
         {header}
@@ -756,6 +765,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
 
   // The remaining screens (the new-session composer, a chat still loading) do
   // own their frame, so they keep the inset and the header.
+  if (fullFrameHopGap) return <Box />
   return (
     <Box flexDirection="column" minHeight={height} padding={APP_INSET}>
       {header}
