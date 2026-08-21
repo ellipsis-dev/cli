@@ -18,7 +18,7 @@ export function renderMe(me: WhoAmI): void {
 export function registerMe(program: Command): void {
   apiRoutes(
     program.command('me').description('Show the identity behind the current credential'),
-    'GET /me',
+    'GET /v1/me',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {

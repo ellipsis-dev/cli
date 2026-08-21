@@ -70,7 +70,7 @@ fee. There are no seats.
 - **Catching bugs before merge**: turn code review on and every pull request is
   reviewed, or commit a pipeline file to scope and customize it.
 - **Delegation from scripts or CI**: `agent session start` or
-  `POST /sessions`. With `--watch` it streams into the log and exits nonzero
+  `POST /v1/sessions`. With `--watch` it streams into the log and exits nonzero
   unless the session completes, so it works as a gate.
 
 Things teams actually build: screenshot every pull request that touches the

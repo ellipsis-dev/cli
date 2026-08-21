@@ -31,7 +31,7 @@ export function registerConfig(program: Command): void {
       config.command('list').description('List your saved agent configs'),
       'ls',
     ),
-    'GET /agents/configs',
+    'GET /v1/agents/configs',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
@@ -61,7 +61,7 @@ export function registerConfig(program: Command): void {
     config
       .command('get <config-id>')
       .description('Print one agent config as YAML, or as JSON with --json'),
-    'GET /agents/configs/{id}',
+    'GET /v1/agents/configs/{id}',
   )
     .option('--json', 'output raw JSON')
     .action(async (configId: string, opts: { json?: boolean }) => {
@@ -92,7 +92,7 @@ export function registerConfig(program: Command): void {
     config
       .command('create')
       .description('Create an agent, live immediately or by pull request with --repo'),
-    'POST /agents/configs',
+    'POST /v1/agents/configs',
   )
     .option(
       '-r, --repo <name>',
@@ -151,7 +151,7 @@ export function registerConfig(program: Command): void {
         .description("Replace an API-managed agent's definition from a file, live immediately"),
       'update',
     ),
-    'PUT /agents/configs/{id}',
+    'PUT /v1/agents/configs/{id}',
   )
     .requiredOption('-f, --file <path>', 'agent config file (.yaml/.yml or .json) to replace it with')
     .option('--json', 'output raw JSON')
@@ -175,7 +175,7 @@ export function registerConfig(program: Command): void {
         .description('Delete an API-managed agent; it stops running and frees its name'),
       'rm',
     ),
-    'DELETE /agents/configs/{id}',
+    'DELETE /v1/agents/configs/{id}',
   )
     .option('--json', 'output raw JSON')
     .action(async (configId: string, opts: { json?: boolean }) => {
@@ -194,7 +194,7 @@ export function registerConfig(program: Command): void {
     config
       .command('link <config-id>')
       .description('Move an agent into a repository by opening a pull request that adds its file'),
-    'POST /agents/configs/{id}/link',
+    'POST /v1/agents/configs/{id}/link',
   )
     .requiredOption('-r, --repo <name>', 'repository in your account to move the agent into')
     .option(
@@ -224,7 +224,7 @@ export function registerConfig(program: Command): void {
     config
       .command('unlink <config-id>')
       .description('Take an agent over from its file, so this API changes it instead'),
-    'POST /agents/configs/{id}/unlink',
+    'POST /v1/agents/configs/{id}/unlink',
   )
     .option('--json', 'output raw JSON')
     .action(async (configId: string, opts: { json?: boolean }) => {
@@ -254,7 +254,7 @@ export function registerConfig(program: Command): void {
         .description('Show or set which agent config runs when a session names none'),
       'defaults',
     ),
-    'GET /agents/defaults',
+    'GET /v1/agents/defaults',
   )
     .option('--json', 'output raw JSON')
     // Bare `agent config default`: the effective default for the repo you're
@@ -290,7 +290,7 @@ export function registerConfig(program: Command): void {
         .description('List every default that is set, account rung and per-repo rungs'),
       'ls',
     ),
-    'GET /agents/defaults',
+    'GET /v1/agents/defaults',
   )
     .option('--json', 'output raw JSON')
     // The group also defines --json (for the bare view), and commander parses
@@ -328,7 +328,7 @@ export function registerConfig(program: Command): void {
     defaults
       .command('set <config-id>')
       .description('Set the account default agent config, or a repo default with --repo'),
-    'PUT /agents/defaults',
+    'PUT /v1/agents/defaults',
   )
     .option(
       '-r, --repo [repository]',
@@ -362,7 +362,7 @@ export function registerConfig(program: Command): void {
       'rm',
       'delete',
     ),
-    'DELETE /agents/defaults',
+    'DELETE /v1/agents/defaults',
   )
     .option(
       '-r, --repo [repository]',
@@ -384,7 +384,7 @@ export function registerConfig(program: Command): void {
       .description(
         `Scaffold a starter agent config YAML locally (default: ${DEFAULT_CONFIG_PATH})`,
       ),
-    'POST /agents/configs with --template',
+    'POST /v1/agents/configs with --template',
   )
     // No `-f` short: CLI-wide, `-f` means an input file (see `config create`).
     .option('--force', 'overwrite the file if it already exists')

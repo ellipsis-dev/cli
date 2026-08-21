@@ -6,7 +6,7 @@ import { printJson, runAction, usd, usdFromMillicents } from '../lib/output'
 export function registerUsage(program: Command): void {
   apiRoutes(
     program.command('budget').description("Show this period's spend against the account budget"),
-    'GET /budget',
+    'GET /v1/budget',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
@@ -28,7 +28,7 @@ export function registerUsage(program: Command): void {
     program
       .command('usage')
       .description("Show this period's tokens and cost, broken down by model"),
-    'GET /usage',
+    'GET /v1/usage',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {

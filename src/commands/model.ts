@@ -18,7 +18,7 @@ export function registerModel(program: Command): void {
         ),
       'ls',
     ),
-    'GET /models',
+    'GET /v1/models',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {

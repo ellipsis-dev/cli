@@ -88,7 +88,7 @@ export function registerFile(program: Command): void {
     file
       .command('upload <path>')
       .description('Upload a PNG and print its org-gated URL, ready to paste into a PR comment'),
-    'POST /files',
+    'POST /v1/files',
   )
     .option('--json', 'output raw JSON')
     .action(async (path: string, opts: { json?: boolean }) => {
@@ -104,7 +104,7 @@ export function registerFile(program: Command): void {
 
   apiRoutes(
     alsoKnownAs(file.command('list').description('List your stored files, newest first'), 'ls'),
-    'GET /files',
+    'GET /v1/files',
   )
     .option('--session <id>', 'only files uploaded by this agent session')
     .option('-l, --limit <n>', 'max results (server cap: 250)', parsePositiveInt)
@@ -139,7 +139,7 @@ export function registerFile(program: Command): void {
     file
       .command('get <file-id>')
       .description("Print one file's metadata, or download its bytes with -o"),
-    'GET /files/{id}',
+    'GET /v1/files/{id}',
     'presigned S3 GET',
   )
     .option('-o, --output <path>', 'write the file contents to this path')
@@ -165,7 +165,7 @@ export function registerFile(program: Command): void {
       file.command('delete <file-id>').description('Delete a file, so its link stops resolving'),
       'rm',
     ),
-    'DELETE /files/{id}',
+    'DELETE /v1/files/{id}',
   )
     .option('--json', 'output raw JSON')
     .action(async (fileId: string, opts: { json?: boolean }) => {

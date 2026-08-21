@@ -12,7 +12,7 @@ export function registerIntegration(program: Command): void {
         .description('Show which integrations are connected, in one table'),
       'integrations',
     ),
-    'GET /integrations',
+    'GET /v1/integrations',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {

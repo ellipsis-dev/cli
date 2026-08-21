@@ -7,7 +7,7 @@ export function registerPing(program: Command): void {
     program
       .command('ping')
       .description('Check that the API is reachable and the credential is valid'),
-    'GET /me',
+    'GET /v1/me',
   )
     .action(async () => {
       // There's no unauthenticated health route on the public API, so we probe

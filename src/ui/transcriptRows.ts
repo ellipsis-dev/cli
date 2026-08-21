@@ -146,12 +146,13 @@ export function itemRows(
 ): TranscriptRow[] {
   const indent = opts.indent ?? 0
   // Nested lines are marked by their INDENT, so each keeps the glyph that says
-  // what it is: ● the call, ⎿ the result that came back. Only a collapsed fold
-  // (key grp:*, "Ran 2 tool calls") takes the branch glyph — as a notice it
-  // would otherwise wear ✦, the mark for the infrastructure speaking, which is
-  // not what a fold is. Keyed on the fold itself, not on `nested`: a
-  // turn-opening run is flat, and it is still a fold.
-  const gutter = item.key.startsWith('grp:') ? BRANCH_GLYPH : gutterFor(item)
+  // what it is: ● the call, ⎿ the result that came back. A collapsed fold (key
+  // grp:*, "Ran 2 tool calls") takes the branch glyph only when it hangs off a
+  // message — a turn-opening run branches off nothing, so it wears ● like any
+  // other line the agent owns. Either way not ✦: that mark is the
+  // infrastructure speaking, which a fold is not.
+  const isFold = item.key.startsWith('grp:')
+  const gutter = isFold ? (opts.nested ? BRANCH_GLYPH : '●') : gutterFor(item)
   const textPad = gutter === BRANCH_GLYPH ? BRANCH_TEXT_PAD : 0
   const width = contentWidth(cols, { indent, textPad })
   const shown = withRenderedMarkdown(item, width)

@@ -18,7 +18,7 @@ export function registerGithub(program: Command): void {
         .description('List the repositories the GitHub installation can reach'),
       'repo',
     ),
-    'GET /integrations/github/repos',
+    'GET /v1/integrations/github/repos',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
@@ -53,7 +53,7 @@ export function registerGithub(program: Command): void {
         ),
       'member',
     ),
-    'GET /integrations/github/members',
+    'GET /v1/integrations/github/members',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {

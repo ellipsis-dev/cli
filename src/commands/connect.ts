@@ -60,7 +60,7 @@ export function registerConnect(session: Command): void {
 headless or from inside the session's own sandbox, where the id is optional.
 Pass --no-input to follow read-only from a script or agent (no TTY needed).
 
-API: GET /sessions/{id}, GET /sessions/{id}/records, POST /sessions/{id}/messages, WS /sessions/{id}/stream`,
+API: GET /v1/sessions/{id}, GET /v1/sessions/{id}/records, POST /v1/sessions/{id}/messages, WS /v1/sessions/{id}/stream`,
     )
     .action(async (sessionId: string | undefined, opts: { records: boolean; input: boolean }) => {
       await runAction(async () => {
