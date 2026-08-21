@@ -1002,10 +1002,16 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       )
     }
     // Sends the agent has TAKEN (delivered, echo record still in flight):
-    // full-colour ◆ rows ABOVE the live activity — the running turn is the
+    // full-colour ▶ rows ABOVE the live activity — the running turn is the
     // response to THIS message, so its stream belongs below it.
     for (const q of inFlightSends.filter((q) => q.state === 'accepted')) {
-      out.push(...pendingMessageRows(q.key, q.text, cols, { gutter: '◆', bold: true }))
+      out.push(
+        ...pendingMessageRows(q.key, q.text, cols, {
+          gutter: SELECTION_GLYPH,
+          gutterColor: theme.cursor,
+          bold: true,
+        }),
+      )
     }
     if (liveTail.text) {
       out.push(...pendingMessageRows('live', liveTail.text, cols, { gutter: '' }))
@@ -1041,9 +1047,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       out.push(
         ...pendingMessageRows(q.key, q.text, cols, {
           // A waiting send wears the breathing ⏺, the app's one "in flight"
-          // mark; a cancelled one keeps the ◆ sender glyph — it was a real
+          // mark; a cancelled one keeps the ▶ sender glyph — it was a real
           // message, it just never got answered.
-          gutter: waiting ? LIVE_GLYPH : '◆',
+          gutter: waiting ? LIVE_GLYPH : SELECTION_GLYPH,
+          gutterColor: waiting ? undefined : theme.cursor,
           dim: true,
           right: q.state === 'sending' ? 'sending' : q.state === 'queued' ? 'queued' : 'cancelled',
           pulse: waiting,
