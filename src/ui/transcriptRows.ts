@@ -1,5 +1,6 @@
 import { clampLines, type ItemKind, type TranscriptItem } from '@ellipsis-dev/sdk/store'
 import { fitLines, hasMarkdown, renderMarkdown, visibleWidth } from '../lib/markdown'
+import { SELECTION_GLYPH } from '../lib/sessions'
 import { theme } from '../lib/theme'
 
 // The transcript as a flat list of SCREEN ROWS — the unit the chat window
@@ -19,7 +20,7 @@ import { theme } from '../lib/theme'
 // An estimate-based budget has to leave slack for its own rounding errors, and
 // that slack shows up as dead space and phantom "… 1 newer" markers.
 
-// The 2-column gutter a transcript line reserves for its sender glyph (◆/●/⎿),
+// The 2-column gutter a transcript line reserves for its sender glyph (▶/●/⎿),
 // so the selection marker can replace the glyph in place without the text
 // shifting, and a wrapped line's continuation aligns under its first.
 export const GUTTER_COLS = 2
@@ -376,6 +377,7 @@ export function pendingMessageRows(
   cols: number,
   opts: {
     gutter: string
+    gutterColor?: string
     dim?: boolean
     bold?: boolean
     right?: string
@@ -391,7 +393,12 @@ export function pendingMessageRows(
       entryKey: key,
       gutter:
         i === 0 && opts.gutter
-          ? { text: opts.gutter, color: theme.foreground, dim: opts.dim, pulse: opts.pulse }
+          ? {
+              text: opts.gutter,
+              color: opts.gutterColor ?? theme.foreground,
+              dim: opts.dim,
+              pulse: opts.pulse,
+            }
           : undefined,
       spans: [{ text: line, dim: opts.dim, bold: opts.bold }],
       right: i === lines.length - 1 && opts.right ? { text: opts.right, dim: true } : undefined,
@@ -647,16 +654,19 @@ export function isCollapsible(item: TranscriptItem): boolean {
   )
 }
 
-// The sender icon in the 2-column gutter: ◆ (cyan) marks a message you sent
-// (the --prompt initial message included — it's a user message), ● marks the
-// assistant's prose (default foreground; the tool-call ● is green + bold, so
-// the two never read the same), ✦ (dim) marks system/notice lines — the
-// infrastructure speaking. Everything else keeps the SDK's glyph (⎿ results,
-// ✻ thinking) or none. The ▶ selection highlight replaces the icon in the
-// same slot, so a selected line always reads differently from its resting
-// state. Pure, for tests.
+// The sender icon in the 2-column gutter: the cyan ▶ marks a message you sent
+// (the --prompt initial message included) — the SAME glyph and colour the
+// composer's prompt wears, so a message reads as yours whether it is still in
+// the input box or already in the transcript. ● marks the assistant's prose
+// (default foreground; the tool-call ● is green + bold, so the two never read
+// the same), ✦ (dim) marks system/notice lines — the infrastructure speaking.
+// Everything else keeps the SDK's glyph (⎿ results, ✻ thinking) or none.
+//
+// Because your rows already wear ▶, the selection marker is invisible on them:
+// that is the trade for the prompt glyph matching, and the "+N lines" hint
+// still names the key that opens the highlighted block. Pure, for tests.
 export function gutterFor(item: TranscriptItem): string {
-  if (item.kind === 'user') return '◆'
+  if (item.kind === 'user') return SELECTION_GLYPH
   if (item.kind === 'assistant') return '●'
   if (item.kind === 'system' || item.kind === 'notice') return '✦'
   return item.gutter ?? ''
@@ -679,10 +689,10 @@ function styleFor(item: TranscriptItem): {
         dim: !item.isError,
         bold: false,
       }
-    // User copy stays white like the assistant's (the ◆ icon marks the
-    // sender); cyan text always and only means "the selection is here".
+    // User copy stays white like the assistant's — only the ▶ takes the cyan,
+    // matching the composer's prompt.
     case 'user':
-      return { gutterColor: theme.foreground, bold: true, dim: false }
+      return { gutterColor: theme.cursor, bold: true, dim: false }
     case 'error':
       return { gutterColor: theme.error, textColor: theme.error, dim: false, bold: false }
     case 'summary':
