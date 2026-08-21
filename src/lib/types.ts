@@ -42,8 +42,6 @@ export type SyncAgentSessionRequest = Parameters<Ellipsis['sessions']['sync']>[0
 export type SyncAgentSessionResponse = S['SyncAgentSessionResponse']
 export type SessionLogSegment = S['SessionLogSegment']
 export type GetSessionLogResponse = S['GetSessionLogResponse']
-export type GetSessionIdeResponse = S['GetSessionIdeResponse']
-export type GetSessionPortResponse = S['GetSessionPortResponse']
 
 // ------------------------------ session search ----------------------------
 

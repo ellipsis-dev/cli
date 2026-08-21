@@ -41,7 +41,7 @@ describe('api', () => {
     await api('http://api.test', 'tok_123').me()
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('http://api.test/me')
+    expect(url).toBe('http://api.test/v1/me')
     expect(init.headers).toMatchObject({ Authorization: 'Bearer tok_123' })
   })
 
@@ -52,7 +52,7 @@ describe('api', () => {
     await api().budget()
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('http://env.test/budget')
+    expect(url).toBe('http://env.test/v1/budget')
     expect(init.headers).toMatchObject({ Authorization: 'Bearer env_tok' })
   })
 
@@ -70,7 +70,7 @@ describe('api', () => {
     await api('http://api.test').auth.cli.start()
 
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('http://api.test/auth/cli/start')
+    expect(url).toBe('http://api.test/v1/auth/cli/start')
   })
 })
 
