@@ -30,7 +30,7 @@ describe('integration discovery endpoints', () => {
     for (const [call, path, body] of cases) {
       const fetchMock = stub(body)
       await call(new Ellipsis({ apiKey: 't', baseUrl: 'http://api.test' }))
-      expect(fetchMock.mock.calls[0][0]).toBe(`http://api.test${path}`)
+      expect(fetchMock.mock.calls[0][0]).toBe(`http://api.test/v1${path}`)
       vi.unstubAllGlobals()
     }
   })
