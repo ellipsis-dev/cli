@@ -32,7 +32,6 @@ import {
   navSlice,
   sessionBarQuery,
   SELECTION_GLYPH,
-  sidebarSlice,
   mergeSidebarSessions,
 } from '../lib/sessions'
 import type { ResolvedSessionBar } from '../lib/config'
@@ -124,12 +123,10 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   const { isRawModeSupported } = useStdin()
   const { stdout } = useStdout()
 
-  const [termRows, setTermRows] = useState(stdout?.rows ?? 24)
   const [termCols, setTermCols] = useState(stdout?.columns ?? 80)
   useEffect(() => {
     if (!stdout) return
     const onResize = (): void => {
-      setTermRows(stdout.rows)
       setTermCols(stdout.columns)
     }
     stdout.on('resize', onResize)
@@ -419,7 +416,6 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   return (
     <Launcher
       width={width}
-      height={termRows}
       whoLine={whoLine}
       focused={isRawModeSupported}
       starting={starting}
@@ -513,7 +509,6 @@ type LauncherCursor =
 // sandbox with no checkout).
 function Launcher({
   width,
-  height,
   whoLine,
   focused,
   starting,
@@ -532,7 +527,6 @@ function Launcher({
   rawMode,
 }: {
   width: number
-  height: number
   whoLine: string
   focused: boolean
   starting: boolean
@@ -826,35 +820,13 @@ function Launcher({
     return options[Math.min(idx, options.length - 1)]?.label ?? 'Default'
   }
 
-  // How many option rows an open dropdown shows: enough to be useful, capped
-  // so the whole launcher still fits a short terminal.
-  const dropdownCapacity = Math.max(3, Math.min(10, height - (LIST_ROWS + 12)))
   const open = openPicker
   const openOptions = open ? optionsFor(open.key) : []
   const openHover = open ? Math.min(open.hover, openOptions.length - 1) : 0
-  // What actually gets printed: the options plus their group headings (the
-  // model list has them; the other two pickers produce a row per option and
-  // nothing else). The window slides over THESE rows, not over the options, so
-  // a heading takes a row from the capacity like anything else.
-  const openRows = open ? composerPickerRows(openOptions) : []
-  const hoverRow = Math.max(
-    0,
-    openRows.findIndex((r) => r.kind === 'option' && r.at === openHover),
-  )
-  const win = open
-    ? sidebarSlice(openRows.length, dropdownCapacity, hoverRow)
-    : { start: 0, end: 0 }
-  // A heading whose options all fell past the bottom edge labels nothing, so
-  // the window gives its last row back rather than print it; it returns with
-  // its group on the next scroll.
-  const visibleRows = (() => {
-    const rows = openRows.slice(win.start, win.end)
-    return rows.at(-1)?.kind === 'group' ? rows.slice(0, -1) : rows
-  })()
-  // The "… N more" counts name OPTIONS, never rows: a heading is not a model,
-  // and counting it would overstate what is hidden above and below.
-  const hiddenAbove = openRows.slice(0, win.start).filter((r) => r.kind === 'option').length
-  const hiddenBelow = openRows.slice(win.end).filter((r) => r.kind === 'option').length
+  // Every option plus its group heading — an open dropdown prints the whole
+  // list, so a long model list grows the block and the terminal scrolls rather
+  // than hiding rows behind a window.
+  const visibleRows = open ? composerPickerRows(openOptions) : []
   // The price table's column widths: the label column, then one numeric column
   // per lane, each as wide as its widest cell (its heading included) so the
   // dollars read down a right-aligned column. null when there is no price to
@@ -915,9 +887,6 @@ function Launcher({
                 </Text>
               </Box>
             )}
-            {isOpen && hiddenAbove > 0 && (
-              <Text color={theme.muted}>{'    '}… {hiddenAbove} more</Text>
-            )}
             {isOpen &&
               visibleRows.map((pickerRow) => {
                 // A group heading: the vendor that built the models under it,
@@ -958,11 +927,6 @@ function Launcher({
                   </Box>
                 )
               })}
-            {isOpen && hiddenBelow > 0 && (
-              <Text color={theme.muted}>
-                {'    '}… {hiddenBelow} more
-              </Text>
-            )}
           </Box>
         )
       })}

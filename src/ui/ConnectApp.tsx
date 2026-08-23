@@ -161,9 +161,10 @@ function isWorkingStatus(status: string): boolean {
 // belong to the conversation.
 const COMPOSER_INTERIOR_ROWS = 1
 
-// Horizontal breathing room inside the composer panel — wider than the 1-cell
-// vertical pad so the caret and text start well clear of the panel edge.
-const COMPOSER_PAD_X = 2
+// Horizontal breathing room inside the composer panel. With the panel inset by
+// MESSAGE_PAD and its accent bar taking one column, this lands the composer's
+// text in the same column as a transcript message's text.
+const COMPOSER_PAD_X = 1
 
 // The startup block's entry key — it is one block, not a transcript item, so it
 // owns a fixed key rather than a feed_seq one.
@@ -178,10 +179,11 @@ const META_SEP = '   '
 // don't visibly beat against each other.
 const PULSE_MS = 700
 
-// Columns the composer's text actually gets: the panel's horizontal pad on both
-// sides, then the accent bar down its left edge.
+// Columns the composer's text actually gets: the pane's message pad on both
+// sides, the panel's horizontal pad on both sides, then the accent bar down its
+// left edge.
 function composerTextCols(cols: number): number {
-  return Math.max(8, cols - COMPOSER_PAD_X * 2 - 1)
+  return Math.max(8, cols - MESSAGE_PAD * 2 - COMPOSER_PAD_X * 2 - 1)
 }
 
 // One local send awaiting server acknowledgement: messageId is null while the
@@ -1203,6 +1205,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             borderRight={false}
             borderBottom={false}
             borderLeftColor={focused ? theme.cursor : theme.muted}
+            // Inset like a transcript row, so the bar lands in the same column
+            // as a message's ┃ gutter.
+            marginLeft={MESSAGE_PAD}
+            marginRight={MESSAGE_PAD}
             height={composerRows}
             flexShrink={0}
             overflow="hidden"
