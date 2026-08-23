@@ -876,25 +876,22 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     if (pendingPrompt) {
       out.push(
         ...pendingMessageRows('prompt', pendingPrompt, cols, {
-          gutter: LIVE_GLYPH,
+          gutter: USER_BAR,
+          gutterColor: theme.cursor,
           dim: true,
           right: 'queued',
-          pulse: true,
         }),
       )
     }
     for (const q of inFlightSends.filter((q) => q.state !== 'accepted')) {
-      const waiting = q.state !== 'cancelled'
       out.push(
+        // Every send keeps the sender's bar, waiting or not — it is your
+        // message either way. The right-hand label carries the state.
         ...pendingMessageRows(q.key, q.text, cols, {
-          // A waiting send wears the breathing ⏺, the app's one "in flight"
-          // mark; a cancelled one keeps the sender's bar — it was a real
-          // message, it just never got answered.
-          gutter: waiting ? LIVE_GLYPH : USER_BAR,
-          gutterColor: waiting ? undefined : theme.cursor,
+          gutter: USER_BAR,
+          gutterColor: theme.cursor,
           dim: true,
           right: q.state === 'sending' ? 'sending' : q.state === 'queued' ? 'queued' : 'cancelled',
-          pulse: waiting,
         }),
       )
     }
@@ -1066,9 +1063,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     { isActive: inputActive },
   )
 
-  // The persistent footer status line: status · running spend · model ·
-  // session id (the dashboard link) · agent config (when the session has
-  // one) · CLI version. Per-step costs live on the transcript's metadata
+  // The persistent footer status line: status, running spend, model,
+  // session id (the dashboard link), agent config (when the session has
+  // one), CLI version. Per-step costs live on the transcript's metadata
   // column, so the footer carries the total alone. Command hints live in
   // --help. The total prefers the server's ledger figure (live via the
   // session frames' cost columns, climbing mid-turn); the CC-derived result
@@ -1081,14 +1078,15 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // rely on Ink wrapping/truncating this line: it's budgeted at exactly one
   // row.
   const metaParts = (id: string): string[] => [
-    `${statusWord} · ${totalStr} total`,
+    statusWord,
+    `${totalStr} total`,
     ...(props.model ? [props.model] : []),
     id,
     ...(props.configName ? [props.configName] : []),
     `v${VERSION}`,
   ]
-  const linked = metaParts(hyperlink(props.sessionUrl, sessionId)).join(' · ')
-  const plain = metaParts(sessionId).join(' · ')
+  const linked = metaParts(hyperlink(props.sessionUrl, sessionId)).join('   ')
+  const plain = metaParts(sessionId).join('   ')
   const metaLine = ctrlCArmed
     ? CTRL_C_QUIT_HINT
     : linked.length < cols
