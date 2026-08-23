@@ -233,6 +233,22 @@ export function sessionBarFilterLabel(
   return `filtering to ${clauses.join(' · ')}`
 }
 
+// The launcher's live filter: which sessions match the typed text. Matches
+// the summary and the prompt case-insensitively so a session is findable by
+// what it is doing or by what it was asked; an empty query matches all.
+export function filterSessions(
+  sessions: readonly AgentSession[],
+  query: string,
+): readonly AgentSession[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return sessions
+  return sessions.filter((s) => {
+    const summary = typeof s.summary?.description === 'string' ? s.summary.description : ''
+    const prompt = typeof s.prompt === 'string' ? s.prompt : ''
+    return `${summary}\n${prompt}`.toLowerCase().includes(q)
+  })
+}
+
 // Attention transitions: a session that WAS in flight and now waits for a
 // human (waiting/sleeping/idle) deserves the sidebar dot. Pure step function
 // over consecutive poll snapshots.
@@ -413,65 +429,6 @@ export interface ComposerChoices {
   configId: string | null
   model: string | null
   repos: string[] | null
-}
-
-// What the launcher's one-line configuration summary says the next run will
-// use: the model, how many repositories it checks out, and the parts of the
-// resolved config a picker can't reach (a custom Dockerfile, environment
-// variables). The selected saved config supplies the baseline; the launcher's
-// own Model and Repository picks override it, since those are what actually
-// ship in the request.
-//
-// Counts, not names, for the plural bits: three variable names would crowd out
-// the model on an 80-column row, and the count is what tells you whether to go
-// look.
-export function configSummary(input: {
-  model: string | null
-  // The explicit checkout set, or null when the row is untouched and the
-  // server resolves it (in which case the detected repo is what it picks up).
-  repos: readonly string[] | null
-  detectedRepo: string | null
-  // The chosen saved config's parsed YAML, when one is chosen.
-  agentConfig: Record<string, unknown> | null
-}): string {
-  const bits: string[] = []
-  const env = readObject(input.agentConfig?.environment)
-  const model =
-    input.model ?? readString(readObject(input.agentConfig?.claude)?.model) ?? null
-  if (model) bits.push(model)
-
-  const configRepos = readArray(env?.repositories)?.length ?? null
-  const repoCount =
-    input.repos !== null
-      ? input.repos.length
-      : (configRepos ?? (input.detectedRepo ? 1 : null))
-  if (repoCount !== null) {
-    bits.push(repoCount === 1 ? '1 repository' : `${repoCount} repositories`)
-  }
-
-  const image = readObject(env?.image)
-  if (readString(image?.dockerfile_append)) bits.push('custom Dockerfile')
-
-  const variables = readArray(env?.variables)?.length ?? 0
-  if (variables > 0) {
-    bits.push(variables === 1 ? '1 environment variable' : `${variables} environment variables`)
-  }
-
-  return bits.length > 0 ? bits.join(', ') : 'default configuration'
-}
-
-function readObject(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null
-}
-
-function readArray(value: unknown): unknown[] | null {
-  return Array.isArray(value) ? value : null
-}
-
-function readString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value : null
 }
 
 // The entry point's base request with the composer's picks layered on: a saved

@@ -5,8 +5,8 @@ import {
   COMPOSER_MODELS,
   composerModelOptions,
   composerPickerRows,
-  configSummary,
   connectability,
+  filterSessions,
   modelRate,
   rateDollars,
   isActiveStatusWord,
@@ -174,65 +174,27 @@ describe('rowMeta', () => {
   })
 })
 
-describe('configSummary', () => {
-  it('reads the model and the cwd repo with no config selected', () => {
-    expect(
-      configSummary({
-        model: 'claude-opus-5',
-        repos: null,
-        detectedRepo: 'acme/cli',
-        agentConfig: null,
-      }),
-    ).toBe('claude-opus-5, 1 repository')
+describe('filterSessions', () => {
+  const budget = session({
+    id: 'budget',
+    summary: { description: 'Checking the monthly budget' },
+    prompt: 'can you check my budget',
+  })
+  const greet = session({ id: 'greet', summary: null, prompt: 'Hey!' })
+  const bare = session({ id: 'bare', summary: null, prompt: null })
+
+  it('matches all on an empty or blank query', () => {
+    expect(filterSessions([budget, greet], '')).toEqual([budget, greet])
+    expect(filterSessions([budget, greet], '   ')).toEqual([budget, greet])
   })
 
-  it('names every part of a selected config the pickers cannot reach', () => {
-    expect(
-      configSummary({
-        model: null,
-        repos: null,
-        detectedRepo: 'acme/cli',
-        agentConfig: {
-          claude: { model: 'claude-sonnet-5' },
-          environment: {
-            repositories: [{ owner: 'acme', name: 'cli' }, { owner: 'acme', name: 'api' }],
-            image: { dockerfile_append: 'RUN apt-get install -y jq' },
-            variables: [{ name: 'A' }, { name: 'B' }, { name: 'C' }],
-          },
-        },
-      }),
-    ).toBe('claude-sonnet-5, 2 repositories, custom Dockerfile, 3 environment variables')
+  it('matches the summary and the prompt, case-insensitively', () => {
+    expect(filterSessions([budget, greet, bare], 'MONTHLY').map((s) => s.id)).toEqual(['budget'])
+    expect(filterSessions([budget, greet, bare], 'hey').map((s) => s.id)).toEqual(['greet'])
   })
 
-  it('lets the local picks override the config they came from', () => {
-    expect(
-      configSummary({
-        model: 'claude-haiku-4-5-20251001',
-        repos: [],
-        detectedRepo: 'acme/cli',
-        agentConfig: {
-          claude: { model: 'claude-sonnet-5' },
-          environment: { repositories: [{ owner: 'acme', name: 'cli' }] },
-        },
-      }),
-    ).toBe('claude-haiku-4-5-20251001, 0 repositories')
-  })
-
-  it('says so when nothing is resolved yet', () => {
-    expect(
-      configSummary({ model: null, repos: null, detectedRepo: null, agentConfig: null }),
-    ).toBe('default configuration')
-  })
-
-  it('ignores a blank dockerfile and an empty variable list', () => {
-    expect(
-      configSummary({
-        model: 'claude-opus-5',
-        repos: null,
-        detectedRepo: null,
-        agentConfig: { environment: { image: { dockerfile_append: '  ' }, variables: [] } },
-      }),
-    ).toBe('claude-opus-5')
+  it('drops sessions with nothing to match', () => {
+    expect(filterSessions([bare], 'anything')).toEqual([])
   })
 })
 

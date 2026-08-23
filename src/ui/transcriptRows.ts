@@ -1,6 +1,5 @@
 import { clampLines, type ItemKind, type TranscriptItem } from '@ellipsis-dev/sdk/store'
 import { fitLines, hasMarkdown, renderMarkdown, visibleWidth } from '../lib/markdown'
-import { SELECTION_GLYPH } from '../lib/sessions'
 import { theme } from '../lib/theme'
 
 // The transcript as a flat list of SCREEN ROWS. Everything on screen (the
@@ -108,6 +107,13 @@ export type TranscriptRow = {
 // heartbeat.
 export const LIVE_GLYPH = '⏺'
 
+// Your own messages wear a BAR down their left edge rather than a mark on their
+// first row — the same shape the composer you typed them into has, so a message
+// looks like what it was typed in. It is the one gutter that repeats on every
+// row of its item, since a bar that stopped after the first line would read as a
+// glyph rather than an edge.
+export const USER_BAR = '┃'
+
 // The mark on a line nested under the message that produced it: a tool call
 // the agent made while writing that message, and the result that came back.
 // It reads as a branch off the prose above, which is what the nesting means.
@@ -171,7 +177,7 @@ export function itemRows(
       id: `${item.key}:r${rows.length}`,
       entryKey: item.key,
       gutter:
-        bodyRows++ === 0
+        bodyRows++ === 0 || gutter === USER_BAR
           ? { text: gutter, color: gutterColor, dim: dim && !shown.isError }
           : undefined,
       indent,
@@ -316,7 +322,7 @@ export function pendingMessageRows(
       id: `${key}:r${i}`,
       entryKey: key,
       gutter:
-        i === 0 && opts.gutter
+        (i === 0 || opts.gutter === USER_BAR) && opts.gutter
           ? {
               text: opts.gutter,
               color: opts.gutterColor ?? theme.foreground,
@@ -411,7 +417,7 @@ function isCollapsible(item: TranscriptItem): boolean {
 // that is the trade for the prompt glyph matching, and the "+N lines" hint
 // still names the key that opens the highlighted block. Pure, for tests.
 export function gutterFor(item: TranscriptItem): string {
-  if (item.kind === 'user') return SELECTION_GLYPH
+  if (item.kind === 'user') return USER_BAR
   if (item.kind === 'assistant') return '●'
   if (item.kind === 'system' || item.kind === 'notice') return '✦'
   return item.gutter ?? ''
@@ -434,8 +440,8 @@ function styleFor(item: TranscriptItem): {
         dim: !item.isError,
         bold: false,
       }
-    // User copy stays white like the assistant's — only the ▶ takes the cyan,
-    // matching the composer's prompt.
+    // User copy stays white like the assistant's — only the bar takes the cyan,
+    // matching the composer's own left edge.
     case 'user':
       return { gutterColor: theme.cursor, bold: true, dim: false }
     case 'error':

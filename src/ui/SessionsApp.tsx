@@ -20,7 +20,6 @@ import {
   composerModelOptions,
   composerPickerRows,
   configDisplayName,
-  configSummary,
   connectability,
   type ComposerChoices,
   type ComposerModel,
@@ -29,6 +28,7 @@ import {
   rowMeta,
   rowStatusWord,
   sessionConfigName,
+  filterSessions,
   navSlice,
   sessionBarQuery,
   SELECTION_GLYPH,
@@ -36,17 +36,17 @@ import {
   mergeSidebarSessions,
 } from '../lib/sessions'
 import type { ResolvedSessionBar } from '../lib/config'
-import { theme } from '../lib/theme'
+import { inputSurface, theme } from '../lib/theme'
 import { ConnectApp } from './ConnectApp'
 
 // The multi-session UI — what a bare `agent`, `agent "prompt"`, and `agent
 // session connect <id>` all open. Two screens, both on the primary buffer:
 //
-//   * the LAUNCHER: a compact inline block (~10 rows) — the prompt on the
-//     first row, one dim settings line under it, the latest sessions, and the
-//     "connected to" line last. Enter on the prompt starts a session; enter on
-//     a session row opens its chat. It is short by design, so ink repaints it
-//     in place like any live frame; no alternate screen, no full-height frame.
+//   * the LAUNCHER: a compact inline block — the configuration rows on top, the
+//     prompt box under them, the latest sessions last. Enter in the box starts a
+//     session; enter on a session row opens its chat. It is short by design, so
+//     ink repaints it in place like any live frame; no alternate screen, no
+//     full-height frame.
 //   * the CHAT (ConnectApp) — owns the terminal outright. Its settled
 //     transcript is printed into the terminal's real scrollback, so the
 //     wheel, the trackpad and select/copy are the terminal's own.
@@ -70,7 +70,7 @@ const LIST_ROWS = 5
 // Everything an open picker's option row prints before its label: the row
 // indent, the selection cell and its space, then the "[x] " checkbox. What the
 // price column has to clear on the left.
-const OPTION_GUTTER = '  '.length + 2 + '[x] '.length
+const OPTION_GUTTER = '   '.length + 2 + '[x] '.length
 
 // The unit the price columns are quoted in, printed once on their column head.
 const RATE_UNIT = '  per 1M'
@@ -460,53 +460,56 @@ function EscOnlyInput({
   return null
 }
 
-// One row of the launcher's option block: a label + the picked value(s),
+// One row of the launcher's configuration block: a label + the picked value(s),
 // opened into its option list with →/enter (the dashboard composer's selects,
 // terminal-shaped). Repositories multi-select; the others pick one.
 type PickerRow = { key: 'config' | 'model' | 'repo'; label: string }
 const PICKER_ROWS: readonly PickerRow[] = [
-  { key: 'repo', label: 'Repository' },
-  { key: 'config', label: 'Agent' },
+  { key: 'config', label: 'Config preset' },
+  { key: 'repo', label: 'Repositories' },
   { key: 'model', label: 'Model' },
 ]
 
-// The row that opens the configuration editor, printed with its brackets so it
-// reads as the one pressable thing on the line.
-const EDIT_ROW_LABEL = '[edit configuration]'
+// What the prompt box says before you type: the whole key map for the block, so
+// nothing about the launcher has to be remembered.
+const PROMPT_HINT = 'Enter to start a session, up to configure it, down to explore old sessions...'
 
-// Where the launcher's cursor is: the prompt, the summary row that opens the
-// editor, one of the editor's option rows (by PICKER_ROWS index), or a session
-// row (by id, so the poll re-sorting under the cursor doesn't move the
-// highlight).
+// The prompt box's interior padding, matching the chat composer's.
+const PROMPT_PAD_X = 2
+
+// Where the launcher's cursor is: the prompt box, one of the configuration rows
+// (by PICKER_ROWS index), or a session row (by id, so the poll re-sorting under
+// the cursor doesn't move the highlight).
 type LauncherCursor =
   | { kind: 'prompt' }
-  | { kind: 'edit' }
   | { kind: 'option'; at: number }
   | { kind: 'list'; id: string }
 
-// The launcher: a compact inline block, ~10 rows tall, with the prompt first —
+// The launcher: a compact inline block, configuration on top, prompt in the
+// middle, history at the bottom —
 //
-//   ❯ Start a cloud agent…
-//     [edit configuration] claude-opus-5, 1 repository
+//     Config preset: none
+//     Repositories: acme/cli
+//     Model: claude-opus-5
 //
-//     ● latest session               $0.20 · 2m ago
-//     ● …                       (LIST_ROWS rows; scrolls near the bottom)
+//    |
+//    | Enter to start a session, up to configure it, down to explore old…
+//    |
 //
-//     @me in account
+//    Recent sessions:                                    @me in account
+//    ● latest session                               $0.20 · 2m ago
+//    ● …                                   (LIST_ROWS rows; scrolls)
 //
-// Two screens in the same block. At rest the second row summarizes what the
-// next run will use (configSummary). Enter on it swaps the session list for the
-// EDITOR — the Repository / Agent / Model rows and their dropdowns — so the
-// block never grows: you are either looking at what you have run or at what you
-// are about to run, never both.
+// ONE input, two readings: what you type is the next session's prompt AND a
+// live filter over the list below, so finding old work and starting new work
+// are the same gesture. Enter starts a session with the text (empty text
+// starts it idle). ↑ walks up into the configuration rows, where enter (or →)
+// opens that row's dropdown in place — nothing swaps out, the session list
+// stays. ↓ walks down into the list, where enter opens a session.
 //
-// The ❯ glyph marks whichever row holds the cursor. ↓ from the prompt lands on
-// the summary row; ↓ again enters the session list, or, with the editor open,
-// walks its option rows (→/enter opens a row's option list in place, ← or esc
-// backs out). esc on the summary row closes the editor. Typing anywhere returns
-// the cursor to the prompt. Enter on the prompt starts a session; an empty
-// prompt starts it idle. "Default" everywhere means the server resolves it.
-// Repository is the one multi-select ([x] toggles; uncheck everything for a
+// The ▶ glyph marks whichever row holds the cursor. Typing anywhere returns
+// the cursor to the prompt. "Default" everywhere means the server resolves it.
+// Repositories is the one multi-select ([x] toggles; uncheck everything for a
 // sandbox with no checkout).
 function Launcher({
   width,
@@ -570,16 +573,13 @@ function Launcher({
   const [openPicker, setOpenPicker] = useState<{ key: PickerRow['key']; hover: number } | null>(
     null,
   )
-  // Whether the editor has taken the session list's place. Enter on the summary
-  // row opens it; esc there closes it.
-  const [editing, setEditing] = useState(false)
 
   // All three pickers deal in the same option shape (ComposerModel), so the
   // renderer can ask any of them for a group heading or a subtext; only the
   // model list fills those in.
   const configOptions = useMemo<ComposerModel[]>(
     () => [
-      { id: null as string | null, label: 'Default' },
+      { id: null as string | null, label: 'none' },
       ...(configs ?? []).map((c) => ({ id: c.id as string | null, label: configDisplayName(c) })),
     ],
     [configs],
@@ -665,10 +665,14 @@ function Launcher({
     })
   }
 
+  // The rows below the prompt: the typed text filters the list live, so the
+  // prompt doubles as a search box over your recent sessions.
+  const shown = useMemo(() => filterSessions(sessions, text), [sessions, text])
+
   // Where the list cursor sits in the current sort; the id survives the poll
   // re-sorting rows, and a session that left the list snaps to the top.
   const listIdx =
-    cursor.kind === 'list' ? Math.max(0, sessions.findIndex((s) => s.id === cursor.id)) : 0
+    cursor.kind === 'list' ? Math.max(0, shown.findIndex((s) => s.id === cursor.id)) : 0
 
   const toPromptWith = (ch: string): void => {
     setCursor({ kind: 'prompt' })
@@ -712,44 +716,17 @@ function Launcher({
         setTextCursor(edited.cursor)
         return
       }
-      if (cursor.kind === 'edit') {
-        // The summary row: enter (or →) opens the editor under it, esc closes
-        // it, ↓ moves into whichever screen is showing.
-        if (key.return || key.rightArrow) {
-          setEditing(true)
-          setCursor({ kind: 'option', at: 0 })
-          return
-        }
-        if (key.upArrow) {
-          setCursor({ kind: 'prompt' })
-          return
-        }
-        if (key.downArrow) {
-          if (editing) setCursor({ kind: 'option', at: 0 })
-          else if (!hideList && sessions.length > 0)
-            setCursor({ kind: 'list', id: sessions[0].id })
-          return
-        }
-        if (key.escape) {
-          setEditing(false)
-          setCursor({ kind: 'prompt' })
-          return
-        }
-        if (ch && !key.ctrl && !key.meta) toPromptWith(ch)
-        return
-      }
       if (cursor.kind === 'option') {
-        // The editor's option rows: ↑ off the first climbs back to the summary
-        // row, ↓ stops at the last (the editor is the bottom screen — the
-        // session list is not showing), →/enter opens the row's list, esc
-        // closes the editor, typing returns to the prompt.
+        // The configuration rows above the prompt: ↑ walks up them and stops at
+        // the first, ↓ off the last returns to the prompt, →/enter opens the
+        // row's list, esc returns to the prompt, typing does too.
         if (key.upArrow) {
-          if (cursor.at <= 0) setCursor({ kind: 'edit' })
-          else setCursor({ kind: 'option', at: cursor.at - 1 })
+          if (cursor.at > 0) setCursor({ kind: 'option', at: cursor.at - 1 })
           return
         }
         if (key.downArrow) {
           if (cursor.at < PICKER_ROWS.length - 1) setCursor({ kind: 'option', at: cursor.at + 1 })
+          else setCursor({ kind: 'prompt' })
           return
         }
         if (key.return || key.rightArrow) {
@@ -757,8 +734,7 @@ function Launcher({
           return
         }
         if (key.escape) {
-          setEditing(false)
-          setCursor({ kind: 'edit' })
+          setCursor({ kind: 'prompt' })
           return
         }
         if (ch && !key.ctrl && !key.meta) toPromptWith(ch)
@@ -766,19 +742,19 @@ function Launcher({
       }
       if (cursor.kind === 'list') {
         // The session rows at the bottom: ↑/↓ walk them (↑ off the top climbs
-        // back to the summary row), enter opens the highlighted session.
+        // back to the prompt), enter opens the highlighted session.
         if (key.upArrow) {
-          if (listIdx <= 0) setCursor({ kind: 'edit' })
-          else setCursor({ kind: 'list', id: sessions[listIdx - 1].id })
+          if (listIdx <= 0) setCursor({ kind: 'prompt' })
+          else setCursor({ kind: 'list', id: shown[listIdx - 1].id })
           return
         }
         if (key.downArrow) {
-          if (listIdx < sessions.length - 1)
-            setCursor({ kind: 'list', id: sessions[listIdx + 1].id })
+          if (listIdx < shown.length - 1)
+            setCursor({ kind: 'list', id: shown[listIdx + 1].id })
           return
         }
         if (key.return) {
-          const picked = sessions[listIdx]
+          const picked = shown[listIdx]
           if (picked) onOpenSession(picked.id)
           return
         }
@@ -789,17 +765,20 @@ function Launcher({
         if (ch && !key.ctrl && !key.meta) toPromptWith(ch)
         return
       }
-      // At the prompt, the first row: ↓ lands on the summary row beneath it.
-      // ↑ does nothing — there is nothing above the prompt.
+      // At the prompt box: ↑ lands on the LAST configuration row (the one just
+      // above it), ↓ on the first session row.
       if (key.return) {
         submit()
         return
       }
-      if (key.downArrow) {
-        setCursor({ kind: 'edit' })
+      if (key.upArrow) {
+        setCursor({ kind: 'option', at: PICKER_ROWS.length - 1 })
         return
       }
-      if (key.upArrow) return
+      if (key.downArrow) {
+        if (!hideList && shown.length > 0) setCursor({ kind: 'list', id: shown[0].id })
+        return
+      }
       if (key.leftArrow) {
         setTextCursor((c) => Math.max(0, c - 1))
         return
@@ -815,7 +794,14 @@ function Launcher({
         }
         return
       }
-      if (key.escape || key.ctrl || key.meta || key.tab) return
+      // esc clears the typed text — the one-key way out of a filter that
+      // matched nothing.
+      if (key.escape) {
+        setText('')
+        setTextCursor(0)
+        return
+      }
+      if (key.ctrl || key.meta) return
       if (ch) {
         setText((t) => t.slice(0, textCursor) + ch + t.slice(textCursor))
         setTextCursor((c) => c + ch.length)
@@ -842,7 +828,7 @@ function Launcher({
 
   // How many option rows an open dropdown shows: enough to be useful, capped
   // so the whole launcher still fits a short terminal.
-  const dropdownCapacity = Math.max(3, Math.min(10, height - (LIST_ROWS + 10)))
+  const dropdownCapacity = Math.max(3, Math.min(10, height - (LIST_ROWS + 12)))
   const open = openPicker
   const openOptions = open ? optionsFor(open.key) : []
   const openHover = open ? Math.min(open.hover, openOptions.length - 1) : 0
@@ -894,122 +880,46 @@ function Launcher({
       : ''
 
   const caretVisible = focused && cursor.kind === 'prompt' && !starting && openPicker === null
-  const listWin = navSlice(sessions.length, LIST_ROWS, listIdx)
-  // The editor and the session list share the space under the summary row, so
-  // the block's height never depends on which one is showing.
-  const showList = !hideList && !editing
-  // What the next run will use, in one line. The selected saved config supplies
-  // the Dockerfile and variables the pickers can't reach; the local Model and
-  // Repository picks override its own.
-  const pickedConfigId = configOptions[Math.min(configIdx, configOptions.length - 1)]?.id ?? null
-  // The LABEL, not the id: the account-default row names its model while
-  // carrying the null "server resolves it" id, and the name is what to show.
-  // Only the synthetic Default row (no server model claims the flag) has
-  // nothing to name, and there the config's own model answers instead.
-  const pickedModelLabel = modelOptions[modelIdx]?.label ?? null
-  const summary = configSummary({
-    model: pickedModelLabel === 'Default' ? null : pickedModelLabel,
-    repos: repoSel === null ? null : [...repoSel],
-    detectedRepo,
-    agentConfig:
-      (configs?.find((c) => c.id === pickedConfigId)?.agent_config as Record<
-        string,
-        unknown
-      > | null) ?? null,
-  })
-  // One status line at the very bottom, only when there is something to say.
-  const statusLine = armed
-    ? CTRL_C_QUIT_HINT
-    : starting
-      ? '✻ Starting session…'
-      : editing
-        ? 'esc: back to your sessions'
-        : null
+  const listWin = navSlice(shown.length, LIST_ROWS, listIdx)
+  const showList = !hideList
+  // The bottom line is for news only — the prompt box's hint already carries the
+  // key map, so there is nothing routine to print here.
+  const statusLine = armed ? CTRL_C_QUIT_HINT : starting ? '✻ Starting session…' : null
 
   return (
     <Box flexDirection="column" width={width}>
-      {/* The prompt, the launcher's first row. ONE ❯ on the whole block: the
-          prompt's gutter carries it only while the prompt holds the cursor — a
-          blank cell otherwise, exactly like the rows below. Wraps instead of
-          truncating: a long prompt flows onto the next row rather than running
-          off the right edge. The explicit width is what ink wraps against; the
-          key remounts the node so a stale measurement can't misplace the
-          caret. */}
-      <Box width={width} alignItems="flex-start">
-        {/* The glyph lives in its own fixed gutter so wrapped prompt lines
-            align under the first typed character, not under the glyph. */}
-        <Box width={2} flexShrink={0}>
-          <Text color={theme.cursor}>
-            {focused && cursor.kind === 'prompt' && openPicker === null ? SELECTION_GLYPH : ' '}
-          </Text>
-        </Box>
-        <Box width={width - 2}>
-          <Text
-            wrap="wrap"
-            key={`${text}:${textCursor}:${cursor.kind === 'prompt'}`}
-            color={theme.foreground}
-          >
-            {text.slice(0, textCursor)}
-            {caretVisible && text !== '' && (
-              <Text inverse>{textCursor < text.length ? text[textCursor] : ' '}</Text>
-            )}
-            {textCursor < text.length ? text.slice(textCursor + (caretVisible ? 1 : 0)) : ''}
-            {/* Empty input: the placeholder sits where typed text will land,
-                its first character carrying the caret (inverse) instead of a
-                caret cell of its own pushing it a column right. */}
-            {text === '' && caretVisible && (
-              <Text>
-                <Text inverse>S</Text>
-                <Text color={theme.muted}>tart a cloud agent…</Text>
-              </Text>
-            )}
-            {text === '' && !caretVisible && (
-              <Text color={theme.muted}>Start a cloud agent…</Text>
-            )}
-          </Text>
-        </Box>
-      </Box>
-      {/* What the next run will use, and the way into changing it. The bracket
-          label carries the pressability; the summary after it is plain text. */}
-      <Box width={width}>
-        <Box width={2} flexShrink={0}>
-          <Text color={theme.cursor}>
-            {focused && cursor.kind === 'edit' ? SELECTION_GLYPH : ' '}
-          </Text>
-        </Box>
-        <Text wrap="truncate">
-          <Text color={cursor.kind === 'edit' || editing ? theme.foreground : theme.muted}>
-            {EDIT_ROW_LABEL}
-          </Text>
-          <Text color={theme.muted}>{` ${summary}`}</Text>
-        </Text>
-      </Box>
-      {/* The editor, in the session list's place: the three picker rows and
-          whichever dropdown is open. */}
-      {editing && <Text> </Text>}
-      {editing && PICKER_ROWS.map((r, i) => {
-        const active =
-          focused && openPicker === null && cursor.kind === 'option' && cursor.at === i
+      {/* What the next run will use, on top: three rows you walk with ↑ from the
+          prompt box, each opening its own list in place. */}
+      {PICKER_ROWS.map((r, i) => {
+        const active = focused && cursor.kind === 'option' && cursor.at === i
         const isOpen = open?.key === r.key
-        if (isOpen) {
-          return (
-            <Box key={r.key} flexDirection="column" width={width}>
-              <Text color={theme.muted}>{'  '}{r.label}:</Text>
-              {/* The price table's column heads, over the numeric columns they
-                  name, with the unit stated once here instead of on every row. */}
-              {rateTable && (
-                <Box width={width}>
-                  <Text wrap="truncate" color={theme.muted}>
-                    {' '.repeat(OPTION_GUTTER + rateTable.label)}
-                    {rateCells({ input: 'IN', output: 'OUT' })}
-                    {RATE_UNIT}
-                  </Text>
-                </Box>
-              )}
-              {hiddenAbove > 0 && (
-                <Text color={theme.muted}>{'    '}… {hiddenAbove} more</Text>
-              )}
-              {visibleRows.map((pickerRow) => {
+        return (
+          <Box key={r.key} flexDirection="column" width={width}>
+            <Box width={width}>
+              <Box width={2} flexShrink={0}>
+                <Text color={theme.cursor}>{active ? SELECTION_GLYPH : ' '}</Text>
+              </Box>
+              <Text wrap="truncate">
+                <Text color={theme.muted}>{r.label}: </Text>
+                <Text color={active ? theme.foreground : theme.muted}>{rowValue(r.key)}</Text>
+              </Text>
+            </Box>
+            {/* The price table's column heads, over the numeric columns they
+                name, with the unit stated once here instead of on every row. */}
+            {isOpen && rateTable && (
+              <Box width={width}>
+                <Text wrap="truncate" color={theme.muted}>
+                  {' '.repeat(OPTION_GUTTER + rateTable.label)}
+                  {rateCells({ input: 'IN', output: 'OUT' })}
+                  {RATE_UNIT}
+                </Text>
+              </Box>
+            )}
+            {isOpen && hiddenAbove > 0 && (
+              <Text color={theme.muted}>{'    '}… {hiddenAbove} more</Text>
+            )}
+            {isOpen &&
+              visibleRows.map((pickerRow) => {
                 // A group heading: the vendor that built the models under it,
                 // upper-cased into an eyebrow the way the dashboard's
                 // rate-card table sets its own, and muted so it reads as
@@ -1032,7 +942,7 @@ function Launcher({
                 return (
                   <Box key={opt.id ?? 'default'} width={width}>
                     <Text wrap="truncate">
-                      {'  '}
+                      {'   '}
                       <Text color={theme.cursor}>
                         {hovered ? SELECTION_GLYPH : ' '}
                       </Text>{' '}
@@ -1048,41 +958,79 @@ function Launcher({
                   </Box>
                 )
               })}
-              {hiddenBelow > 0 && (
-                <Text color={theme.muted}>
-                  {'    '}… {hiddenBelow} more
-                </Text>
-              )}
-            </Box>
-          )
-        }
-        return (
-          <Box key={r.key} width={width}>
-            <Text wrap="truncate">
-              {'  '}
-              <Text color={active ? theme.cursor : theme.muted}>
-                {active ? SELECTION_GLYPH : ' '}
-              </Text>{' '}
-              <Text color={theme.muted}>{r.label}: </Text>
-              <Text color={active ? theme.foreground : theme.muted}>
-                {rowValue(r.key)}
+            {isOpen && hiddenBelow > 0 && (
+              <Text color={theme.muted}>
+                {'    '}… {hiddenBelow} more
               </Text>
-            </Text>
+            )}
           </Box>
         )
       })}
-      {/* A blank row splitting what you are about to start from what you have
+      {/* The prompt box: the chat composer's painted slab, with an accent bar
+          down its left edge and a blank row of padding above and below the
+          input. Wraps instead of truncating, so a long prompt grows the box
+          downward rather than running off the right edge. The key remounts the
+          node so a stale measurement can't misplace the caret. */}
+      <Text> </Text>
+      <Box
+        width={width}
+        backgroundColor={inputSurface}
+        borderStyle="bold"
+        borderTop={false}
+        borderRight={false}
+        borderBottom={false}
+        borderLeftColor={focused && cursor.kind === 'prompt' ? theme.cursor : theme.muted}
+        paddingY={1}
+        paddingX={PROMPT_PAD_X}
+      >
+        <Text
+          wrap="wrap"
+          key={`${text}:${textCursor}:${cursor.kind === 'prompt'}`}
+          color={theme.foreground}
+        >
+          {text.slice(0, textCursor)}
+          {caretVisible && text !== '' && (
+            <Text inverse>{textCursor < text.length ? text[textCursor] : ' '}</Text>
+          )}
+          {textCursor < text.length ? text.slice(textCursor + (caretVisible ? 1 : 0)) : ''}
+          {/* Empty input: the hint sits where typed text will land, its first
+              character carrying the caret (inverse) instead of a caret cell of
+              its own pushing it a column right. */}
+          {text === '' && caretVisible && (
+            <Text>
+              <Text inverse>{PROMPT_HINT[0]}</Text>
+              <Text color={theme.muted}>{PROMPT_HINT.slice(1)}</Text>
+            </Text>
+          )}
+          {text === '' && !caretVisible && <Text color={theme.muted}>{PROMPT_HINT}</Text>}
+        </Text>
+      </Box>
+      {/* Two blank rows splitting what you are about to start from what you have
           already run. */}
-      {showList && <Text> </Text>}
+      <Text> </Text>
+      <Text> </Text>
+      {/* The list's own heading, with who you are on the same row's right edge:
+          both are true of every row under them and neither is something you act
+          on. */}
+      <Box width={width}>
+        <Box flexGrow={1} flexShrink={1}>
+          <Text wrap="truncate" color={theme.muted}>
+            {showList ? ' Recent sessions:' : ' '}
+          </Text>
+        </Box>
+        <Box flexShrink={0}>
+          <Text color={theme.muted}>{whoLine}</Text>
+        </Box>
+      </Box>
       {/* The latest sessions: status dot + description + a dim meta tag, in
           sortSidebarSessions order (status band, newest first), windowed so the
           highlight parks two rows from the bottom and the list scrolls under
           it. */}
       {showList &&
-        sessions.slice(listWin.start, listWin.end).map((s) => {
+        shown.slice(listWin.start, listWin.end).map((s) => {
           const word = rowStatusWord(s)
           const g = rowGlyph(word)
-          const cursorHere = focused && cursor.kind === 'list' && sessions[listIdx]?.id === s.id
+          const cursorHere = focused && cursor.kind === 'list' && shown[listIdx]?.id === s.id
           const desc = rowDescription(s)
           // The meta tag rides the right edge; the description takes what's
           // left and truncates, so a long prompt can never push the tag off
@@ -1091,7 +1039,7 @@ function Launcher({
           const descW = Math.max(8, width - meta.length - 8)
           return (
             <Box key={s.id} width={width}>
-              <Box width={2} flexShrink={0}>
+              <Box width={3} paddingLeft={1} flexShrink={0}>
                 <Text color={cursorHere ? theme.cursor : g.color} dimColor={!cursorHere && g.dim}>
                   {cursorHere ? SELECTION_GLYPH : g.glyph}
                 </Text>
@@ -1115,19 +1063,16 @@ function Launcher({
             </Box>
           )
         })}
-      {showList && sessions.length === 0 && (
+      {showList && shown.length === 0 && (
         <Text color={theme.muted}>
-          {'  '}
-          {polledOnce ? 'no sessions yet' : 'loading sessions…'}
+          {'   '}
+          {!polledOnce
+            ? 'loading sessions…'
+            : sessions.length === 0
+              ? 'no sessions yet'
+              : 'no matching sessions'}
         </Text>
       )}
-      {/* Who you are, last: true for the whole block and never something you
-          act on, so it sits below the rows you do act on. */}
-      <Text> </Text>
-      <Text wrap="truncate" color={theme.muted}>
-        {'  '}
-        {whoLine}
-      </Text>
       {/* An API failure gets its own line — a swallowed error is an empty
           list with no explanation. */}
       {error && (

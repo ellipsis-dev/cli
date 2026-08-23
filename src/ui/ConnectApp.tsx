@@ -63,6 +63,7 @@ import {
   settledRowCount,
   spacerRow,
   spanColor,
+  USER_BAR,
   type RowSpan,
   type TranscriptRow,
 } from './transcriptRows'
@@ -174,10 +175,10 @@ const SANDBOX_KEY = 'sandbox'
 // don't visibly beat against each other.
 const PULSE_MS = 700
 
-// Columns the composer's text actually gets: the panel's horizontal pad on
-// both sides, then the prompt glyph and its trailing space.
+// Columns the composer's text actually gets: the panel's horizontal pad on both
+// sides, then the accent bar down its left edge.
 function composerTextCols(cols: number): number {
-  return Math.max(8, cols - COMPOSER_PAD_X * 2 - 2)
+  return Math.max(8, cols - COMPOSER_PAD_X * 2 - 1)
 }
 
 // One local send awaiting server acknowledgement: messageId is null while the
@@ -842,12 +843,12 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       )
     }
     // Sends the agent has TAKEN (delivered, echo record still in flight):
-    // full-colour ▶ rows ABOVE the live activity — the running turn is the
+    // full-colour barred rows ABOVE the live activity — the running turn is the
     // response to THIS message, so its stream belongs below it.
     for (const q of inFlightSends.filter((q) => q.state === 'accepted')) {
       out.push(
         ...pendingMessageRows(q.key, q.text, cols, {
-          gutter: SELECTION_GLYPH,
+          gutter: USER_BAR,
           gutterColor: theme.cursor,
           bold: true,
         }),
@@ -887,9 +888,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       out.push(
         ...pendingMessageRows(q.key, q.text, cols, {
           // A waiting send wears the breathing ⏺, the app's one "in flight"
-          // mark; a cancelled one keeps the ▶ sender glyph — it was a real
+          // mark; a cancelled one keeps the sender's bar — it was a real
           // message, it just never got answered.
-          gutter: waiting ? LIVE_GLYPH : SELECTION_GLYPH,
+          gutter: waiting ? LIVE_GLYPH : USER_BAR,
           gutterColor: waiting ? undefined : theme.cursor,
           dim: true,
           right: q.state === 'sending' ? 'sending' : q.state === 'queued' ? 'queued' : 'cancelled',
@@ -1184,6 +1185,13 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         {composerVisible && (
           <Box
             backgroundColor={inputSurface}
+            // The accent bar down the left edge, exactly as the launcher's
+            // prompt box wears it — one input, one shape, both screens.
+            borderStyle="bold"
+            borderTop={false}
+            borderRight={false}
+            borderBottom={false}
+            borderLeftColor={focused ? theme.cursor : theme.muted}
             height={composerRows}
             flexShrink={0}
             overflow="hidden"
@@ -1211,7 +1219,6 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
               key={`${composer.text}:${composer.cursor}:${focused}`}
               color={theme.foreground}
             >
-              <Text color={focused ? theme.cursor : theme.muted}>{SELECTION_GLYPH} </Text>
               {composer.text.slice(0, composer.cursor)}
               {focused && (
                 <Text inverse>

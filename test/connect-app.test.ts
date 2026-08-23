@@ -605,8 +605,8 @@ describe('gutterFor', () => {
   const item = (kind: TranscriptItem['kind'], gutter?: string): TranscriptItem =>
     ({ key: 'k', kind, text: 'x', spaceBefore: false, gutter }) as TranscriptItem
 
-  it('marks user messages ▶, assistant prose ●, and system lines ✦, overriding the SDK gutter', () => {
-    expect(gutterFor(item('user', '›'))).toBe('▶')
+  it('bars user messages, marks assistant prose ● and system lines ✦, overriding the SDK gutter', () => {
+    expect(gutterFor(item('user', '›'))).toBe('┃')
     expect(gutterFor(item('assistant'))).toBe('●')
     expect(gutterFor(item('system'))).toBe('✦')
     expect(gutterFor(item('notice'))).toBe('✦')
@@ -760,7 +760,7 @@ describe('itemRows', () => {
     const gutterOf = (kind: TranscriptItem['kind'], nested = false): string | undefined =>
       itemRows({ key: 'a', kind, text: 'x' } as TranscriptItem, 40, { nested })[0]
         .gutter?.text
-    expect(gutterOf('user')).toBe('▶')
+    expect(gutterOf('user')).toBe('┃')
     expect(gutterOf('assistant')).toBe('●')
     expect(gutterOf('notice')).toBe('✦')
     for (const row of itemRows({ key: 'a', kind: 'user', text: 'x' }, 40)) {
@@ -782,10 +782,17 @@ describe('itemRows', () => {
   })
 
   it('puts the gutter glyph on the first content row only', () => {
-    const rows = itemRows({ key: 'a', kind: 'user', text: 'one\ntwo' }, 40)
+    const rows = itemRows({ key: 'a', kind: 'assistant', text: 'one\ntwo' }, 40)
     const withGutter = rows.filter((r) => r.gutter)
     expect(withGutter).toHaveLength(1)
-    expect(withGutter[0].gutter?.text).toBe('▶')
+    expect(withGutter[0].gutter?.text).toBe('●')
+  })
+
+  // The one exception: a user message's bar is an EDGE, so it repeats down every
+  // row of the body rather than marking only the first.
+  it('runs the user bar down every row of a multi-line message', () => {
+    const rows = itemRows({ key: 'a', kind: 'user', text: 'one\ntwo' }, 40)
+    expect(rows.map((r) => r.gutter?.text)).toEqual(['┃', '┃'])
   })
 
   it('marks a fold ⎿ only when it branches off a message, ● when it opens a turn', () => {

@@ -11,11 +11,12 @@ import chalk from 'chalk'
 // lib/terminalBackground.ts). Dark is the default because it is the brand's
 // main mode and the safe guess when the terminal won't say.
 //
-// One rule carried over from the web app (landing globals.css `.dark`): the
-// accent in dark mode is BONE, not brand blue. Brand ink #175173 scores 1.79:1
-// on a dark surface — unreadable as terminal text. So dark emphasis is carried
-// by brightness (bone against stone), not by hue. In light mode the brand ink
-// IS legible (8.5:1 on white), so the cursor takes it there.
+// TEXT emphasis is carried by brightness, not by hue: brand ink #175173 scores
+// 1.79:1 on a dark surface, so no copy is ever set in it — dark emphasis is bone
+// against stone. The one thing that IS brand ink in both modes is `cursor`, and
+// only because nothing it paints is read as text: a ▶, a left edge, a bar. Those
+// are shapes you locate, not words, and a located shape survives a contrast a
+// sentence would not.
 //
 // EXACTLY ONE SURFACE IS PAINTED: the composer's (`inputSurface` below). The CLI
 // used to paint a canvas behind everything and lift panels onto it, which worked
@@ -45,10 +46,11 @@ export interface Palette {
   foreground: string
   muted: string
 
-  // The ▶ cursor, and nothing else — which, with no highlight bar to fall back
-  // on, is the ONLY thing that says "you are here". It carries HUE as well as
-  // brightness: a hue not already spoken for (green = done, amber = working,
-  // red = failed), so it never reads as a status.
+  // The ▶ cursor, the composer's left edge, and the bar down your own messages —
+  // which, with no highlight bar to fall back on, is the ONLY thing that says
+  // "you are here". Brand ink in both modes: it is the accent the web apps use
+  // for exactly this (interactive, never status), and it is a hue no status owns
+  // (green = done, amber = working, red = failed).
   cursor: string
 
   // Status.
@@ -66,11 +68,10 @@ export interface Palette {
 }
 
 // brand/tokens.json `dark` values. muted is 7.4:1 on the brand charcoal.
-// cursor is the one non-brand hex: cyan, the hue no status owns (see above).
 export const darkPalette: Palette = {
   foreground: '#f0efe9',
   muted: '#a8a59c',
-  cursor: '#5fd3e0',
+  cursor: '#175173',
   success: '#4ebc7b',
   error: '#e5544b',
   active: '#d9bd8d',
@@ -78,9 +79,8 @@ export const darkPalette: Palette = {
   syntaxString: '#c8c6bc',
 }
 
-// brand/tokens.json `light` values. cursor is the brand ink accent — in light
-// mode it is legible AND it is exactly what the accent means on the web apps
-// (interactive, never status). active mirrors dark by borrowing syntaxLiteral.
+// brand/tokens.json `light` values. active mirrors dark by borrowing
+// syntaxLiteral.
 export const lightPalette: Palette = {
   foreground: '#1c1b17',
   muted: '#706f66',
