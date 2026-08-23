@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   applyComposerChoices,
   attentionFlip,
-  compactTokens,
   COMPOSER_MODELS,
   composerModelOptions,
   composerPickerRows,
+  configSummary,
   connectability,
   modelRate,
   rateDollars,
@@ -156,34 +156,83 @@ describe('lastEventAt / shortAge', () => {
   })
 })
 
-describe('compactTokens', () => {
-  it('scales the unit and drops noise decimals', () => {
-    expect(compactTokens(0)).toBe('0')
-    expect(compactTokens(840)).toBe('840')
-    expect(compactTokens(4800)).toBe('4.8k')
-    expect(compactTokens(84_200)).toBe('84.2k')
-    expect(compactTokens(12_000)).toBe('12k')
-    expect(compactTokens(512_000)).toBe('512k')
-    expect(compactTokens(1_240_000)).toBe('1.24M')
-    expect(compactTokens(2_000_000)).toBe('2M')
-  })
-})
-
 describe('rowMeta', () => {
   const now = new Date('2026-07-23T12:00:00Z')
 
-  it('reads tokens, spend, and age', () => {
+  it('reads spend and age, never the token count', () => {
     const s = session({
       tokens: { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: 84_200, model: '' },
       cost: { llm: 30_000, sandbox_cpu: 10_000, sandbox_memory: 2_000, fee: 0, total: 42_000 },
       updated_at: '2026-07-23T11:58:00Z',
     } as never)
-    expect(rowMeta(s, now)).toBe('84.2k · $0.42 · 2m ago')
+    expect(rowMeta(s, now)).toBe('$0.42 · 2m ago')
   })
 
-  it('drops the work bits a fresh session has none of', () => {
+  it('drops the spend a fresh session has none of', () => {
     const s = session({ updated_at: '2026-07-23T11:59:48Z' })
     expect(rowMeta(s, now)).toBe('12s ago')
+  })
+})
+
+describe('configSummary', () => {
+  it('reads the model and the cwd repo with no config selected', () => {
+    expect(
+      configSummary({
+        model: 'claude-opus-5',
+        repos: null,
+        detectedRepo: 'acme/cli',
+        agentConfig: null,
+      }),
+    ).toBe('claude-opus-5, 1 repository')
+  })
+
+  it('names every part of a selected config the pickers cannot reach', () => {
+    expect(
+      configSummary({
+        model: null,
+        repos: null,
+        detectedRepo: 'acme/cli',
+        agentConfig: {
+          claude: { model: 'claude-sonnet-5' },
+          environment: {
+            repositories: [{ owner: 'acme', name: 'cli' }, { owner: 'acme', name: 'api' }],
+            image: { dockerfile_append: 'RUN apt-get install -y jq' },
+            variables: [{ name: 'A' }, { name: 'B' }, { name: 'C' }],
+          },
+        },
+      }),
+    ).toBe('claude-sonnet-5, 2 repositories, custom Dockerfile, 3 environment variables')
+  })
+
+  it('lets the local picks override the config they came from', () => {
+    expect(
+      configSummary({
+        model: 'claude-haiku-4-5-20251001',
+        repos: [],
+        detectedRepo: 'acme/cli',
+        agentConfig: {
+          claude: { model: 'claude-sonnet-5' },
+          environment: { repositories: [{ owner: 'acme', name: 'cli' }] },
+        },
+      }),
+    ).toBe('claude-haiku-4-5-20251001, 0 repositories')
+  })
+
+  it('says so when nothing is resolved yet', () => {
+    expect(
+      configSummary({ model: null, repos: null, detectedRepo: null, agentConfig: null }),
+    ).toBe('default configuration')
+  })
+
+  it('ignores a blank dockerfile and an empty variable list', () => {
+    expect(
+      configSummary({
+        model: 'claude-opus-5',
+        repos: null,
+        detectedRepo: null,
+        agentConfig: { environment: { image: { dockerfile_append: '  ' }, variables: [] } },
+      }),
+    ).toBe('claude-opus-5')
   })
 })
 
