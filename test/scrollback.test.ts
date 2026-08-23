@@ -1,14 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import React, { useEffect, useState } from 'react'
-import { Box, Static, Text, render, useApp } from 'ink'
+import { Box, Static, Text, render } from 'ink'
 import { PassThrough } from 'node:stream'
 import stripAnsi from 'strip-ansi'
-import { useAltScreen } from '../src/ui/altScreen'
 
-// Offline render harness for the two terminal mechanisms the scrollback view
-// rests on: ink's <Static> flush and the alternate-screen hop. Neither is
-// observable in the React tree — the difference is in the BYTES written — so
-// both are driven against a fake TTY stream and asserted on its output.
+// Offline render harness for the terminal mechanism the scrollback view rests
+// on: ink's <Static> flush. It is not observable in the React tree — the
+// difference is in the BYTES written — so it is driven against a fake TTY
+// stream and asserted on its output.
 // createElement rather than JSX: the suite is .ts by convention.
 const h = React.createElement
 
@@ -85,63 +84,5 @@ describe('<Static> flush — the scrollback view', () => {
     await settle()
     app.unmount()
     expect(stripAnsi(output()).match(/alpha/g)?.length).toBe(2)
-  })
-})
-
-describe('useAltScreen', () => {
-  it('enters the alt buffer on open and restores the primary one on close', async () => {
-    const { stream, output } = fakeTty()
-    function App({ open }: { open: boolean }): React.ReactElement {
-      useAltScreen(open)
-      return h(Text, null, 'frame')
-    }
-    const app = render(h(App, { open: false }), { stdout: stream, ...OPTIONS })
-    await settle()
-    expect(output()).not.toContain('[?1049h')
-
-    app.rerender(h(App, { open: true }))
-    await settle()
-    expect(output()).toContain('[?1049h')
-
-    app.rerender(h(App, { open: false }))
-    await settle()
-    expect(output()).toContain('[?1049l')
-    app.unmount()
-  })
-
-  it('writes nothing to a non-TTY stdout — the headless --no-input follow', async () => {
-    const stream = new PassThrough() as unknown as NodeJS.WriteStream
-    let out = ''
-    stream.on('data', (chunk: Buffer) => {
-      out += chunk.toString()
-    })
-    function App(): React.ReactElement {
-      useAltScreen(true)
-      return h(Text, null, 'frame')
-    }
-    const app = render(h(App), { stdout: stream, ...OPTIONS })
-    await settle()
-    app.unmount()
-    expect(out).not.toContain('[?1049')
-  })
-
-  it('restores the primary buffer when the app exits while open', async () => {
-    // Quitting from inside the browser must not strand the shell on the alt
-    // screen.
-    const { stream, output } = fakeTty()
-    function App(): React.ReactElement {
-      useAltScreen(true)
-      const { exit } = useApp()
-      useEffect(() => {
-        const t = setTimeout(() => exit(), 5)
-        return () => clearTimeout(t)
-      }, [exit])
-      return h(Text, null, 'frame')
-    }
-    const app = render(h(App), { stdout: stream, ...OPTIONS })
-    await settle()
-    app.unmount()
-    await settle()
-    expect(output()).toContain('[?1049l')
   })
 })

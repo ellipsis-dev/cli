@@ -34,7 +34,6 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@resvg/resvg-js": "^2.6.2",
     "@types/node": "^22.5.0",
     "@types/react": "^19.2.0",
     "@types/ws": "^8.5.12",

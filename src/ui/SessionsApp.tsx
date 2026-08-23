@@ -1,16 +1,9 @@
-import React, {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from 'react'
-import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Box, Text, useInput, useStdin, useStdout } from 'ink'
 import type { OpenSocket } from '@ellipsis-dev/sdk/stream'
 import { SESSION_STREAM_PROTOCOL_VERSION } from '@ellipsis-dev/sdk/stream'
 import { SessionTranscriptStore } from '@ellipsis-dev/sdk/store'
-import type { Ellipsis, Session as FrameSession } from '@ellipsis-dev/sdk'
+import type { Ellipsis } from '@ellipsis-dev/sdk'
 import { errorDetail } from '../lib/api'
 import type {
   AgentSession,
@@ -20,12 +13,10 @@ import type {
 } from '../lib/types'
 import { applyEditShortcut } from '../lib/editing'
 import { CTRL_C_QUIT_HINT, useCtrlCQuit } from './ctrlC'
-import { hyperlink, sessionUrl } from '../lib/urls'
-import { usdNumberFromMillicents } from '../lib/output'
+import { sessionUrl } from '../lib/urls'
 import {
   applyComposerChoices,
   attentionFlip,
-  compactTokens,
   composerModelOptions,
   composerPickerRows,
   configDisplayName,
@@ -38,61 +29,42 @@ import {
   rowStatusWord,
   sessionConfigName,
   navSlice,
-  sessionBarFilterLabel,
   sessionBarQuery,
   SELECTION_GLYPH,
   sidebarSlice,
   mergeSidebarSessions,
 } from '../lib/sessions'
 import type { ResolvedSessionBar } from '../lib/config'
-import wrapAnsi from 'wrap-ansi'
-import { randomFact } from '../lib/facts'
-import { inputSurface, theme } from '../lib/theme'
-import { useAltScreen } from './altScreen'
+import { theme } from '../lib/theme'
 import { ConnectApp } from './ConnectApp'
 
 // The multi-session UI — what a bare `agent`, `agent "prompt"`, and `agent
-// session connect <id>` all open. It is a set of SCREENS, not a stack of bands:
+// session connect <id>` all open. Two screens, both on the primary buffer:
 //
-//   * the chat (the ConnectApp) owns the terminal outright. Its settled
-//     transcript is printed into the terminal's real scrollback, so the wheel,
-//     the trackpad and select/copy are the terminal's own — which is the reason
-//     for the screen split. Nothing may be pinned above or below it: rows
-//     scrolling past would run straight through any such band.
-//   * the session picker (esc or ↓ out of the chat) takes over the
-//     ALTERNATE screen: the full session list, with the chat left untouched on
-//     the primary buffer behind it. enter opens a session and returns.
-//   * the new-session composer and the loading placeholder do own their frame,
-//     so they keep the header band and the frame inset.
+//   * the LAUNCHER: a compact inline block (~10 rows) — a "connected to"
+//     line, the Repository / Agent / Model rows, the prompt, and the latest
+//     sessions underneath. Enter on the prompt starts a session; enter on a
+//     session row opens its chat. It is short by design, so ink repaints it
+//     in place like any live frame; no alternate screen, no full-height frame.
+//   * the CHAT (ConnectApp) — owns the terminal outright. Its settled
+//     transcript is printed into the terminal's real scrollback, so the
+//     wheel, the trackpad and select/copy are the terminal's own.
 //
-// Focus is modal: esc in the chat opens the picker, esc in the picker goes back.
+// esc in the chat returns to the launcher (the launcher paints below the
+// settled transcript); enter on a session replaces the launcher with its chat.
 // Exactly one useInput handler is active at a time.
 //
 // Liveness: ONE WebSocket — the focused session's, owned by its ConnectApp —
-// plus a 5s REST poll of the session list for the nav. Transcript stores are
-// cached per visited session for the process lifetime, so hopping back
+// plus a 5s REST poll of the session list for the launcher. Transcript stores
+// are cached per visited session for the process lifetime, so hopping back
 // repaints instantly and the stream resumes past the cached cursor.
 
-const SIDEBAR_POLL_MS = 5_000
-// The nav clock driving the "12s" age tags.
+const SESSIONS_POLL_MS = 5_000
+// The launcher clock driving the "12s ago" age tags.
 const AGE_TICK_MS = 5_000
-const NAV_NEW_LABEL = '+ New session'
-// The header title pinned to the left edge, and its width — the meta line on
-// the right budgets itself against what's left of the row.
-const HEADER_TITLE = 'ellipsis.dev'
-const TITLE_WIDTH = HEADER_TITLE.length
-
-// Blank cells between the frame and the terminal edge, on all four sides.
-// Everything inside lays out against the inset width/height.
-const APP_INSET = 1
-
-// Extra indent for the session-nav rows, on top of the app inset — the list
-// reads as a distinct column rather than type hanging off the frame edge.
-const NAV_GUTTER = 1
-
-// Horizontal breathing room inside the composer panel — wider than the 1-cell
-// vertical pad so the caret and text start well clear of the panel edge.
-const COMPOSER_PAD_X = 2
+// How many session rows the launcher shows; the highlight parks two rows from
+// the bottom and the list scrolls under it (navSlice).
+const LIST_ROWS = 5
 
 // Everything an open picker's option row prints before its label: the row
 // indent, the selection cell and its space, then the "[x] " checkbox. What the
@@ -108,25 +80,24 @@ export interface SessionsAppProps {
   // app.ellipsis.dev base + the customer login, for per-session dashboard links.
   appBase: string
   customerLogin: string
-  // My GitHub login for the header's "@me in account" tag; null on an API-key
-  // credential, which has no GitHub user behind it.
+  // My GitHub login for the launcher's "connected to … as @me in account"
+  // line; null on an API-key credential, which has no GitHub user behind it.
   ghLogin: string | null
-  // My GitHub account id — the sidebar lists sessions attributed to me. null
+  // My GitHub account id — the launcher lists sessions attributed to me. null
   // (e.g. an API-key credential) lists the whole account's sessions.
   authorId: number | null
   // The repo detected from the cwd's origin remote ("owner/name"), which is
-  // what the server's default resolution checks out — shown as the composer's
+  // what the server's default resolution checks out — shown as the launcher's
   // resting Repository value. null when the cwd isn't an enrolled repo.
   detectedRepo: string | null
   // Open focused on this session (connect / prompt shorthand); undefined
-  // opens on the new-session composer (a bare `agent`).
+  // opens on the launcher (a bare `agent`).
   initialSessionId?: string
   // The start response's resolved config name for the initial session, and a
   // caveat to show in its chat (watch-only reasons ride connectability).
   initialConfigName?: string
   initialNotice?: string
-  // Which sessions reach the picker. `hidden` drops it entirely — focus then
-  // never leaves the chat, so esc and ↓ at the bottom edge do nothing.
+  // Which sessions the launcher lists. `hidden` drops the list entirely.
   // Set under "sessionBar" in the config file.
   sessionBar: ResolvedSessionBar
   // Builds the start request for a composer-spawned session (the entry point
@@ -144,12 +115,11 @@ type ChatEntry = {
   url: string
 }
 
-type MainPane = { type: 'new' } | { type: 'chat'; sessionId: string }
+type MainPane = { type: 'launcher' } | { type: 'chat'; sessionId: string }
 
 export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   const { api, openSocket, appBase, customerLogin, authorId, sessionBar } = props
-  const hideNav = sessionBar.hidden
-  const { exit } = useApp()
+  const hideList = sessionBar.hidden
   const { isRawModeSupported } = useStdin()
   const { stdout } = useStdout()
 
@@ -166,14 +136,9 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       stdout.off('resize', onResize)
     }
   }, [stdout])
-  const height = Math.max(8, termRows - 1)
-  // The app inset: one blank cell on all four sides of the whole frame, so
-  // nothing sits flush against the terminal edge. Everything lays out inside it,
-  // so every width/height below is the INNER box, not the terminal.
-  const contentCols = Math.max(20, termCols - APP_INSET * 2)
-  const contentRows = Math.max(6, height - APP_INSET * 2)
+  const width = Math.max(20, termCols - 1)
 
-  // ------------------------------ sidebar data ------------------------------
+  // ---------------------------- session list data ---------------------------
 
   const [sessions, setSessions] = useState<AgentSession[]>([])
   const [polledOnce, setPolledOnce] = useState(false)
@@ -185,10 +150,10 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   // lag, or attributed differently); merged into the list until it does.
   const [localSessions, setLocalSessions] = useState<AgentSession[]>([])
 
-  // The last API failure from any background call (the poll, the composer's
+  // The last API failure from any background call (the poll, the launcher's
   // pickers). Those calls have no output of their own, so without this a broken
-  // route or a dead token just shows an empty list. Rendered in the nav hint
-  // row, which is the one line always on screen.
+  // route or a dead token just shows an empty list. Rendered on the launcher's
+  // status line.
   const [apiError, setApiError] = useState<string | null>(null)
   const reportApiError = useCallback((label: string, err: unknown): void => {
     setApiError(`${label}: ${errorDetail(err)}`)
@@ -221,16 +186,16 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     }
   }, [api, authorId, reportApiError, sessionBar, props.detectedRepo])
 
-  // The poll only feeds the nav's rows and attention dots; with the bar
+  // The poll only feeds the launcher's rows and attention dots; with the list
   // hidden there is nothing on screen it could update.
   useEffect(() => {
-    if (hideNav) return
+    if (hideList) return
     void poll()
-    const t = setInterval(() => void poll(), SIDEBAR_POLL_MS)
+    const t = setInterval(() => void poll(), SESSIONS_POLL_MS)
     return () => clearInterval(t)
-  }, [poll, hideNav])
+  }, [poll, hideList])
 
-  // The age lines tick on their own clock (nothing else re-renders idle rows).
+  // The age tags tick on their own clock (nothing else re-renders idle rows).
   const [, setAgeTick] = useState(0)
   useEffect(() => {
     const t = setInterval(() => setAgeTick((n) => n + 1), AGE_TICK_MS)
@@ -242,47 +207,21 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     [localSessions, sessions],
   )
 
-  // ------------------------------ focus + panes -----------------------------
+  // --------------------------------- panes ----------------------------------
 
-  // Both openings start with the main pane focused: a connect lands you in
-  // the conversation, a bare `agent` lands you in the new-session composer.
-  // 'nav' = the session picker owns the keyboard, which now means it is OPEN:
-  // the session list is a screen of its own on the alternate buffer (↓ or esc
-  // out of the chat) rather than a band pinned under every frame.
-  //
-  // It moved there because the chat gave up its viewport: the transcript is
-  // printed into the terminal's real scrollback now, and scrollback is
-  // all-or-nothing — a band pinned below the chat would be overwritten by the
-  // rows scrolling past it. A screen of its own also gives the list the whole
-  // terminal rather than a fixed handful of rows.
-  const [focus, setFocus] = useState<'nav' | 'chat'>('chat')
-  const navOpen = focus === 'nav' && !hideNav
   const [mainPane, setMainPane] = useState<MainPane>(
-    props.initialSessionId ? { type: 'chat', sessionId: props.initialSessionId } : { type: 'new' },
+    props.initialSessionId
+      ? { type: 'chat', sessionId: props.initialSessionId }
+      : { type: 'launcher' },
   )
-  // The nav highlight: 'new' or a session id. Tracks ids, not indices, so
-  // the poll re-sorting under the cursor doesn't move the highlight.
-  const [selected, setSelected] = useState<string>(props.initialSessionId ?? 'new')
 
   // ------------------------------ chat entries ------------------------------
 
   const [entries, setEntries] = useState<ReadonlyMap<string, ChatEntry>>(new Map())
-  // Only a live chat runs on the primary buffer, printing into the terminal's
-  // real scrollback. Every other screen — the picker, the new-session
-  // composer, the loading placeholder — paints a full-height frame, and a
-  // frame repainted on the primary buffer pushes a stale copy of itself into
-  // scrollback on every repaint. So all of them live on the alternate buffer,
-  // and the primary buffer only ever holds transcript rows.
-  const chatOwnsScreen = mainPane.type === 'chat' && entries.has(mainPane.sessionId)
-  // `altScreenOn` trails the hop: it stays true until the terminal is actually
-  // back on the primary buffer. The chat may only mount once it is false —
-  // its transcript prints each row exactly ONCE (ink <Static>), and a row
-  // printed while the alt screen still has the terminal is destroyed with it.
-  const altScreenOn = useAltScreen(navOpen || !chatOwnsScreen)
-  const chatVisible = chatOwnsScreen && !altScreenOn
   // Sessions whose chat has already printed into this terminal's scrollback.
-  // The NEXT one to open prints a rule naming itself first, so two conversations
-  // in one scrollback don't run together (see ConnectApp's scrollbackBreak).
+  // A chat mounting after any other output prints a rule naming itself first,
+  // so two conversations in one scrollback don't run together (see
+  // ConnectApp's scrollbackBreak).
   const shownChats = useRef<Set<string>>(new Set())
   const [loadError, setLoadError] = useState<string | null>(null)
   const loading = useRef(new Set<string>())
@@ -346,17 +285,17 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   const [starting, setStarting] = useState(false)
   const [startError, setStartError] = useState<string | null>(null)
 
-  // The composer's picker options, fetched once when the new-session pane
-  // first opens: the dashboard composer's three choices — saved agent
-  // configs, the account's repositories, and the selectable models. A models
-  // failure (an older server without GET /models) leaves the list empty
-  // and the composer falls back to its built-in set.
+  // The launcher's picker options, fetched once when it first shows: the
+  // dashboard composer's three choices — saved agent configs, the account's
+  // repositories, and the selectable models. A models failure (an older
+  // server without GET /models) leaves the list empty and the launcher falls
+  // back to its built-in set.
   const [configs, setConfigs] = useState<SavedAgentConfig[] | null>(null)
   const [repos, setRepos] = useState<string[] | null>(null)
   const [models, setModels] = useState<SupportedModel[] | null>(null)
   const pickersLoading = useRef(false)
   useEffect(() => {
-    if (mainPane.type !== 'new' || pickersLoading.current) return
+    if (mainPane.type !== 'launcher' || pickersLoading.current) return
     pickersLoading.current = true
     void api.agents.configs
       .list()
@@ -390,9 +329,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
         const { session } = await api.sessions.start(req)
         lastWords.current.set(session.id, rowStatusWord(session))
         setLocalSessions((prev) => [session, ...prev])
-        setSelected(session.id)
         setMainPane({ type: 'chat', sessionId: session.id })
-        setFocus('chat')
         // Seed the entry from the start response's resolved config identity.
         void loadEntry(session.id, sessionConfigName(session) ?? undefined)
       } catch (err) {
@@ -404,415 +341,104 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     [api, loadEntry, props],
   )
 
-  // -------------------------------- nav input --------------------------------
-
-  const openSelected = useCallback((): void => {
-    if (selected === 'new') {
-      setMainPane({ type: 'new' })
-      setFocus('chat')
-      return
-    }
+  const openSession = useCallback((sessionId: string): void => {
     setAttention((prev) => {
-      if (!prev.has(selected)) return prev
+      if (!prev.has(sessionId)) return prev
       const next = new Set(prev)
-      next.delete(selected)
+      next.delete(sessionId)
       return next
     })
-    setMainPane({ type: 'chat', sessionId: selected })
-    setFocus('chat')
-  }, [selected])
+    setMainPane({ type: 'chat', sessionId })
+  }, [])
 
-  // The selectable id list, top to bottom: the pinned new row, then sessions.
-  const selectable = useMemo(() => ['new', ...rows.map((s) => s.id)], [rows])
-
-  useInput(
-    (ch, key) => {
-      // The picker is a vertical list: ↑/↓ move the highlight, enter opens the
-      // highlighted session, esc (or ↑ off the top row) returns to the chat.
-      if (key.upArrow || key.downArrow) {
-        const idx = selectable.indexOf(selected)
-        if (key.upArrow && idx <= 0) {
-          setFocus('chat')
-          return
-        }
-        const next = key.upArrow
-          ? Math.max(0, idx - 1)
-          : Math.min(selectable.length - 1, idx < 0 ? 0 : idx + 1)
-        setSelected(selectable[next])
-        return
-      }
-      if (key.return) {
-        openSelected()
-        return
-      }
-      if (key.escape) {
-        setFocus('chat')
-        return
-      }
-      if (ch === 'n') {
-        setSelected('new')
-        setMainPane({ type: 'new' })
-        setFocus('chat')
-        return
-      }
-      if (ch === 'q') {
-        exit()
-        return
-      }
-    },
-    { isActive: focus === 'nav' && isRawModeSupported },
-  )
-
-  // ctrl+c quits from the nav and from the panes that aren't a live chat (the
-  // new-session form, a chat still loading) — the chat pane owns its own, where
-  // the first press also interrupts the running turn.
-  const navArmed = useCtrlCQuit(focus === 'nav' && isRawModeSupported)
-  const paneArmed = useCtrlCQuit(focus === 'chat' && !chatOwnsScreen && isRawModeSupported)
-
-  // With the session bar hidden there is nothing to hand focus to: esc and ↓
-  // at the chat's bottom edge land where they started.
-  const focusNav = useCallback((): void => {
-    if (!hideNav) setFocus('nav')
-  }, [hideNav])
+  const toLauncher = useCallback((): void => {
+    setMainPane({ type: 'launcher' })
+  }, [])
   const refreshOnDone = useCallback((): void => {
     void poll()
   }, [poll])
 
+  // ctrl+c quits from the launcher and from a chat still loading — a live
+  // chat owns its own, where the first press also interrupts the running turn.
+  const chatMounted = mainPane.type === 'chat' && entries.has(mainPane.sessionId)
+  const armed = useCtrlCQuit(!chatMounted && isRawModeSupported)
+
   // ------------------------------- rendering --------------------------------
 
-  // The session picker, open, owns the whole screen: the header, the
-  // "+ New session" row and the hint line, with every remaining row going to
-  // sessions. Nothing caps the list any more — the old row cap existed to stop a
-  // pinned band from eating the chat, and a screen of its own has no such
-  // conflict. `sessionBar` still scopes WHICH sessions are listed.
-  const headerRows = 3
-  const navSessionRows = Math.max(1, contentRows - headerRows - 3)
-  // The pane height the new-session composer and the loading placeholder get:
-  // everything under the header. (A live chat is not sized here at all — it owns
-  // the terminal and prints into its scrollback.)
-  const paneRows = Math.max(4, contentRows - headerRows)
-
-  // ---- the header ----
-  // "ellipsis.dev" pins the left edge as always; the right edge carries the
-  // focused session's live meta (id · model · cost · tokens), derived from
-  // its transcript store so it ticks like the old footer did. With no
-  // session focused the right edge falls back to the who-tag.
-  //
-  // It is NOT pinned above the chat any more. A live chat prints its transcript
-  // into the terminal's scrollback, and a band above a scrolling region is
-  // simply overwritten by it — the two cannot coexist. So the chat runs
-  // headerless (its own footer meta line carries the same identity, which is
-  // why hideMetaLine is dropped below) and the header renders on the screens
-  // that DO own their frame: the new-session pane and the session picker.
-  const focusedEntry = mainPane.type === 'chat' ? entries.get(mainPane.sessionId) : undefined
-  const metaText = useHeaderMeta(focusedEntry, mainPane, appBase, customerLogin, contentCols - 4)
-  const whoText = props.ghLogin
-    ? `@${props.ghLogin} in ${customerLogin}`
-    : customerLogin
-  // Over the picker the right edge answers "why is this list short?" instead
-  // of carrying the focused session's meta: the filters are why sessions are
-  // missing, and the list is the one screen where that question comes up.
-  const filterText = navOpen ? sessionBarFilterLabel(sessionBar, props.detectedRepo) : null
-  const header = (
-    // Unpainted, like every other surface: its own blank rows above and below
-    // are what set the title apart, not a tint.
-    <Box
-      flexDirection="column"
-      width={contentCols}
-      height={headerRows}
-      flexShrink={0}
-      paddingLeft={2}
-      paddingRight={2}
-      justifyContent="center"
-    >
-      {/* The explicit width is what wrap="truncate" measures against: without
-          it the meta line sizes the row to its own content and overflows the
-          terminal instead of clipping. */}
-      <Box width={contentCols - 4}>
-        <Box flexGrow={1}>
-          <Text wrap="truncate">
-            <Text bold color={theme.foreground}>
-              {HEADER_TITLE}
-            </Text>
-          </Text>
-        </Box>
-        <Box flexShrink={0}>
-          {/* truncate, never wrap: the bar is budgeted at exactly one row, and
-              a wrapped meta line pushes the rule off the bottom of the band. */}
-          <Text color={theme.muted} wrap="truncate">
-            {/* Armed, the bar carries the ctrl+c prompt: the nav and the
-                new-session form have no notice line of their own, and the
-                header is the one band always on screen. */}
-            {navArmed || paneArmed ? CTRL_C_QUIT_HINT : (filterText ?? metaText ?? whoText)}
-          </Text>
-        </Box>
-      </Box>
-    </Box>
-  )
-
-  // ---- the main screen: the chat, or the new-session composer ----
-  let main: React.ReactElement
-  if (mainPane.type === 'new') {
-    main = (
-      // Full width, no side padding: the prompt input's rules span the
-      // terminal exactly like the header's and the nav's do.
-      <Box width={contentCols} height={paneRows} flexDirection="column" overflow="hidden">
-        <NewSessionPane
-          width={contentCols}
-          height={paneRows}
-          focused={focus === 'chat'}
-          starting={starting}
-          error={startError}
-          configs={configs}
-          repos={repos}
-          models={models}
-          detectedRepo={props.detectedRepo}
-          onSubmit={(text, choices) => void startSession(text, choices)}
-          onLeave={focusNav}
-          rawMode={isRawModeSupported}
-        />
-      </Box>
-    )
-  } else {
+  if (mainPane.type === 'chat') {
     const entry = entries.get(mainPane.sessionId)
     if (!entry) {
-      main = (
-        <Box
-          width={contentCols}
-          height={paneRows}
-          flexDirection="column"
-          paddingLeft={2}
-          paddingRight={1}
-          paddingTop={1}
-        >
+      return (
+        <Box flexDirection="column" paddingLeft={1}>
           <Text color={theme.muted}>
             {loadError ? `✗ ${loadError}` : `loading ${mainPane.sessionId}…`}
           </Text>
-          {loadError && <Text color={theme.muted}>esc: back to the sessions</Text>}
-          <EscOnlyInput active={focus === 'chat'} rawMode={isRawModeSupported} onEsc={focusNav} />
+          <Text color={theme.muted}>{armed ? CTRL_C_QUIT_HINT : 'esc: back'}</Text>
+          <EscOnlyInput active rawMode={isRawModeSupported} onEsc={toLauncher} />
         </Box>
-      )
-    } else {
-      // Anything already printed below means this chat is arriving under another
-      // conversation, so it opens with a rule naming itself. Recorded before the
-      // render so the flag is stable for this mount: the ref is what makes the
-      // FIRST chat of the process print no break.
-      const needsBreak = shownChats.current.size > 0 && !shownChats.current.has(mainPane.sessionId)
-      shownChats.current.add(mainPane.sessionId)
-      main = (
-        // The chat, owning the terminal rather than sitting in a pane: no
-        // width/height box around it and no pane props, so its settled transcript
-        // prints into the terminal's own scrollback and the wheel and select/copy
-        // are the terminal's. It renders its own meta line again, since there is
-        // no header band above it to carry one.
-        <ConnectApp
-          key={mainPane.sessionId}
-          scrollbackBreak={needsBreak}
-          api={api}
-          sessionId={mainPane.sessionId}
-          store={entry.store}
-          openSocket={openSocket}
-          canSend={entry.canSend}
-          minRenderFeedSeq={0}
-          sessionUrl={entry.url}
-          initialNotice={entry.notice}
-          model={entry.model}
-          configName={entry.configName}
-          focused={focus === 'chat'}
-          onFocusNav={focusNav}
-          onDone={refreshOnDone}
-        />
       )
     }
-  }
-
-  // ---- the session picker ----
-  // A vertical list on a screen of its own (the alternate buffer): the pinned
-  // new-session row, then the session rows (status dot + description + a dim age
-  // tag) in sortSidebarSessions order — status band, newest-born first —
-  // windowed so the highlight parks near the bottom and the list scrolls under
-  // it. It gets the whole terminal now, so the window is only reached by lists
-  // longer than the screen.
-  const selectedRowIdx = Math.max(0, rows.findIndex((s) => s.id === selected))
-  const win = navSlice(rows.length, navSessionRows, selectedRowIdx)
-  const navFocused = focus === 'nav'
-  const nav = (
-    // The session list gets a gutter of its own on top of the app inset, so the
-    // column of dots sits inboard of the frame edge instead of hugging it. The
-    // pad is on the band, so every row (and the hint) shares one left edge.
-    <Box
-      flexDirection="column"
-      flexGrow={1}
-      flexShrink={1}
-      paddingLeft={NAV_GUTTER}
-      paddingRight={NAV_GUTTER}
-    >
-      <Box height={1} flexShrink={0} />
-      {/* The highlighted row — this one and the session rows below — is marked
-          by the cyan ▶ in its gutter and nothing else. No bar: a fill would be
-          one more surface to keep in step with the terminal's own. */}
-      <Box>
-        <Box flexGrow={1}>
-          <Text wrap="truncate">
-            {selected === 'new' && navFocused ? (
-              <Text bold color={theme.foreground}>
-                <Text color={theme.cursor}>{SELECTION_GLYPH}</Text>
-                {` ${NAV_NEW_LABEL.slice(2)}`}
-              </Text>
-            ) : (
-              <Text bold color={theme.foreground}>
-                {NAV_NEW_LABEL}
-              </Text>
-            )}
-          </Text>
-        </Box>
-      </Box>
-      {rows.slice(win.start, win.end).map((s) => {
-        const word = rowStatusWord(s)
-        const g = rowGlyph(word)
-        const cursorHere = selected === s.id && navFocused
-        const isOpen = mainPane.type === 'chat' && mainPane.sessionId === s.id
-        const desc = rowDescription(s)
-        // The meta tag rides the right edge; the description takes what's left
-        // and truncates, so a long prompt can never push the tag off the row.
-        const meta = `${rowMeta(s)}${attention.has(s.id) ? ' · needs you' : ''}`
-        const descW = Math.max(8, contentCols - NAV_GUTTER * 2 - meta.length - 6)
-        return (
-          <Box key={s.id}>
-            <Box flexGrow={1} flexShrink={1}>
-              <Text wrap="truncate">
-                <Text color={cursorHere ? theme.cursor : g.color} dimColor={!cursorHere && g.dim}>
-                  {cursorHere ? SELECTION_GLYPH : g.glyph}
-                </Text>{' '}
-                <Text
-                  color={
-                    cursorHere || attention.has(s.id) || !g.dim
-                      ? theme.foreground
-                      : theme.muted
-                  }
-                  bold={isOpen}
-                >
-                  {desc.slice(0, descW)}
-                </Text>
-              </Text>
-            </Box>
-            <Box flexShrink={0}>
-              <Text color={theme.muted}>{meta}</Text>
-            </Box>
-          </Box>
-        )
-      })}
-      {rows.length === 0 && (
-        <Text color={theme.muted}>{polledOnce ? 'no sessions yet' : 'loading sessions…'}</Text>
-      )}
-      {/* Absorbs the rows a short list leaves empty, keeping the hint on the
-          band's bottom edge. */}
-      <Box flexGrow={1} />
-      {/* An API failure replaces the key hints rather than sharing the line:
-          the hints are always recoverable from muscle memory, a swallowed error
-          is not. */}
-      {apiError ? (
-        <Text wrap="truncate" color={theme.error}>
-          {`✗ ${apiError}`}
-        </Text>
-      ) : (
-        <Text wrap="truncate" color={theme.muted}>
-          {`↑↓ move · enter open · n new · esc back to the chat · q quit${
-            win.end < rows.length ? ` · ${rows.length - win.end} more below` : ''
-          }`}
-        </Text>
-      )}
-    </Box>
-  )
-
-  // Every full-height frame below may only paint once the terminal is ON the
-  // alternate buffer, and the hop is an effect: a frame committed before it
-  // settles lands on the PRIMARY buffer instead, shoving the shell's history
-  // (and any earlier transcript) a screenful up into scrollback — exactly the
-  // rows the chat's scrollback view promises to leave in place. So the frames
-  // in the hop gap render nothing, same as the chat's own gap below.
-  const fullFrameHopGap = !altScreenOn
-
-  // The picker, open, IS the screen: it took over the alternate buffer, so it
-  // renders alone (header + list) and the chat is left untouched on the primary
-  // buffer, waiting behind it.
-  if (navOpen) {
-    if (fullFrameHopGap) return <Box />
+    // Anything already printed above (an earlier chat, the launcher's rows)
+    // means this transcript is arriving under other output, so it opens with a
+    // rule naming itself. Recorded before the render so the flag is stable for
+    // this mount: the ref is what makes the FIRST chat of the process print no
+    // break.
+    const needsBreak = shownChats.current.size > 0 && !shownChats.current.has(mainPane.sessionId)
+    shownChats.current.add(mainPane.sessionId)
     return (
-      <Box flexDirection="column" height={height} padding={APP_INSET}>
-        {header}
-        {nav}
-      </Box>
+      // The chat, owning the terminal: no box around it, so its settled
+      // transcript prints into the terminal's own scrollback and the wheel and
+      // select/copy are the terminal's.
+      <ConnectApp
+        key={mainPane.sessionId}
+        scrollbackBreak={needsBreak}
+        api={api}
+        sessionId={mainPane.sessionId}
+        store={entry.store}
+        openSocket={openSocket}
+        canSend={entry.canSend}
+        minRenderFeedSeq={0}
+        sessionUrl={entry.url}
+        initialNotice={entry.notice}
+        model={entry.model}
+        configName={entry.configName}
+        focused
+        onFocusNav={toLauncher}
+        onDone={refreshOnDone}
+      />
     )
   }
 
-  // A LIVE CHAT owns the terminal outright: no box around it, no header, no
-  // inset. All three would be frame furniture around a region that prints into
-  // the terminal's scrollback, and the rows scrolling past would run straight
-  // through them. It mounts only once the alt-screen hop has finished (see
-  // chatVisible above); the one frame in between renders nothing.
-  if (chatVisible) return main
-  if (chatOwnsScreen) return <Box />
+  const whoLine = props.ghLogin
+    ? `connected to ellipsis.dev as @${props.ghLogin} in ${customerLogin}`
+    : `connected to ellipsis.dev as ${customerLogin}`
 
-  // The remaining screens (the new-session composer, a chat still loading) do
-  // own their frame, so they keep the inset and the header.
-  if (fullFrameHopGap) return <Box />
   return (
-    <Box flexDirection="column" minHeight={height} padding={APP_INSET}>
-      {header}
-      {main}
-    </Box>
+    <Launcher
+      width={width}
+      height={termRows}
+      whoLine={whoLine}
+      focused={isRawModeSupported}
+      starting={starting}
+      error={startError ?? apiError}
+      armed={armed}
+      configs={configs}
+      repos={repos}
+      models={models}
+      detectedRepo={props.detectedRepo}
+      sessions={rows}
+      polledOnce={polledOnce}
+      attention={attention}
+      hideList={hideList}
+      onSubmit={(text, choices) => void startSession(text, choices)}
+      onOpenSession={openSession}
+      rawMode={isRawModeSupported}
+    />
   )
 }
 
-// The header's right-edge meta for the focused session: the full id
-// (hyperlinked) · model · total cost · tokens, derived from the session's
-// transcript store so it ticks with the stream exactly like the old in-chat
-// footer. The id is never shortened — it's there to be copy-pasted.
-function useHeaderMeta(
-  entry: ChatEntry | undefined,
-  mainPane: MainPane,
-  appBase: string,
-  customerLogin: string,
-  cols: number,
-): string | null {
-  const subscribe = useCallback(
-    (cb: () => void) => (entry ? entry.store.subscribe(cb) : () => {}),
-    [entry],
-  )
-  const snapshot = useSyncExternalStore(
-    subscribe,
-    () => (entry ? entry.store.getSnapshot() : null),
-    () => (entry ? entry.store.getSnapshot() : null),
-  )
-  if (mainPane.type !== 'chat' || !entry) return null
-  const session = snapshot?.session as FrameSession | undefined | null
-  const costUsd = session ? usdNumberFromMillicents(session.cost?.total ?? 0) : 0
-  const tokens = session?.tokens?.total ?? 0
-  const id = mainPane.sessionId
-  const line = (idText: string, model: string | null | undefined): string =>
-    [
-      idText,
-      ...(model ? [model] : []),
-      `$${costUsd.toFixed(2)}`,
-      `${compactTokens(tokens)} tokens`,
-    ].join(' · ')
-  // Sized to fit one row by construction: Ink measures the OSC-8 link's
-  // invisible URL bytes as width, so the linked id only ships when the whole
-  // line fits beside the title. Failing that the id goes out as plain text,
-  // then the model drops, then the spend — the id is here to be copy-pasted,
-  // so it is the last thing standing and is never shortened.
-  const budget = cols - TITLE_WIDTH - 1
-  const tiers = [
-    line(hyperlink(sessionUrl(appBase, customerLogin, id), id), entry.model),
-    line(id, entry.model),
-    line(id, undefined),
-  ]
-  return tiers.find((t) => t.length <= budget) ?? id
-}
-
-// Swallows everything except esc and ← — the keyboard owner for placeholder
-// panes, either of which hands focus back to the sidebar.
+// Swallows everything except esc and ← — the keyboard owner for the loading
+// placeholder, either of which returns to the launcher.
 function EscOnlyInput({
   active,
   rawMode,
@@ -831,8 +457,8 @@ function EscOnlyInput({
   return null
 }
 
-// One row of the new-session form: a label + the picked value(s), opened
-// into its option list with →/enter (the dashboard composer's selects,
+// One row of the launcher's option block: a label + the picked value(s),
+// opened into its option list with →/enter (the dashboard composer's selects,
 // terminal-shaped). Repositories multi-select; the others pick one.
 type PickerRow = { key: 'config' | 'model' | 'repo'; label: string }
 const PICKER_ROWS: readonly PickerRow[] = [
@@ -841,41 +467,59 @@ const PICKER_ROWS: readonly PickerRow[] = [
   { key: 'model', label: 'Model' },
 ]
 
-// The new-session pane, mirroring the dashboard's home composer
-// (app.ellipsis.dev/[login]): a centered "What are we shipping today?"
-// heading floating in the empty space, and the input panel docked at the
-// bottom — the Repository / Agent / Model rows above the ❯ prompt line (the
-// dashboard card's controls-inside-the-composer shape). The ❯ glyph marks
-// whichever row is selected. ↑ from
-// the prompt climbs into the option rows, ↑/↓ walk them (↓ off the last
-// returns to the prompt), →/enter unfolds a row's option list in place,
-// inside the panel ([x] marks the pick). Inside an open list ↑/↓ walk, → (or
-// enter/space) activates the
-// highlighted option, ← (or esc) backs out unchanged. "Default" everywhere
-// means the server resolves it (defaults ladder, DEFAULT_AGENT_MODEL, the
-// detected repo). Repository is the one multi-select, and a sandbox takes any
-// number of repos: check several to clone them all, or uncheck every one for a
-// sandbox with no checkout (the row then reads "none"). Esc — or ↓ / ← at the
-// prompt's left edge — hands focus to the session nav.
-function NewSessionPane({
+// Where the launcher's cursor is: the prompt, one of the option rows above it
+// (by PICKER_ROWS index), or a session row below it (by id, so the poll
+// re-sorting under the cursor doesn't move the highlight).
+type LauncherCursor =
+  | { kind: 'prompt' }
+  | { kind: 'option'; at: number }
+  | { kind: 'list'; id: string }
+
+// The launcher: a compact inline block, ~10 rows tall —
+//
+//   connected to ellipsis.dev as @me in account
+//     Repository: owner/name
+//     Agent: Default
+//     Model: Default
+//   ❯ Start a cloud agent…
+//   ● latest session          2m ago
+//   ● …                       (LIST_ROWS rows; scrolls near the bottom)
+//
+// The ❯ glyph marks whichever row holds the cursor. From the prompt, ↑ climbs
+// into the option rows (↑/↓ walk them, →/enter unfolds a row's option list in
+// place, ← or esc backs out) and ↓ drops into the session list (↑ off its top
+// returns to the prompt, enter opens the highlighted session). Typing anywhere
+// returns the cursor to the prompt. Enter on the prompt starts a session; an
+// empty prompt starts it idle. "Default" everywhere means the server resolves
+// it. Repository is the one multi-select ([x] toggles; uncheck everything for
+// a sandbox with no checkout).
+function Launcher({
   width,
   height,
+  whoLine,
   focused,
   starting,
   error,
+  armed,
   configs,
   repos,
   models,
   detectedRepo,
+  sessions,
+  polledOnce,
+  attention,
+  hideList,
   onSubmit,
-  onLeave,
+  onOpenSession,
   rawMode,
 }: {
   width: number
   height: number
+  whoLine: string
   focused: boolean
   starting: boolean
   error: string | null
+  armed: boolean
   // null while loading; [] when the account has none / the fetch failed.
   configs: SavedAgentConfig[] | null
   repos: string[] | null
@@ -883,18 +527,17 @@ function NewSessionPane({
   // The cwd's repo ("owner/name") — what the server's default resolution
   // checks out; named on the Repository row instead of a bare "Default".
   detectedRepo: string | null
+  sessions: readonly AgentSession[]
+  polledOnce: boolean
+  attention: ReadonlySet<string>
+  hideList: boolean
   onSubmit: (text: string, choices: ComposerChoices) => void
-  onLeave: () => void
+  onOpenSession: (id: string) => void
   rawMode: boolean
 }): React.ReactElement {
   const [text, setText] = useState('')
-  const [cursor, setCursor] = useState(0)
-  // One fact per visit — the lazy initializer keeps it stable across
-  // re-renders so the line doesn't shuffle while you type.
-  const [fact] = useState(randomFact)
-  // Where the form cursor is: the prompt line, or one of the option rows
-  // beneath it (by PICKER_ROWS index).
-  const [row, setRow] = useState<'prompt' | number>('prompt')
+  const [textCursor, setTextCursor] = useState(0)
+  const [cursor, setCursor] = useState<LauncherCursor>({ kind: 'prompt' })
   // Single-pick indices; 0 is always "Default" (server-resolved).
   const [configIdx, setConfigIdx] = useState(0)
   // null = the model row is untouched, so it tracks whichever row carries the
@@ -1004,6 +647,17 @@ function NewSessionPane({
     })
   }
 
+  // Where the list cursor sits in the current sort; the id survives the poll
+  // re-sorting rows, and a session that left the list snaps to the top.
+  const listIdx =
+    cursor.kind === 'list' ? Math.max(0, sessions.findIndex((s) => s.id === cursor.id)) : 0
+
+  const toPromptWith = (ch: string): void => {
+    setCursor({ kind: 'prompt' })
+    setText((t) => t.slice(0, textCursor) + ch + t.slice(textCursor))
+    setTextCursor((c) => c + ch.length)
+  }
+
   useInput(
     (ch, key) => {
       // An open dropdown is a modal subtree: ↑/↓ walk the options,
@@ -1030,86 +684,98 @@ function NewSessionPane({
         }
         return
       }
-      if (key.escape) {
-        onLeave()
-        return
-      }
       if (starting) return
       // Word/line jumps and kills (option+←/→, ctrl+a/e/w/u/k, …) act on the
-      // prompt from anywhere in the form, dropping focus back onto it.
-      const edited = applyEditShortcut({ text, cursor }, ch, key)
+      // prompt from anywhere in the launcher, dropping the cursor back onto it.
+      const edited = applyEditShortcut({ text, cursor: textCursor }, ch, key)
       if (edited) {
-        setRow('prompt')
+        setCursor({ kind: 'prompt' })
         setText(edited.text)
-        setCursor(edited.cursor)
+        setTextCursor(edited.cursor)
         return
       }
-      if (row !== 'prompt') {
-        // The option rows above the prompt, inside the panel, walked
-        // vertically: ↑/↓ move between them (↑ stops at the first, ↓ off the
-        // last returns to the prompt), →/enter opens the row's list, ←
-        // leaves for the nav, typing returns to the prompt.
+      if (cursor.kind === 'option') {
+        // The option rows above the prompt, walked vertically: ↑/↓ move
+        // between them (↑ stops at the first, ↓ off the last returns to the
+        // prompt), →/enter opens the row's list, typing returns to the prompt.
         if (key.upArrow) {
-          setRow(Math.max(0, row - 1))
+          setCursor({ kind: 'option', at: Math.max(0, cursor.at - 1) })
           return
         }
         if (key.downArrow) {
-          if (row >= PICKER_ROWS.length - 1) setRow('prompt')
-          else setRow(row + 1)
+          if (cursor.at >= PICKER_ROWS.length - 1) setCursor({ kind: 'prompt' })
+          else setCursor({ kind: 'option', at: cursor.at + 1 })
           return
         }
         if (key.return || key.rightArrow) {
-          setOpenPicker({ key: PICKER_ROWS[row].key, hover: 0 })
+          setOpenPicker({ key: PICKER_ROWS[cursor.at].key, hover: 0 })
           return
         }
-        if (key.leftArrow) {
-          onLeave()
+        if (key.escape) {
+          setCursor({ kind: 'prompt' })
           return
         }
-        if (ch && !key.ctrl && !key.meta) {
-          setRow('prompt')
-          setText((t) => t.slice(0, cursor) + ch + t.slice(cursor))
-          setCursor((c) => c + ch.length)
-        }
+        if (ch && !key.ctrl && !key.meta) toPromptWith(ch)
         return
       }
+      if (cursor.kind === 'list') {
+        // The session rows below the prompt: ↑/↓ walk them (↑ off the top
+        // returns to the prompt), enter opens the highlighted session.
+        if (key.upArrow) {
+          if (listIdx <= 0) setCursor({ kind: 'prompt' })
+          else setCursor({ kind: 'list', id: sessions[listIdx - 1].id })
+          return
+        }
+        if (key.downArrow) {
+          if (listIdx < sessions.length - 1)
+            setCursor({ kind: 'list', id: sessions[listIdx + 1].id })
+          return
+        }
+        if (key.return) {
+          const picked = sessions[listIdx]
+          if (picked) onOpenSession(picked.id)
+          return
+        }
+        if (key.escape) {
+          setCursor({ kind: 'prompt' })
+          return
+        }
+        if (ch && !key.ctrl && !key.meta) toPromptWith(ch)
+        return
+      }
+      // At the prompt: ↑ climbs into the option rows above it (landing on the
+      // nearest, Model), ↓ drops into the session list below.
       if (key.return) {
         submit()
         return
       }
-      // At the prompt: ↑ climbs into the option rows above it (landing on
-      // the nearest, Model), ↓ continues past the input to the session nav.
       if (key.upArrow) {
-        setRow(PICKER_ROWS.length - 1)
+        setCursor({ kind: 'option', at: PICKER_ROWS.length - 1 })
         return
       }
       if (key.downArrow) {
-        onLeave()
+        if (!hideList && sessions.length > 0) setCursor({ kind: 'list', id: sessions[0].id })
         return
       }
       if (key.leftArrow) {
-        if (cursor === 0) {
-          onLeave()
-          return
-        }
-        setCursor((c) => Math.max(0, c - 1))
+        setTextCursor((c) => Math.max(0, c - 1))
         return
       }
       if (key.rightArrow) {
-        setCursor((c) => Math.min(text.length, c + 1))
+        setTextCursor((c) => Math.min(text.length, c + 1))
         return
       }
       if (key.backspace || key.delete) {
-        if (cursor > 0) {
-          setText((t) => t.slice(0, cursor - 1) + t.slice(cursor))
-          setCursor((c) => c - 1)
+        if (textCursor > 0) {
+          setText((t) => t.slice(0, textCursor - 1) + t.slice(textCursor))
+          setTextCursor((c) => c - 1)
         }
         return
       }
-      if (key.ctrl || key.meta || key.tab) return
+      if (key.escape || key.ctrl || key.meta || key.tab) return
       if (ch) {
-        setText((t) => t.slice(0, cursor) + ch + t.slice(cursor))
-        setCursor((c) => c + ch.length)
+        setText((t) => t.slice(0, textCursor) + ch + t.slice(textCursor))
+        setTextCursor((c) => c + ch.length)
       }
     },
     { isActive: focused && rawMode },
@@ -1131,19 +797,9 @@ function NewSessionPane({
     return options[Math.min(idx, options.length - 1)]?.label ?? 'Default'
   }
 
-  // How many option rows an open picker shows inside the panel: the pane
-  // minus the heading, notices, and the panel's other rows (~12); the panel
-  // grows upward into the spacer above, so the prompt never moves.
-  const dropdownCapacity = Math.max(3, height - 12)
-  // Whether the input has room for its 1-row perimeter: the three picker rows,
-  // the blank one above the prompt, the prompt's own two, and a pad row top AND
-  // bottom. All or nothing, deliberately — a pad on top with none underneath
-  // reads as a box that forgot to close, which is worse than no pad at all.
-  const inputPad = height - (PICKER_ROWS.length + 1 + 2) >= 2 ? 1 : 0
-  // The wrap width inside the input box: the pane minus the box's own left
-  // and right padding (the "▶ " prompt is part of the wrapped text).
-  const inputWidth = Math.max(8, width - COMPOSER_PAD_X * 2)
-  const caretVisible = focused && row === 'prompt' && !starting && openPicker === null
+  // How many option rows an open dropdown shows: enough to be useful, capped
+  // so the whole launcher still fits a short terminal.
+  const dropdownCapacity = Math.max(3, Math.min(10, height - (LIST_ROWS + 8)))
   const open = openPicker
   const openOptions = open ? optionsFor(open.key) : []
   const openHover = open ? Math.min(open.hover, openOptions.length - 1) : 0
@@ -1173,15 +829,15 @@ function NewSessionPane({
   // The price table's column widths: the label column, then one numeric column
   // per lane, each as wide as its widest cell (its heading included) so the
   // dollars read down a right-aligned column. null when there is no price to
-  // quote, or when the panel is too narrow to hold the whole table — a padded
-  // row would push the last column off the right edge into the truncation.
+  // quote, or when the terminal is too narrow to hold the whole table — a
+  // padded row would push the last column off the right edge.
   const rateTable = (() => {
     if (!openOptions.some((o) => o.rate)) return null
     const label = Math.max(...openOptions.map((o) => o.label.length))
     const input = Math.max(2, ...openOptions.map((o) => (o.rate?.input ?? '').length))
     const output = Math.max(3, ...openOptions.map((o) => (o.rate?.output ?? '').length))
     const total = OPTION_GUTTER + label + 2 + input + 2 + output + RATE_UNIT.length
-    return total <= inputWidth ? { label, input, output } : null
+    return total <= width ? { label, input, output } : null
   })()
   // A row's price cells, right-aligned into the table's columns. A model the
   // server quoted no card for prints blank cells rather than shifting the ones
@@ -1194,198 +850,204 @@ function NewSessionPane({
         (rate?.output ?? '').padStart(rateTable.output)
       : ''
 
+  const caretVisible = focused && cursor.kind === 'prompt' && !starting && openPicker === null
+  const listWin = navSlice(sessions.length, LIST_ROWS, listIdx)
+  // One status line under the list, only when there is something to say:
+  // otherwise the launcher ends on the session rows.
+  const statusLine = armed
+    ? CTRL_C_QUIT_HINT
+    : starting
+      ? '✻ Starting session…'
+      : null
+
   return (
-    // Bottom-docked, mirroring the chat layout: the heading floats centered
-    // in the empty space (equal spacers above and below it) while the input
-    // + option rows pin to the bottom edge (just above the session nav),
-    // where they NEVER move — an open dropdown expands upward instead of
-    // pushing the input around.
-    // No pane padding: the input's rules span the full terminal width like
-    // the header's and the nav's (the rows inside carry their own indents).
-    // The heading and the fact are DECORATION, and they are what yields when the
-    // terminal is short: both sit in an overflow-hidden box that shrinks to
-    // nothing, so the input below keeps every row it asked for — including the
-    // blank one under the prompt. Squeezing the input instead would eat that row
-    // and leave the box looking open at the bottom.
-    <Box width={width} height={height} flexDirection="column">
-      <Box flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden">
-        <Box flexGrow={1} />
-        <Box justifyContent="center" flexShrink={0}>
-          <Text bold color={theme.foreground}>
-            What are we shipping today?
-          </Text>
-        </Box>
-        {/* The fact box is sized to the text (capped so long facts wrap at a
-            readable measure) so short facts sit centered, not left-aligned
-            inside a fixed column. Pre-wrapped with wrap-ansi rather than ink's
-            wrap="wrap": ink keeps whitespace at wrap points, so a line that
-            breaks after a double space starts with a space and looks ragged.
-            wrap-ansi trims it. */}
-        <Box justifyContent="center" paddingTop={1} flexShrink={0}>
-          <Box width={Math.min(fact.length, Math.max(8, width - 4), 72)}>
-            <Text color={theme.muted}>
-              {wrapAnsi(fact, Math.min(fact.length, Math.max(8, width - 4), 72))}
-            </Text>
-          </Box>
-        </Box>
-        <Box flexGrow={1} />
-      </Box>
-      {error && <Text color={theme.error}> ✗ {error}</Text>}
-      {starting && <Text color={theme.muted}> ✻ Starting session…</Text>}
-      {/* The input, laid out like the chat composer: the run controls one row
-          each ABOVE the prompt (the dashboard card's controls-inside-the-
-          composer shape) — Repository, Agent, Model, a blank row, then the
-          prompt line. The ❯ selection glyph marks whichever row is selected.
-          →/enter opens a picker row IN PLACE: its value collapses to a bare
-          label and the option list unfolds indented beneath it, growing upward
-          into the space above so the prompt never moves. Repositories
-          multi-select ([x] toggles), the others pick one. */}
-      <Box
-        flexDirection="column"
-        backgroundColor={inputSurface}
-        alignItems="flex-start"
-        paddingY={inputPad}
-        paddingX={COMPOSER_PAD_X}
-        // Never squeezed. The pane clips its overflow, and the input is the LAST
-        // child, so without this a pane too short for the content above it takes
-        // the difference out of the input's bottom edge — which reads as a box
-        // with a top pad and no bottom one, its tint stopping flush against the
-        // prompt. The squeeze belongs on the spacers and the fact above instead.
-        flexShrink={0}
-      >
-        {PICKER_ROWS.map((r, i) => {
-          const active = focused && openPicker === null && row === i
-          const isOpen = open?.key === r.key
-          if (isOpen) {
-            return (
-              <Box key={r.key} flexDirection="column" width={inputWidth}>
-                <Text color={theme.muted}>{'  '}{r.label}:</Text>
-                {/* The price table's column heads, over the numeric columns
-                    they name, with the unit stated once here instead of on
-                    every row. */}
-                {rateTable && (
-                  <Box width={inputWidth}>
-                    <Text wrap="truncate" color={theme.muted}>
-                      {' '.repeat(OPTION_GUTTER + rateTable.label)}
-                      {rateCells({ input: 'IN', output: 'OUT' })}
-                      {RATE_UNIT}
-                    </Text>
-                  </Box>
-                )}
-                {hiddenAbove > 0 && (
-                  <Text color={theme.muted}>{'    '}… {hiddenAbove} more</Text>
-                )}
-                {visibleRows.map((pickerRow) => {
-                  // A group heading: the vendor that built the models under it,
-                  // upper-cased into an eyebrow the way the dashboard's
-                  // rate-card table sets its own, and muted so it reads as
-                  // structure rather than as another pickable row.
-                  if (pickerRow.kind === 'group') {
-                    return (
-                      <Box key={`group:${pickerRow.label}`} width={inputWidth}>
-                        <Text wrap="truncate" color={theme.muted}>
-                          {'    '}
-                          {pickerRow.label.toUpperCase()}
-                        </Text>
-                      </Box>
-                    )
-                  }
-                  const at = pickerRow.at
-                  const opt = openOptions[at]
-                  if (!opt) return null
-                  const hovered = at === openHover
-                  const picked = isPicked(r.key, at)
+    <Box flexDirection="column" width={width}>
+      <Text wrap="truncate" color={theme.muted}>
+        {whoLine}
+      </Text>
+      {PICKER_ROWS.map((r, i) => {
+        const active =
+          focused && openPicker === null && cursor.kind === 'option' && cursor.at === i
+        const isOpen = open?.key === r.key
+        if (isOpen) {
+          return (
+            <Box key={r.key} flexDirection="column" width={width}>
+              <Text color={theme.muted}>{'  '}{r.label}:</Text>
+              {/* The price table's column heads, over the numeric columns they
+                  name, with the unit stated once here instead of on every row. */}
+              {rateTable && (
+                <Box width={width}>
+                  <Text wrap="truncate" color={theme.muted}>
+                    {' '.repeat(OPTION_GUTTER + rateTable.label)}
+                    {rateCells({ input: 'IN', output: 'OUT' })}
+                    {RATE_UNIT}
+                  </Text>
+                </Box>
+              )}
+              {hiddenAbove > 0 && (
+                <Text color={theme.muted}>{'    '}… {hiddenAbove} more</Text>
+              )}
+              {visibleRows.map((pickerRow) => {
+                // A group heading: the vendor that built the models under it,
+                // upper-cased into an eyebrow the way the dashboard's
+                // rate-card table sets its own, and muted so it reads as
+                // structure rather than as another pickable row.
+                if (pickerRow.kind === 'group') {
                   return (
-                    <Box key={opt.id ?? 'default'} width={inputWidth}>
-                      <Text wrap="truncate">
-                        {'  '}
-                        <Text color={theme.cursor}>
-                          {hovered ? SELECTION_GLYPH : ' '}
-                        </Text>{' '}
-                        <Text color={hovered || picked ? theme.foreground : theme.muted}>
-                          {`[${picked ? 'x' : ' '}] ${rateTable ? opt.label.padEnd(rateTable.label) : opt.label}`}
-                        </Text>
-                        {/* The prices, always muted — the table's numbers next
-                            to the id whether or not the row is the highlighted
-                            one, so walking the list never moves the eye off the
-                            name. */}
-                        <Text color={theme.muted}>{rateCells(opt.rate)}</Text>
+                    <Box key={`group:${pickerRow.label}`} width={width}>
+                      <Text wrap="truncate" color={theme.muted}>
+                        {'    '}
+                        {pickerRow.label.toUpperCase()}
                       </Text>
                     </Box>
                   )
-                })}
-                {hiddenBelow > 0 && (
-                  <Text color={theme.muted}>
-                    {'    '}… {hiddenBelow} more
-                  </Text>
-                )}
-              </Box>
-            )
-          }
-          return (
-            <Box key={r.key} width={inputWidth}>
-              <Text wrap="truncate">
-                <Text color={active ? theme.cursor : theme.muted}>
-                  {active ? SELECTION_GLYPH : ' '}
-                </Text>{' '}
-                <Text color={theme.muted}>{r.label}: </Text>
-                <Text color={active ? theme.foreground : theme.muted}>
-                  {rowValue(r.key)}
+                }
+                const at = pickerRow.at
+                const opt = openOptions[at]
+                if (!opt) return null
+                const hovered = at === openHover
+                const picked = isPicked(r.key, at)
+                return (
+                  <Box key={opt.id ?? 'default'} width={width}>
+                    <Text wrap="truncate">
+                      {'  '}
+                      <Text color={theme.cursor}>
+                        {hovered ? SELECTION_GLYPH : ' '}
+                      </Text>{' '}
+                      <Text color={hovered || picked ? theme.foreground : theme.muted}>
+                        {`[${picked ? 'x' : ' '}] ${rateTable ? opt.label.padEnd(rateTable.label) : opt.label}`}
+                      </Text>
+                      {/* The prices, always muted — the table's numbers next
+                          to the id whether or not the row is the highlighted
+                          one, so walking the list never moves the eye off the
+                          name. */}
+                      <Text color={theme.muted}>{rateCells(opt.rate)}</Text>
+                    </Text>
+                  </Box>
+                )
+              })}
+              {hiddenBelow > 0 && (
+                <Text color={theme.muted}>
+                  {'    '}… {hiddenBelow} more
                 </Text>
+              )}
+            </Box>
+          )
+        }
+        return (
+          <Box key={r.key} width={width}>
+            <Text wrap="truncate">
+              {'  '}
+              <Text color={active ? theme.cursor : theme.muted}>
+                {active ? SELECTION_GLYPH : ' '}
+              </Text>{' '}
+              <Text color={theme.muted}>{r.label}: </Text>
+              <Text color={active ? theme.foreground : theme.muted}>
+                {rowValue(r.key)}
               </Text>
+            </Text>
+          </Box>
+        )
+      })}
+      {/* The prompt. ONE ❯ on the whole launcher: the prompt's gutter carries
+          it only while the prompt holds the cursor — a blank cell otherwise,
+          exactly like the rows above and below. Wraps instead of truncating: a
+          long prompt flows onto the next row rather than running off the right
+          edge. The explicit width is what ink wraps against; the key remounts
+          the node so a stale measurement can't misplace the caret. */}
+      <Box width={width} alignItems="flex-start">
+        {/* The glyph lives in its own fixed gutter so wrapped prompt lines
+            align under the first typed character, not under the glyph. */}
+        <Box width={2} flexShrink={0}>
+          <Text color={theme.cursor}>
+            {focused && cursor.kind === 'prompt' && openPicker === null ? SELECTION_GLYPH : ' '}
+          </Text>
+        </Box>
+        <Box width={width - 2}>
+          <Text
+            wrap="wrap"
+            key={`${text}:${textCursor}:${cursor.kind === 'prompt'}`}
+            color={theme.foreground}
+          >
+            {text.slice(0, textCursor)}
+            {caretVisible && text !== '' && (
+              <Text inverse>{textCursor < text.length ? text[textCursor] : ' '}</Text>
+            )}
+            {textCursor < text.length ? text.slice(textCursor + (caretVisible ? 1 : 0)) : ''}
+            {/* Empty input: the placeholder sits where typed text will land,
+                its first character carrying the caret (inverse) instead of a
+                caret cell of its own pushing it a column right. */}
+            {text === '' && caretVisible && (
+              <Text>
+                <Text inverse>S</Text>
+                <Text color={theme.muted}>tart a cloud agent…</Text>
+              </Text>
+            )}
+            {text === '' && !caretVisible && (
+              <Text color={theme.muted}>Start a cloud agent…</Text>
+            )}
+          </Text>
+        </Box>
+      </Box>
+      {/* The latest sessions, under the prompt: status dot + description + a
+          dim meta tag, in sortSidebarSessions order (status band, newest
+          first), windowed so the highlight parks two rows from the bottom and
+          the list scrolls under it. */}
+      {!hideList &&
+        sessions.slice(listWin.start, listWin.end).map((s) => {
+          const word = rowStatusWord(s)
+          const g = rowGlyph(word)
+          const cursorHere = focused && cursor.kind === 'list' && sessions[listIdx]?.id === s.id
+          const desc = rowDescription(s)
+          // The meta tag rides the right edge; the description takes what's
+          // left and truncates, so a long prompt can never push the tag off
+          // the row.
+          const meta = `${rowMeta(s)}${attention.has(s.id) ? ' · needs you' : ''}`
+          const descW = Math.max(8, width - meta.length - 8)
+          return (
+            <Box key={s.id} width={width}>
+              <Box width={2} flexShrink={0}>
+                <Text color={cursorHere ? theme.cursor : g.color} dimColor={!cursorHere && g.dim}>
+                  {cursorHere ? SELECTION_GLYPH : g.glyph}
+                </Text>
+              </Box>
+              <Box flexGrow={1} flexShrink={1}>
+                <Text wrap="truncate">
+                  <Text
+                    color={
+                      cursorHere || attention.has(s.id) || !g.dim
+                        ? theme.foreground
+                        : theme.muted
+                    }
+                  >
+                    {desc.slice(0, descW)}
+                  </Text>
+                </Text>
+              </Box>
+              <Box flexShrink={0}>
+                <Text color={theme.muted}>{meta}</Text>
+              </Box>
             </Box>
           )
         })}
-        {/* One blank row between the run controls and the prompt. */}
-        <Box height={1} flexShrink={0} />
-        {/* The prompt, under the option rows. ONE ❯ on the whole panel: the
-            prompt's gutter carries it only while the prompt is the selected
-            row — a blank cell otherwise, exactly like the picker rows above
-            (whichever row is selected shows the glyph). Wraps instead of
-            truncating: a long prompt flows onto the next row (the box grows
-            downward into the spacer above) rather than running off the right
-            edge. The explicit width is what ink wraps against; the key
-            remounts the node so a stale measurement can't wrap the caret
-            onto the border row. */}
-        <Box width={inputWidth} minHeight={2} alignItems="flex-start">
-          {/* The ❯ lives in its own fixed gutter so wrapped prompt lines
-              align under the first typed character, not under the glyph. */}
-          <Box width={2} flexShrink={0}>
-            <Text color={theme.cursor}>
-              {focused && row === 'prompt' && openPicker === null ? SELECTION_GLYPH : ' '}
-            </Text>
-          </Box>
-          {/* The colour on the parent is what the bare text children below
-              inherit (ink would leave typed text on the terminal's default
-              foreground, which a light theme paints near-black on our panel),
-              and it gives the inverse caret a known pair to swap. */}
-          <Box width={inputWidth - 2}>
-            <Text
-              wrap="wrap"
-              key={`${text}:${cursor}:${focused && row === 'prompt'}`}
-              color={theme.foreground}
-            >
-              {text.slice(0, cursor)}
-              {caretVisible && text !== '' && (
-                <Text inverse>{cursor < text.length ? text[cursor] : ' '}</Text>
-              )}
-              {cursor < text.length ? text.slice(cursor + (caretVisible ? 1 : 0)) : ''}
-              {/* Empty input: the placeholder sits where typed text will land,
-                  its first character carrying the caret (inverse) instead of a
-                  caret cell of its own pushing it a column right. */}
-              {text === '' && caretVisible && (
-                <Text>
-                  <Text inverse>S</Text>
-                  <Text color={theme.muted}>tart a cloud agent…</Text>
-                </Text>
-              )}
-              {text === '' && !caretVisible && (
-                <Text color={theme.muted}>Start a cloud agent…</Text>
-              )}
-            </Text>
-          </Box>
-        </Box>
-      </Box>
+      {!hideList && sessions.length === 0 && (
+        <Text color={theme.muted}>
+          {'  '}
+          {polledOnce ? 'no sessions yet' : 'loading sessions…'}
+        </Text>
+      )}
+      {/* An API failure gets its own line — a swallowed error is an empty
+          list with no explanation. */}
+      {error && (
+        <Text wrap="truncate" color={theme.error}>
+          {`✗ ${error}`}
+        </Text>
+      )}
+      {statusLine && (
+        <Text wrap="truncate" color={theme.muted}>
+          {statusLine}
+        </Text>
+      )}
     </Box>
   )
 }

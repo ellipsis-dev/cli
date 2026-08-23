@@ -1,26 +1,14 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`interactive UI screenshots > a bare \`agent\` opens on the new-session composer 1`] = `
-"
-
-   ellipsis.dev                                               @hunter in acme
-
-
-
-
-
-                          What are we shipping today?
-
-                      A fixed fact for stable screenshots.
-
-
-
-
-     Repository: acme/cli
-     Agent: Default
-     Model: Default
-
-   ▶ Start a cloud agent…"
+exports[`interactive UI screenshots > a bare \`agent\` opens on the launcher 1`] = `
+"connected to ellipsis.dev as @hunter in acme
+    Repository: acme/cli
+    Agent: Default
+    Model: Default
+▶ Start a cloud agent…
+● fix the login bug                                      12.4k · $0.42 · 5m ago
+● write release notes                                    12.4k · $0.42 · 1h ago
+● refactor the theme module                              12.4k · $0.42 · 5h ago"
 `;
 
 exports[`interactive UI screenshots > enter on a picked session opens its chat 1`] = `
@@ -38,52 +26,13 @@ exports[`interactive UI screenshots > enter on a picked session opens its chat 1
 waiting · $0.42 total · session_a · v1.3.0"
 `;
 
-exports[`interactive UI screenshots > esc opens the session picker; ↓ moves the highlight to the first session 1`] = `
-"
-
-   ellipsis.dev                           filtering to acme/cli · last 7 days
-
-
-  ▶ New session
-  ● fix the login bug                                   12.4k · $0.42 · 5m ago
-  ● write release notes                                 12.4k · $0.42 · 1h ago
-  ● refactor the theme module                           12.4k · $0.42 · 5h ago
-
-
-
-
-
-
-
-
-
-
-
-
-  ↑↓ move · enter open · n new · esc back to the chat · q quit"
-`;
-
-exports[`interactive UI screenshots > esc opens the session picker; ↓ moves the highlight to the first session 2`] = `
-"
-
-   ellipsis.dev                           filtering to acme/cli · last 7 days
-
-
-  + New session
-  ▶ fix the login bug                                   12.4k · $0.42 · 5m ago
-  ● write release notes                                 12.4k · $0.42 · 1h ago
-  ● refactor the theme module                           12.4k · $0.42 · 5h ago
-
-
-
-
-
-
-
-
-
-
-
-
-  ↑↓ move · enter open · n new · esc back to the chat · q quit"
+exports[`interactive UI screenshots > ↓ from the prompt moves the highlight into the session list 1`] = `
+"connected to ellipsis.dev as @hunter in acme
+    Repository: acme/cli
+    Agent: Default
+    Model: Default
+  Start a cloud agent…
+▶ fix the login bug                                      12.4k · $0.42 · 5m ago
+● write release notes                                    12.4k · $0.42 · 1h ago
+● refactor the theme module                              12.4k · $0.42 · 5h ago"
 `;

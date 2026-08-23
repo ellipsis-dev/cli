@@ -1,19 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import React from 'react'
 import { SESSION_BAR_DEFAULTS } from '../src/lib/config'
 import { SessionsApp } from '../src/ui/SessionsApp'
 import type { AgentSession } from '../src/lib/types'
 import { launchPage } from './screenshot'
 
-// The composer shows a random fact; pin it so the text snapshots are stable.
-vi.mock('../src/lib/facts', () => ({
-  randomFact: () => 'A fixed fact for stable screenshots.',
-}))
-
-// The first two screenshot tests of the interactive UI, driven through the
-// harness in screenshot.ts: assertions run on the emulated screen's text;
-// each test also saves a PNG of the same grid to test/__screenshots__/ for
-// human (and agent) review. All network edges are stubbed.
+// Render tests of the interactive UI, driven through the harness in
+// screenshot.ts: assertions run on the emulated screen's text. All network
+// edges are stubbed.
 
 const h = React.createElement
 
@@ -63,9 +57,9 @@ const RECORDS: Record<string, Record<string, unknown>[]> = {
   ],
 }
 
-// SessionsApp's whole API surface for these screens: the sidebar poll, the
-// composer's three picker fetches, and the chat's session + records load.
-// Empty picker lists are a real state (the composer falls back to its
+// SessionsApp's whole API surface for these screens: the session-list poll,
+// the launcher's three picker fetches, and the chat's session + records load.
+// Empty picker lists are a real state (the launcher falls back to its
 // built-ins).
 const api = {
   sessions: {
@@ -97,57 +91,55 @@ function app() {
 }
 
 describe('interactive UI screenshots', () => {
-  it('a bare `agent` opens on the new-session composer', async () => {
+  it('a bare `agent` opens on the launcher', async () => {
     const page = await launchPage(app())
     const screen = page.text()
-    expect(screen).toContain('ellipsis.dev')
-    expect(screen).toContain('@hunter in acme')
-    // The composer panel: its three option rows and the detected repo as the
-    // Repository row's resting value.
-    expect(screen).toContain('Repository')
-    expect(screen).toContain('acme/cli')
-    expect(screen).toContain('Model')
+    expect(screen).toContain('connected to ellipsis.dev as @hunter in acme')
+    // The option rows: the detected repo as the Repository row's resting value.
+    expect(screen).toContain('Repository: acme/cli')
+    expect(screen).toContain('Agent: Default')
+    expect(screen).toContain('Model:')
+    // The latest sessions, under the prompt.
+    for (const s of SESSIONS) expect(screen).toContain(s.prompt as string)
     expect(screen).toMatchSnapshot()
-    await page.png('new-session-composer')
     page.unmount()
   })
 
-  it('esc opens the session picker; ↓ moves the highlight to the first session', async () => {
+  it('↓ from the prompt moves the highlight into the session list', async () => {
     const page = await launchPage(app())
-    await page.press('escape')
-    const picker = page.text()
-    // The highlight opens on the pinned new-session row: its "+ " gutter is
-    // replaced by the ▶ selection glyph while the cursor is on it.
-    expect(picker).toContain('▶ New session')
-    for (const s of SESSIONS) expect(picker).toContain(s.prompt as string)
-    expect(picker).toMatchSnapshot()
-    await page.png('sessions-picker')
-
     await page.press('down')
     const moved = page.text()
-    // The ▶ selection glyph left the "+ New session" row and sits on the
-    // newest session (sort is status band, then newest first).
+    // The ▶ selection glyph left the prompt and sits on the newest session
+    // (sort is status band, then newest first).
     const cursorLine = moved.split('\n').find((l) => l.includes('▶'))
     expect(cursorLine).toBeDefined()
     expect(cursorLine).toContain('fix the login bug')
     expect(moved).toMatchSnapshot()
-    await page.png('sessions-picker-down')
     page.unmount()
   })
 
   it('enter on a picked session opens its chat', async () => {
     const page = await launchPage(app())
-    await page.press('escape')
     await page.press('down')
     await page.press('enter')
     const chat = page.text()
-    // The picker's alt screen closed and the chat printed session_a's
-    // transcript into the primary buffer, with the composer underneath.
+    // The launcher gave way to session_a's chat: its transcript printed into
+    // the primary buffer, with the composer underneath.
     expect(chat).toContain('the token refresh races the redirect')
     expect(chat).toContain('opening a PR now')
     expect(chat).toContain('session_a')
     expect(chat).toMatchSnapshot()
-    await page.png('session-chat-open')
+    page.unmount()
+  })
+
+  it('esc in the chat returns to the launcher', async () => {
+    const page = await launchPage(app())
+    await page.press('down')
+    await page.press('enter')
+    await page.press('escape')
+    const back = page.text()
+    expect(back).toContain('connected to ellipsis.dev as @hunter in acme')
+    expect(back).toContain('Repository: acme/cli')
     page.unmount()
   })
 })
