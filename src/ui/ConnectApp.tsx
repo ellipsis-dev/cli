@@ -169,6 +169,9 @@ const COMPOSER_PAD_X = 2
 // owns a fixed key rather than a feed_seq one.
 const SANDBOX_KEY = 'sandbox'
 
+// Gap between the footer's status fields — whitespace, no glyph.
+const META_SEP = '   '
+
 // Half the period of the live ⏺ pulse: the glyph dims for this long, then
 // brightens for this long. ~1.4s a cycle — slow enough to read as breathing
 // rather than flashing, and it lands off the 1s duration tick so the two
@@ -1085,15 +1088,25 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     ...(props.configName ? [props.configName] : []),
     `v${VERSION}`,
   ]
-  const linked = metaParts(hyperlink(props.sessionUrl, sessionId)).join('   ')
-  const plain = metaParts(sessionId).join('   ')
-  const metaLine = ctrlCArmed
-    ? CTRL_C_QUIT_HINT
-    : linked.length < cols
-      ? linked
-      : plain.length < cols
-        ? plain
-        : `${plain.slice(0, Math.max(0, cols - 2))}…`
+  // Narrow panes shed fields from the right (version, then config, session
+  // id, model) and keep the status and the spend.
+  const allParts = metaParts(sessionId)
+  let kept = allParts.length
+  while (kept > 2 && allParts.slice(0, kept).join(META_SEP).length >= cols) kept--
+  const plain = allParts.slice(0, kept).join(META_SEP)
+  const linked = metaParts(hyperlink(props.sessionUrl, sessionId))
+    .slice(0, kept)
+    .join(META_SEP)
+  const body = ctrlCArmed ? CTRL_C_QUIT_HINT : plain
+  const pad = Math.max(0, Math.floor((cols - body.length) / 2))
+  // Ink measures the hyperlink's invisible URL bytes as width, so the link
+  // only ships when padding plus escape bytes still fit the row; the padding
+  // gives way first, then the link itself.
+  const linkedPad = ctrlCArmed ? -1 : Math.min(pad, cols - 1 - linked.length)
+  const metaLine =
+    linkedPad >= 0
+      ? `${' '.repeat(linkedPad)}${linked}`
+      : `${' '.repeat(pad)}${body.length < cols ? body : `${body.slice(0, Math.max(0, cols - 1))}…`}`
   return (
     // Hosted panes pin BOTH dimensions: without the width the root sizes to
     // its widest child (the unwrapped meta line) and smears rows across the
