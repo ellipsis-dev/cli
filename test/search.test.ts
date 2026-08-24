@@ -198,31 +198,29 @@ describe('recordText / formatStepLine', () => {
     feed_seq: 3,
     stream_seq: 3,
     source: 'claude_code',
-    record_type: (payload.type as string) ?? 'assistant',
+    record_type: (payload.kind as string) ?? 'assistant',
     record_format: 'claude_stream_json@2.0',
     payload,
     ...overrides,
   })
 
   it('reads a result record', () => {
-    expect(recordText(record({ type: 'result', result: 'All tests pass.' }))).toBe(
+    expect(recordText(record({ kind: 'result', result: 'All tests pass.' }))).toBe(
       'All tests pass.',
     )
   })
 
   it('reads string message content', () => {
-    expect(recordText(record({ message: { content: 'plain text' } }))).toBe('plain text')
+    expect(recordText(record({ content: 'plain text' }))).toBe('plain text')
   })
 
   it('joins text/thinking blocks and summarizes tool calls', () => {
     const data = {
-      message: {
-        content: [
-          { type: 'thinking', thinking: 'check the auth flow' },
-          { type: 'text', text: 'Reading the file.' },
-          { type: 'tool_use', name: 'Read', input: { file_path: 'src/auth.ts' } },
-        ],
-      },
+      content: [
+        { type: 'thinking', thinking: 'check the auth flow' },
+        { type: 'text', text: 'Reading the file.' },
+        { type: 'tool_use', name: 'Read', input: { file_path: 'src/auth.ts' } },
+      ],
     }
     expect(recordText(record(data))).toBe(
       'check the auth flow Reading the file. [tool: Read] {"file_path":"src/auth.ts"}',
@@ -231,9 +229,7 @@ describe('recordText / formatStepLine', () => {
 
   it('unwraps nested tool_result content', () => {
     const data = {
-      message: {
-        content: [{ type: 'tool_result', content: [{ type: 'text', text: 'file contents' }] }],
-      },
+      content: [{ type: 'tool_result', content: [{ type: 'text', text: 'file contents' }] }],
     }
     expect(recordText(record(data))).toBe('file contents')
   })
@@ -246,7 +242,7 @@ describe('recordText / formatStepLine', () => {
     // record_type + payload.subtype drive the type column; stream_seq the index.
     const line = formatStepLine(
       record(
-        { subtype: 'init', message: { content: 'line one\nline two' } },
+        { subtype: 'init', content: 'line one\nline two' },
         { record_type: 'system' },
       ),
     )
@@ -280,7 +276,7 @@ describe('recordText / formatStepLine', () => {
   })
 
   it('truncates long text to about 120 characters', () => {
-    const line = formatStepLine(record({ message: { content: 'x'.repeat(500) } }))
+    const line = formatStepLine(record({ content: 'x'.repeat(500) }))
     expect(line.endsWith('...')).toBe(true)
     // 4 (index) + 16 (timestamp) + 16 (type) + separators + 120 of text.
     expect(line.length).toBe(42 + 120)

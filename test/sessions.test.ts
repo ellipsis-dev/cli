@@ -382,11 +382,11 @@ function model(
     manufacturer,
     is_default_agent_model: false,
     rate_card: {
-      input_cents_per_1m_tokens: 5_00,
-      cache_write_5m_cents_per_1m_tokens: 6_25,
-      cache_write_1h_cents_per_1m_tokens: 10_00,
-      cache_read_cents_per_1m_tokens: 50,
-      output_cents_per_1m_tokens: 25_00,
+      input_millicents_per_1m_tokens: 5_00_000,
+      cache_write_5m_millicents_per_1m_tokens: 6_25_000,
+      cache_write_1h_millicents_per_1m_tokens: 10_00_000,
+      cache_read_millicents_per_1m_tokens: 50_000,
+      output_millicents_per_1m_tokens: 25_00_000,
     },
     ...overrides,
   }
@@ -394,9 +394,9 @@ function model(
 
 describe('rateDollars', () => {
   it('drops the cents on a whole dollar and keeps them otherwise', () => {
-    expect(rateDollars(5_00)).toBe('$5')
-    expect(rateDollars(75)).toBe('$0.75')
-    expect(rateDollars(14_25)).toBe('$14.25')
+    expect(rateDollars(5_00_000)).toBe('$5')
+    expect(rateDollars(75_000)).toBe('$0.75')
+    expect(rateDollars(14_25_000)).toBe('$14.25')
     expect(rateDollars(0)).toBe('$0')
   })
 })
@@ -405,11 +405,11 @@ describe('modelRate', () => {
   it('quotes the input and output lanes only', () => {
     expect(
       modelRate({
-        input_cents_per_1m_tokens: 3_00,
-        cache_write_5m_cents_per_1m_tokens: 3_75,
-        cache_write_1h_cents_per_1m_tokens: 6_00,
-        cache_read_cents_per_1m_tokens: 30,
-        output_cents_per_1m_tokens: 15_00,
+        input_millicents_per_1m_tokens: 3_00_000,
+        cache_write_5m_millicents_per_1m_tokens: 3_75_000,
+        cache_write_1h_millicents_per_1m_tokens: 6_00_000,
+        cache_read_millicents_per_1m_tokens: 30_000,
+        output_millicents_per_1m_tokens: 15_00_000,
       }),
     ).toEqual({ input: '$3', output: '$15' })
   })
@@ -462,11 +462,11 @@ describe('composerModelOptions', () => {
       model('claude-opus-5', 'anthropic', { is_default_agent_model: true }),
       model('claude-haiku-4-5-20251001', 'anthropic', {
         rate_card: {
-          input_cents_per_1m_tokens: 1_00,
-          cache_write_5m_cents_per_1m_tokens: 1_25,
-          cache_write_1h_cents_per_1m_tokens: 2_00,
-          cache_read_cents_per_1m_tokens: 10,
-          output_cents_per_1m_tokens: 5_00,
+          input_millicents_per_1m_tokens: 1_00_000,
+          cache_write_5m_millicents_per_1m_tokens: 1_25_000,
+          cache_write_1h_millicents_per_1m_tokens: 2_00_000,
+          cache_read_millicents_per_1m_tokens: 10_000,
+          output_millicents_per_1m_tokens: 5_00_000,
         },
       }),
     ])

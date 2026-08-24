@@ -29,11 +29,19 @@ interface StepContentBlock {
   content?: unknown
 }
 
+// The payload as a loose bag. Every read below is best-effort display text
+// across three harness formats (claude_sdk@1, codex_jsonl@1,
+// ellipsis_lifecycle@1), so narrowing the SDK's per-format union at each field
+// would buy nothing a `typeof` guard doesn't already give.
+function fields(record: SessionRecord): Record<string, unknown> {
+  return record.payload as Record<string, unknown>
+}
+
 // One session_record as a single display line: index, timestamp, record type,
 // and the first ~120 characters of its text content. Exported for tests.
 export function formatStepLine(record: SessionRecord): string {
-  const subtype =
-    typeof record.payload.subtype === 'string' ? record.payload.subtype : null
+  const raw = fields(record).subtype
+  const subtype = typeof raw === 'string' ? raw : null
   const type = subtype ? `${record.record_type}/${subtype}` : record.record_type
   return [
     String(record.stream_seq).padStart(4),
@@ -44,18 +52,17 @@ export function formatStepLine(record: SessionRecord): string {
 }
 
 // Best-effort display text for a stored record. A lifecycle record shows its
-// notification line; a claude_code record's `payload` is the raw Claude Code
-// stream event — a result step carries `result`, assistant/user steps carry an
-// API message whose content is a string or a list of blocks (text, thinking,
-// tool_use, tool_result). Anything unrecognized falls back to its JSON.
+// notification line; a claude_code record's `payload` is the raw agent stream
+// event — a result step carries `result`, assistant/user steps carry `content`,
+// a string or a list of blocks (text, thinking, tool_use, tool_result).
+// Anything unrecognized falls back to its JSON.
 export function recordText(record: SessionRecord): string {
+  const data = fields(record)
   if (record.source === 'lifecycle') {
-    return lifecycleText(record.record_type, record.payload) ?? record.record_type
+    return lifecycleText(record.record_type, data) ?? record.record_type
   }
-  const data = record.payload ?? {}
   if (typeof data.result === 'string') return data.result
-  const message = data.message as { content?: unknown } | undefined
-  const text = contentText(message?.content)
+  const text = contentText(data.content)
   if (text) return text
   return JSON.stringify(data)
 }

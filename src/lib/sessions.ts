@@ -311,10 +311,11 @@ function manufacturerRank(manufacturer: ModelManufacturer | string): number {
   return at === -1 ? MANUFACTURER_ORDER.length : at
 }
 
-// Rate-card cents per 1M tokens → "$5", "$0.75". Whole dollars drop the
+// Rate-card millicents per 1M tokens → "$5", "$0.75". Whole dollars drop the
 // ".00": at a glance "$5" is a price, where "$5.00" reads as a table cell.
-export function rateDollars(cents: number): string {
-  return cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`
+export function rateDollars(millicents: number): string {
+  const dollars = millicents / 100_000
+  return Number.isInteger(dollars) ? `$${dollars}` : `$${dollars.toFixed(2)}`
 }
 
 // A model's price as two table cells: the two lanes that decide what a session
@@ -328,8 +329,8 @@ export function modelRate(
 ): { input: string; output: string } | null {
   if (!rate) return null
   return {
-    input: rateDollars(rate.input_cents_per_1m_tokens),
-    output: rateDollars(rate.output_cents_per_1m_tokens),
+    input: rateDollars(rate.input_millicents_per_1m_tokens),
+    output: rateDollars(rate.output_millicents_per_1m_tokens),
   }
 }
 
