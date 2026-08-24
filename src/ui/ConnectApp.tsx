@@ -23,13 +23,12 @@ import {
   sandboxOutputStep,
   sandboxPhaseLabel,
   statusActivityText,
-  type CCEvent,
   type SessionTranscriptStore,
   type TranscriptItem,
 } from '@ellipsis-dev/sdk/store'
 import { lifecycleText } from '../lib/steps'
 import { errorDetail } from '../lib/api'
-import type { Ellipsis } from '@ellipsis-dev/sdk'
+import type { Ellipsis, SdkRecord, SessionRecord } from '@ellipsis-dev/sdk'
 import { hyperlink } from '../lib/urls'
 import { usdNumberFromMillicents } from '../lib/output'
 import { applyEditShortcut } from '../lib/editing'
@@ -258,6 +257,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
 
   const [elapsed, setElapsed] = useState(0)
   const [notice, setNotice] = useState<string | null>(props.initialNotice ?? null)
+  // How many undisplayable records you've already been told about, so the
+  // footer warning clears on your next send and only returns if MORE arrive.
+  const [undisplayedSeen, setUndisplayedSeen] = useState(0)
   // The slash-command menu's highlighted index. The menu itself is derived from
   // what is typed (see `menu` below) rather than stored — it is open exactly when
   // the line starts with `/` and something still matches — so this is the only
@@ -303,8 +305,8 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // one-line progress block up top (sandboxProgress), not as transcript rows.
   // Each turn's closing duration/cost summary is dropped too (see
   // reshapeTranscript) — the footer carries the session's spend.
-  const { items } = useMemo(() => {
-    const shaped = reshapeTranscript(snapshot.records, props.minRenderFeedSeq)
+  const { items, undisplayed } = useMemo(() => {
+    const shaped = reshapeTranscript(slice(snapshot.records), props.minRenderFeedSeq)
     // Client-side notes land at the end: they describe what you just did, so
     // they belong under everything the server has sent so far.
     for (const note of chatNotes) {
@@ -322,7 +324,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       foldCosts(
         snapshot.records
           .filter((r) => r.source === 'claude_code')
-          .map((r) => r.payload as CCEvent),
+          .map((r) => r.payload as SdkRecord),
       ),
     [snapshot.records],
   )
@@ -340,7 +342,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // as the durable trace (the sandbox_ready transcript notice is suppressed
   // below in its favour).
   const sandbox = useMemo(
-    () => deriveSandboxState(snapshot.records, props.minRenderFeedSeq),
+    () => deriveSandboxState(slice(snapshot.records), props.minRenderFeedSeq),
     [snapshot.records, props.minRenderFeedSeq],
   )
   // Bodies of the server's PENDING inbox messages — the durable queued signal.
@@ -490,13 +492,13 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // Which silence a started-but-quiet turn is in ('boot': Claude Code is
   // still starting in the sandbox; 'turn': the warm agent between records),
   // for the fallback live line's label.
-  const awaitingAgent = useMemo(() => awaitingAgentPhase(snapshot.records), [snapshot.records])
+  const awaitingAgent = useMemo(() => awaitingAgentPhase(slice(snapshot.records)), [snapshot.records])
 
   // Sends the agent took mid-gap: delivered to the agent but its user-echo
   // transcript record hasn't landed yet (the echo can lag by a whole sandbox
   // wake). Rendered as full-colour user rows until the echo replaces them.
   const acceptedSends = useMemo(
-    () => deliveredUnechoedSends(snapshot.records),
+    () => deliveredUnechoedSends(slice(snapshot.records)),
     [snapshot.records],
   )
 
@@ -580,6 +582,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       const text = raw.trim()
       setComposer({ text: '', cursor: 0 })
       if (!text) return
+      setUndisplayedSeen(undisplayed)
       // A leading slash claims the line for the CLI. An unknown one is REFUSED,
       // not forwarded: a typo'd command sent on as prose is a message you did
       // not mean to send, and the agent cannot tell it from one you did.
@@ -644,7 +647,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         }
       })()
     },
-    [api, exit, pump, sessionId, props.onFocusNav],
+    [api, exit, pump, sessionId, undisplayed, props.onFocusNav],
   )
 
   // The composer renders whenever sending is possible.
@@ -1099,12 +1102,22 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const linked = metaParts(hyperlink(props.sessionUrl, sessionId))
     .slice(0, kept)
     .join(META_SEP)
-  const body = ctrlCArmed ? CTRL_C_QUIT_HINT : plain
+  // Records that arrived but rendered nothing take the whole line: a shape this
+  // build can't read means the transcript is lying about what was said, which
+  // outranks the spend and the session id. It holds the line until the next
+  // send, and a further drop brings it back with the new count.
+  const undisplayedNew = Math.max(0, undisplayed - undisplayedSeen)
+  const dropWarning =
+    undisplayedNew > 0
+      ? `${undisplayedNew} ${undisplayedNew === 1 ? 'event' : 'events'} could not be displayed, this CLI may be out of date`
+      : null
+  const body = ctrlCArmed ? CTRL_C_QUIT_HINT : (dropWarning ?? plain)
   const pad = Math.max(0, Math.floor((cols - body.length) / 2))
   // Ink measures the hyperlink's invisible URL bytes as width, so the link
   // only ships when padding plus escape bytes still fit the row; the padding
   // gives way first, then the link itself.
-  const linkedPad = ctrlCArmed ? -1 : Math.min(pad, cols - 1 - linked.length)
+  const linkedPad =
+    ctrlCArmed || dropWarning ? -1 : Math.min(pad, cols - 1 - linked.length)
   const metaLine =
     linkedPad >= 0
       ? `${' '.repeat(linkedPad)}${linked}`
@@ -1253,7 +1266,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             </Text>
           </Box>
         )}
-        <Text color={theme.muted}>{metaLine}</Text>
+        <Text color={dropWarning && !ctrlCArmed ? theme.error : theme.muted}>{metaLine}</Text>
       </Box>
     </Box>
   )
@@ -1523,8 +1536,11 @@ export type SandboxState = {
   log: SandboxLogLine[]
 }
 
-// The structural slice of a session record the derivations need (the SDK's
-// SessionRecordWire is not exported from its store entry).
+// The structural slice of a session record the derivations below need. The SDK
+// types each harness's payload as its own union (claude_sdk@1, codex_jsonl@1,
+// ellipsis_lifecycle@1) with no index signature, and these functions only ever
+// read display fields by name across all three — so they take the slice, and
+// the cast happens once, in `slice` below.
 type LifecycleRecordLike = {
   feed_seq: number
   source: string
@@ -1532,6 +1548,10 @@ type LifecycleRecordLike = {
   payload: Record<string, unknown>
   // The inbox message a user-echo transcript record answers for (§3.3).
   session_message_id?: string | null
+}
+
+function slice(records: readonly SessionRecord[]): readonly LifecycleRecordLike[] {
+  return records as readonly LifecycleRecordLike[]
 }
 
 // The chat is a LOG of the session: what was said, and what happened to the
@@ -1545,11 +1565,17 @@ type LifecycleRecordLike = {
 // bookkeeping, not conversation — the footer's running spend is where that
 // story lives. An error summary survives as its own (red) line under a plain
 // label: a failed turn is content. Pure, for tests.
+// `undisplayed` counts agent records that arrived and rendered NOTHING — the
+// signal for a payload shape this build cannot read (a harness change on the
+// server, an out-of-date CLI). Without it such a record is invisible twice
+// over: no row, and no hint that a row is missing. Init events are excluded:
+// they are deliberately silent here.
 export function reshapeTranscript(
   records: readonly LifecycleRecordLike[],
   minRenderFeedSeq: number,
-): { items: TranscriptItem[] } {
+): { items: TranscriptItem[]; undisplayed: number } {
   const items: TranscriptItem[] = []
+  let undisplayed = 0
   // Index of the "Waking the session…" line still awaiting its outcome, so the
   // resumed record can settle it in place instead of adding a second row. The
   // line KEEPS ITS KEY, so settling it doesn't move the scroll anchor or the
@@ -1570,14 +1596,23 @@ export function reshapeTranscript(
       }
       continue
     }
-    const isResult = r.source === 'claude_code' && r.payload.type === 'result'
-    // recordToItems reads only the structural slice (source, record_type,
-    // payload); its SessionRecordWire param type isn't exported from the
-    // SDK's store entry, hence the cast.
-    for (const item of recordToItems(
-      r as Parameters<typeof recordToItems>[0],
-      `s${r.feed_seq}`,
-    )) {
+    const isResult = r.source === 'claude_code' && r.payload.kind === 'result'
+    // recordToItems reads the structural slice plus record_format, which it
+    // switches on; its typed per-harness param isn't the slice these
+    // derivations pass, hence the cast. It returns undefined for a
+    // record_format this SDK build has no reader for — a new harness against an
+    // old CLI — which counts as undisplayed just like an unreadable payload.
+    // A record the reader THROWS on (an unrecognized payload kind reaches
+    // blocksOf(undefined) inside the SDK) must cost one row, not the whole
+    // transcript: the render is the last place that should die of a wire change.
+    let rendered: TranscriptItem[]
+    try {
+      rendered = recordToItems(r as Parameters<typeof recordToItems>[0], `s${r.feed_seq}`) ?? []
+    } catch {
+      rendered = []
+    }
+    if (rendered.length === 0 && r.record_type !== 'system') undisplayed++
+    for (const item of rendered) {
       if (item.kind === 'summary' && isResult) {
         if (item.isError) items.push({ ...item, text: 'turn ended with an error' })
         continue
@@ -1585,7 +1620,7 @@ export function reshapeTranscript(
       items.push(item)
     }
   }
-  return { items }
+  return { items, undisplayed }
 }
 
 // The session milestones worth a line in the chat log, and how each reads.

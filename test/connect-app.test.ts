@@ -27,8 +27,17 @@ import { theme } from '../src/lib/theme'
 import type { TranscriptItem } from '@ellipsis-dev/sdk/store'
 
 let seq = 0
+// `record_format` is what recordToItems switches on, so a fixture carries the
+// same token the wire does: claude_sdk@1 for agent records, ellipsis_lifecycle@1
+// for platform ones.
 function rec(recordType: string, payload: Record<string, unknown> = {}, source = 'lifecycle') {
-  return { feed_seq: ++seq, source, record_type: recordType, payload }
+  return {
+    feed_seq: ++seq,
+    source,
+    record_type: recordType,
+    record_format: source === 'lifecycle' ? 'ellipsis_lifecycle@1' : 'claude_sdk@1',
+    payload,
+  }
 }
 
 describe('deriveSandboxState', () => {
@@ -422,11 +431,11 @@ describe('deliveredUnechoedSends', () => {
 
 describe('reshapeTranscript', () => {
   const assistant = (text: string) =>
-    rec('cc', { type: 'assistant', message: { content: [{ type: 'text', text }] } }, 'claude_code')
+    rec('cc', { kind: 'assistant', content: [{ type: 'text', text }] }, 'claude_code')
   const result = (over: Record<string, unknown> = {}) =>
     rec(
       'cc',
-      { type: 'result', duration_ms: 4000, total_cost_usd: 0.1, is_error: false, ...over },
+      { kind: 'result', duration_ms: 4000, cost_usd: 0.1, is_error: false, ...over },
       'claude_code',
     )
 
@@ -439,9 +448,9 @@ describe('reshapeTranscript', () => {
     const { items } = reshapeTranscript(
       [
         assistant('one'),
-        result({ total_cost_usd: 0.1 }),
+        result({ cost_usd: 0.1 }),
         assistant('two'),
-        result({ total_cost_usd: 0.25, duration_ms: 2000 }),
+        result({ cost_usd: 0.25, duration_ms: 2000 }),
       ],
       0,
     )
@@ -453,10 +462,10 @@ describe('reshapeTranscript', () => {
   })
 
   it('skips records at or below the render cursor (--no-records)', () => {
-    const hidden = [assistant('old'), result({ total_cost_usd: 0.1 })]
+    const hidden = [assistant('old'), result({ cost_usd: 0.1 })]
     const cursor = hidden[hidden.length - 1].feed_seq
     const { items } = reshapeTranscript(
-      [...hidden, assistant('new'), result({ total_cost_usd: 0.18 })],
+      [...hidden, assistant('new'), result({ cost_usd: 0.18 })],
       cursor,
     )
     expect(items.map((i) => i.text)).toEqual(['new'])
@@ -505,6 +514,33 @@ describe('reshapeTranscript', () => {
       0,
     )
     expect(items.map((i) => i.text)).toEqual(['hello'])
+  })
+
+  it('counts agent records that render nothing, so a shape it cannot read is visible', () => {
+    // A payload this build's reader returns nothing for.
+    const shapeless = rec('assistant', { kind: 'assistant', content: [] }, 'claude_code')
+    expect(reshapeTranscript([shapeless], 0)).toEqual({ items: [], undisplayed: 1 })
+    expect(reshapeTranscript([assistant('fine'), shapeless], 0).undisplayed).toBe(1)
+    // A harness this build has no reader for at all: recordToItems returns
+    // undefined for an unknown record_format, which must count, not throw.
+    const future = {
+      ...rec('assistant', { kind: 'assistant' }, 'grok'),
+      record_format: 'grok_native@1',
+    }
+    expect(reshapeTranscript([future], 0)).toEqual({ items: [], undisplayed: 1 })
+    // A payload the reader THROWS on (an unknown kind reaches blocksOf) costs
+    // one row, never the whole transcript.
+    const hostile = rec('assistant', { kind: 'video' }, 'claude_code')
+    expect(reshapeTranscript([assistant('before'), hostile], 0)).toEqual({
+      items: [expect.objectContaining({ text: 'before' })],
+      undisplayed: 1,
+    })
+    // A readable transcript never warns, and a silent-by-design init doesn't count.
+    expect(reshapeTranscript([assistant('fine'), result()], 0).undisplayed).toBe(0)
+    expect(
+      reshapeTranscript([rec('system', { type: 'system', subtype: 'init' }, 'claude_code')], 0)
+        .undisplayed,
+    ).toBe(0)
   })
 })
 
