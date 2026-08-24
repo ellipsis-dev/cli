@@ -44,9 +44,9 @@ export interface SessionBarConfig {
   // "unfinished" drops the sessions that completed, errored, or were stopped,
   // leaving the conversations still going. "all" keeps them.
   statuses?: 'all' | 'unfinished'
-  // Only sessions started these ways, e.g. ["cli", "manual"]. Omit for all of
-  // them. Laptop sessions never appear whatever this says: there is nothing in
-  // the cloud to open.
+  // Only sessions started these ways, e.g. ["cli", "manual"]. An empty list
+  // means every source. Laptop sessions never appear whatever this says: there
+  // is nothing in the cloud to open.
   sources?: string[]
 }
 
@@ -234,6 +234,8 @@ export function clearAllTokens(): void {
 // standing in and the last week, which is short enough to read at a glance
 // without hiding a session you are likely to reopen. `repo: 'cwd'` falls back
 // to every repository outside a repo, so the bar is never mysteriously empty.
+// The default sources are the ones a person started; `react` and `cron` fire on
+// their own and would bury the sessions you are actually working in.
 export const SESSION_BAR_DEFAULTS: Required<Omit<SessionBarConfig, 'sources'>> & {
   sources: string[] | undefined
 } = {
@@ -241,7 +243,7 @@ export const SESSION_BAR_DEFAULTS: Required<Omit<SessionBarConfig, 'sources'>> &
   days: 7,
   repo: 'cwd',
   statuses: 'all',
-  sources: undefined,
+  sources: ['manual', 'cli', 'mention'],
 }
 
 export type ResolvedSessionBar = typeof SESSION_BAR_DEFAULTS
@@ -257,7 +259,7 @@ export function sessionBar(): ResolvedSessionBar {
   if (!raw || typeof raw !== 'object') return { ...SESSION_BAR_DEFAULTS }
   const sources = Array.isArray(raw.sources)
     ? raw.sources.filter((s) => SESSION_SOURCES.includes(s))
-    : undefined
+    : null
   return {
     hidden: raw.hidden === true,
     days:
@@ -269,9 +271,10 @@ export function sessionBar(): ResolvedSessionBar {
       raw.statuses === 'unfinished' || raw.statuses === 'all'
         ? raw.statuses
         : SESSION_BAR_DEFAULTS.statuses,
-    // An explicit [] would list nothing at all, which no one means; treat it
-    // as "every source", the same as leaving the key out.
-    sources: sources && sources.length > 0 ? sources : undefined,
+    // An explicit [] would list nothing at all, which no one means; treat it as
+    // "every source" — the only way to ask for the automated ones too. Leaving
+    // the key out keeps the human-started default.
+    sources: sources === null ? SESSION_BAR_DEFAULTS.sources : sources.length > 0 ? sources : undefined,
   }
 }
 
