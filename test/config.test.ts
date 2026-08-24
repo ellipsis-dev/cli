@@ -260,6 +260,11 @@ describe('sessionBar', () => {
     expect(sessionBar().sources).toBeUndefined()
   })
 
+  it('defaults to the human-started sources when the key is absent', () => {
+    writeConfig({ version: 2, hosts: {}, sessionBar: { days: 3 } })
+    expect(sessionBar().sources).toEqual(['manual', 'cli', 'mention'])
+  })
+
   it('takes days 0 as "no age cutoff", not as a missing value', () => {
     writeConfig({ version: 2, hosts: {}, sessionBar: { days: 0 } })
     expect(sessionBar().days).toBe(0)

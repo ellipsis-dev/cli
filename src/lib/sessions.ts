@@ -1,5 +1,6 @@
 import { sessionStatusWord } from '@ellipsis-dev/sdk/stream'
 import type { Session as FrameSession } from '@ellipsis-dev/sdk'
+import { SESSION_BAR_DEFAULTS } from './config'
 import { theme } from './theme'
 import type {
   AgentSession,
@@ -212,9 +213,9 @@ export function sessionBarQuery(
 export const SESSION_BAR_FETCH = 50
 
 // The picker header's description of the bar's active filters — the answer to
-// "where are the rest of my sessions?". Mirrors sessionBarQuery exactly: a
-// clause appears here iff the matching filter went into the query. null when
-// the list is unfiltered.
+// "where are the rest of my sessions?". Mirrors sessionBarQuery, with one
+// exception: the default sources are not named, since "manual/cli/mention" is
+// what everyone sees and answers no question. null when there is nothing to say.
 export function sessionBarFilterLabel(
   bar: {
     days: number
@@ -228,7 +229,10 @@ export function sessionBarFilterLabel(
   if (bar.repo === 'cwd' && detectedRepo) clauses.push(detectedRepo)
   if (bar.days > 0) clauses.push(`last ${bar.days === 1 ? 'day' : `${bar.days} days`}`)
   if (bar.statuses === 'unfinished') clauses.push('unfinished')
-  if (bar.sources) clauses.push(`source ${bar.sources.join('/')}`)
+  const sources = bar.sources?.join('/')
+  if (sources && sources !== SESSION_BAR_DEFAULTS.sources?.join('/')) {
+    clauses.push(`source ${sources}`)
+  }
   if (clauses.length === 0) return null
   return `filtering to ${clauses.join(' · ')}`
 }
