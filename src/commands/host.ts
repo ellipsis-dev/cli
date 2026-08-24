@@ -58,7 +58,7 @@ export function registerHost(program: Command): void {
     )
     .action((name: string, apiUrl: string, opts: { appBase?: string }) => {
       addHost(name, requireUrl(apiUrl, 'api-url'), opts.appBase && requireUrl(opts.appBase, '--app-base'))
-      console.log(`✓ added host "${name}" · now active`)
+      console.log(`✓ added host "${name}", now active`)
       console.log('Run `agent login` to authenticate against it.')
     })
 

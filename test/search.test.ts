@@ -268,7 +268,7 @@ describe('recordText / formatStepLine', () => {
         { source: 'lifecycle', record_type: 'sandbox_ready', stream_seq: -2 },
       ),
     )
-    expect(ready).toContain('Sandbox ready · acme/repo · full build')
+    expect(ready).toContain('Sandbox ready, acme/repo, full build')
     // A sandbox-output chunk reads as the script's latest non-empty line.
     const chunk = formatStepLine(
       record(
@@ -276,7 +276,7 @@ describe('recordText / formatStepLine', () => {
         { source: 'lifecycle', record_type: 'sandbox_output', stream_seq: -3 },
       ),
     )
-    expect(chunk).toContain('setup · Installing pandas (3.0.3)')
+    expect(chunk).toContain('setup, Installing pandas (3.0.3)')
   })
 
   it('truncates long text to about 120 characters', () => {

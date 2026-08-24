@@ -61,8 +61,8 @@ export function isActiveStatusWord(word: string): boolean {
 
 // The sidebar row's status marker: one dot, status told by color alone (the
 // arrow shape belongs to the selection cursor):
-//   ● amber: in flight   · ● bone: your move (waiting) · ● dim: sleeping
-//   ● green: done/closed · ● red: failed · ● dim red: stopped/cancelled
+//   ● amber: in flight, ● bone: your move (waiting), ● dim: sleeping
+//   ● green: done/closed, ● red: failed, ● dim red: stopped/cancelled
 export function rowGlyph(word: string): { glyph: string; color?: string; dim: boolean } {
   if (isActiveStatusWord(word)) return { glyph: '●', color: theme.active, dim: false }
   if (word === 'waiting') return { glyph: '●', color: theme.foreground, dim: false }
@@ -123,7 +123,7 @@ export function rowMeta(session: AgentSession, now: Date = new Date()): string {
   const millicents = session.cost?.total ?? 0
   if (millicents > 0) bits.push(`$${(millicents / 100_000).toFixed(2)}`)
   bits.push(shortAge(lastEventAt(session), now))
-  return bits.join(' · ')
+  return bits.join(', ')
 }
 
 // The agent identity to show for a session: the config's own name, else the id
@@ -234,7 +234,7 @@ export function sessionBarFilterLabel(
     clauses.push(`source ${sources}`)
   }
   if (clauses.length === 0) return null
-  return `filtering to ${clauses.join(' · ')}`
+  return `filtering to ${clauses.join(', ')}`
 }
 
 // The launcher's live filter: which sessions match the typed text. Matches

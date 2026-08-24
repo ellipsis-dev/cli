@@ -251,7 +251,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
         const entry: ChatEntry = {
           store,
           canSend: c.canSend,
-          notice: [notice, c.reason].filter(Boolean).join(' · ') || null,
+          notice: [notice, c.reason].filter(Boolean).join(', ') || null,
           model: session.tokens?.model || null,
           configName: configName ?? sessionConfigName(session),
           url: sessionUrl(appBase, customerLogin, sessionId),
@@ -493,7 +493,7 @@ type LauncherCursor =
 //    |
 //
 //    Recent sessions:                                    @me in account
-//    ● latest session                               $0.20 · 2m ago
+//    ● latest session                               $0.20, 2m ago
 //    ● …                                   (LIST_ROWS rows; scrolls)
 //
 // ONE input, two readings: what you type is the next session's prompt AND a
@@ -999,7 +999,7 @@ function Launcher({
           // The meta tag rides the right edge; the description takes what's
           // left and truncates, so a long prompt can never push the tag off
           // the row.
-          const meta = `${rowMeta(s)}${attention.has(s.id) ? ' · needs you' : ''}`
+          const meta = `${rowMeta(s)}${attention.has(s.id) ? ', needs you' : ''}`
           const descW = Math.max(8, width - meta.length - 8)
           return (
             <Box key={s.id} width={width}>

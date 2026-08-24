@@ -165,7 +165,7 @@ describe('rowMeta', () => {
       cost: { llm: 30_000, sandbox_cpu: 10_000, sandbox_memory: 2_000, fee: 0, total: 42_000 },
       updated_at: '2026-07-23T11:58:00Z',
     } as never)
-    expect(rowMeta(s, now)).toBe('$0.42 · 2m ago')
+    expect(rowMeta(s, now)).toBe('$0.42, 2m ago')
   })
 
   it('drops the spend a fresh session has none of', () => {

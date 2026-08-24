@@ -108,7 +108,7 @@ export async function runConnect(
   const canSend = readOnly ? false : c.canSend
   const reason =
     readOnly && c.canSend ? 'read-only (--no-input): following without the composer' : c.reason
-  const notice = [startupNotice, reason].filter(Boolean).join(' · ') || null
+  const notice = [startupNotice, reason].filter(Boolean).join(', ') || null
   const url = sessionUrl(resolveAppBase(), me.customer_login, sessionId)
   // The config identity for the footer meta line: the caller's resolved name
   // first, then whatever the session itself carries.

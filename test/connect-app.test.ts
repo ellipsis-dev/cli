@@ -265,7 +265,7 @@ describe('deriveSandboxState', () => {
       0,
     )
     expect(timed?.readySeconds).toBe(42)
-    expect(sandboxSummary(timed)).toBe('Sandbox ready in 42s · 2 log lines')
+    expect(sandboxSummary(timed)).toBe('Sandbox ready in 42s')
 
     // An old feed whose sandbox_ready carried no timings: no invented duration.
     const untimed = deriveSandboxState(
@@ -273,7 +273,7 @@ describe('deriveSandboxState', () => {
       0,
     )
     expect(untimed?.readySeconds).toBeNull()
-    expect(sandboxSummary(untimed)).toBe('Sandbox started · 1 log line')
+    expect(sandboxSummary(untimed)).toBe('Sandbox started')
   })
 
   it('shows Retrying as the headline and drops the failed start log', () => {
@@ -285,7 +285,7 @@ describe('deriveSandboxState', () => {
       ],
       0,
     )
-    expect(state?.headline).toBe('Retrying · sandbox provisioning failed')
+    expect(state?.headline).toBe('Retrying, sandbox provisioning failed')
     expect(state?.done).toBe(false)
     expect(state?.log).toHaveLength(0)
   })
@@ -524,14 +524,14 @@ describe('sessionLogText', () => {
   it('logs an infra retry distinctly from a wake', () => {
     expect(sessionLogText(lc('session_starting', { attempt: 1 }))).toContain('transient error')
     expect(sessionLogText(lc('session_retrying', { reason: 'node lost' }))).toBe(
-      'Retrying · node lost',
+      'Retrying, node lost',
     )
   })
 
   it('logs a cancellation with its reason when there is one', () => {
     expect(sessionLogText(lc('session_cancelled', {}))).toBe('Session cancelled')
     expect(sessionLogText(lc('session_cancelled', { reason: 'budget' }))).toBe(
-      'Session cancelled · budget',
+      'Session cancelled, budget',
     )
   })
 

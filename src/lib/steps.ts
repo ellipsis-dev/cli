@@ -1,10 +1,18 @@
-import { lifecycleText, oneLine } from '@ellipsis-dev/sdk/store'
+import { lifecycleText as sdkLifecycleText, oneLine } from '@ellipsis-dev/sdk/store'
 import { formatTs } from './output'
 import type { SessionRecord } from './types'
 
 // Re-exported for the record-view callers below and their historical
 // importers; the implementations live in the SDK's store layer now.
-export { lifecycleText, oneLine, sandboxOutputStep, sandboxOutputLine } from '@ellipsis-dev/sdk/store'
+export { oneLine, sandboxOutputStep, sandboxOutputLine } from '@ellipsis-dev/sdk/store'
+
+// The SDK's lifecycle wording, with its middot separators as commas — the CLI
+// writes plain sentences.
+export function lifecycleText(
+  ...args: Parameters<typeof sdkLifecycleText>
+): string | null {
+  return sdkLifecycleText(...args)?.replaceAll(' · ', ', ') ?? null
+}
 
 // Record-rendering helpers shared by `session records` and `session connect`
 // (moved out of commands/session.tsx so connect.ts can use them without an

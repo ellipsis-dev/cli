@@ -17,7 +17,6 @@ import {
   cacheTierLabel,
   collapseToolRuns,
   foldCosts,
-  lifecycleText,
   pendingToolCalls,
   recordToItems,
   sandboxOutputLines,
@@ -28,6 +27,7 @@ import {
   type SessionTranscriptStore,
   type TranscriptItem,
 } from '@ellipsis-dev/sdk/store'
+import { lifecycleText } from '../lib/steps'
 import { errorDetail } from '../lib/api'
 import type { Ellipsis } from '@ellipsis-dev/sdk'
 import { hyperlink } from '../lib/urls'
@@ -586,7 +586,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
       if (isCommandInput(text)) {
         const command = resolveCommand(text)
         if (!command) {
-          setNotice(`✗ no such command: ${text.split(/\s/)[0]} · type / to see them`)
+          setNotice(`✗ no such command: ${text.split(/\s/)[0]}, type / to see them`)
           return
         }
         if (command.id === 'exit') {
@@ -595,7 +595,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         }
         if (command.id === 'sessions') {
           if (props.onFocusNav) props.onFocusNav()
-          else setNotice('no other sessions here · this is a single-session connect')
+          else setNotice('no other sessions here, this is a single-session connect')
           return
         }
       }
@@ -721,7 +721,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     // A pane with no room for chat + composer + notice drops the notice
     // entirely: overflowing the frame would smear the whole app.
     const noticeRows = shownNotice
-      ? Math.max(0, Math.min(fitLines(`· ${shownNotice}`, cols).length, free - 2))
+      ? Math.max(0, Math.min(fitLines(shownNotice, cols).length, free - 2))
       : 0
     free -= noticeRows
     // The command menu, one row per match, budgeted like everything else: it
@@ -1168,7 +1168,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
             detail) can't grow the frame past the pane. */}
         {shownNotice && noticeRows > 0 && (
           <Box height={noticeRows} flexShrink={0} overflow="hidden">
-            <Text color={theme.muted}>· {shownNotice}</Text>
+            <Text color={theme.muted}>{shownNotice}</Text>
           </Box>
         )}
         {/* The slash-command menu, directly above the input it completes: one
@@ -1321,7 +1321,7 @@ function sessionBreakRow(sessionId: string, cols: number): TranscriptRow {
 // Once it settles it becomes a STATIC record of one past event — a cloud agent
 // was started — compressed the way a tool call is, and it never moves again:
 //     ✦ Cloud agent session on ellipsis.dev
-//       ⎿  Sandbox ready in 42s · 31 log lines
+//       ⎿  Sandbox ready in 42s
 //
 // Live status (asleep/awake) deliberately stays OUT of it: the block narrates
 // the start, and a session that fell asleep an hour later says so on its own
@@ -1431,17 +1431,12 @@ function sandboxRows(o: {
 }
 
 // The whole start compressed to one line, for the settled block: how long the
-// sandbox took and how much log it produced. Falls back to "Sandbox started"
-// when no timing can be derived — an old feed whose sandbox_ready carried no
-// phase_timings, or a wake, where the duration was never ours to know. Pure,
-// for tests.
+// sandbox took. Falls back to "Sandbox started" when no timing can be derived —
+// an old feed whose sandbox_ready carried no phase_timings, or a wake, where the
+// duration was never ours to know. Pure, for tests.
 export function sandboxSummary(sandbox: SandboxState | null): string {
   const seconds = sandbox?.readySeconds ?? null
-  const lines = sandbox?.log.length ?? 0
-  return [
-    seconds ? `Sandbox ready in ${humanDuration(seconds)}` : 'Sandbox started',
-    ...(lines > 0 ? [`${lines} log line${lines === 1 ? '' : 's'}`] : []),
-  ].join(' · ')
+  return seconds ? `Sandbox ready in ${humanDuration(seconds)}` : 'Sandbox started'
 }
 
 // The tail of the startup log: the last `max` lines, which is what you want
@@ -1624,12 +1619,12 @@ export function sessionLogText(record: LifecycleRecordLike): string | null {
     }
     case 'session_retrying':
       return typeof p.reason === 'string' && p.reason
-        ? `Retrying · ${p.reason}`
+        ? `Retrying, ${p.reason}`
         : 'Retrying after a transient error…'
     case 'session_resumed':
       return 'Session awake'
     case 'session_cancelled': {
-      const reason = typeof p.reason === 'string' && p.reason ? ` · ${p.reason}` : ''
+      const reason = typeof p.reason === 'string' && p.reason ? `, ${p.reason}` : ''
       return `Session cancelled${reason}`
     }
     default:
