@@ -50,8 +50,8 @@ import { ConnectApp } from './ConnectApp'
 //     transcript is printed into the terminal's real scrollback, so the
 //     wheel, the trackpad and select/copy are the terminal's own.
 //
-// esc in the chat returns to the launcher (the launcher paints below the
-// settled transcript); enter on a session replaces the launcher with its chat.
+// esc in the chat clears the screen and returns to the launcher; enter on a
+// session replaces the launcher with its chat.
 // Exactly one useInput handler is active at a time.
 //
 // Liveness: ONE WebSocket — the focused session's, owned by its ConnectApp —
@@ -121,7 +121,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   const { api, openSocket, appBase, customerLogin, authorId, sessionBar } = props
   const hideList = sessionBar.hidden
   const { isRawModeSupported } = useStdin()
-  const { stdout } = useStdout()
+  const { stdout, write } = useStdout()
 
   const [termCols, setTermCols] = useState(stdout?.columns ?? 80)
   useEffect(() => {
@@ -349,9 +349,16 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
     setMainPane({ type: 'chat', sessionId })
   }, [])
 
+  // Leaving a chat wipes the screen and the scrollback. The chat's settled rows
+  // were printed into the terminal's own scrollback (<Static>), so they cannot
+  // be un-printed: without this the launcher would paint under half a
+  // transcript. Clearing also empties shownChats, so the next chat opens on a
+  // clean screen with no session-break rule above it.
   const toLauncher = useCallback((): void => {
+    write('\x1b[2J\x1b[3J\x1b[H')
+    shownChats.current.clear()
     setMainPane({ type: 'launcher' })
-  }, [])
+  }, [write])
   const refreshOnDone = useCallback((): void => {
     void poll()
   }, [poll])
