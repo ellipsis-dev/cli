@@ -1,4 +1,10 @@
-import { lifecycleText as sdkLifecycleText, oneLine } from '@ellipsis-dev/sdk/store'
+import {
+  deriveSandboxState as sdkDeriveSandboxState,
+  lifecycleText as sdkLifecycleText,
+  sessionLogText as sdkSessionLogText,
+  oneLine,
+  type SandboxState,
+} from '@ellipsis-dev/sdk/store'
 import { formatTs } from './output'
 import type { SessionRecord } from './types'
 
@@ -6,12 +12,34 @@ import type { SessionRecord } from './types'
 // importers; the implementations live in the SDK's store layer now.
 export { oneLine, sandboxOutputStep, sandboxOutputLine } from '@ellipsis-dev/sdk/store'
 
-// The SDK's lifecycle wording, with its middot separators as commas — the CLI
-// writes plain sentences.
+// The SDK's wording, with its middot separators as commas — the CLI writes
+// plain sentences.
+const commas = (text: string): string => text.replaceAll(' · ', ', ')
+
 export function lifecycleText(
   ...args: Parameters<typeof sdkLifecycleText>
 ): string | null {
-  return sdkLifecycleText(...args)?.replaceAll(' · ', ', ') ?? null
+  const text = sdkLifecycleText(...args)
+  return text === null ? null : commas(text)
+}
+
+export function sessionLogText(
+  ...args: Parameters<typeof sdkSessionLogText>
+): string | null {
+  const text = sdkSessionLogText(...args)
+  return text === null ? null : commas(text)
+}
+
+export function deriveSandboxState(
+  ...args: Parameters<typeof sdkDeriveSandboxState>
+): SandboxState | null {
+  const state = sdkDeriveSandboxState(...args)
+  if (!state) return null
+  return {
+    ...state,
+    headline: commas(state.headline),
+    log: state.log.map((line) => ({ ...line, text: commas(line.text) })),
+  }
 }
 
 // Record-rendering helpers shared by `session records` and `session connect`
