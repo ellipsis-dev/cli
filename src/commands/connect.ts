@@ -1,8 +1,7 @@
 import type { Command } from 'commander'
 import React from 'react'
 import { render } from 'ink'
-import { SessionTranscriptStore } from '@ellipsis-dev/sdk/store'
-import { SESSION_STREAM_PROTOCOL_VERSION } from '@ellipsis-dev/sdk/stream'
+import { SessionTranscriptStore, seedTranscriptStore } from '@ellipsis-dev/sdk/store'
 import { api } from '../lib/api'
 import { requireToken, resolveApiBase, resolveAppBase } from '../lib/config'
 import { runAction } from '../lib/output'
@@ -118,26 +117,21 @@ export async function runConnect(
   // The footer carries the session identity/status; a watch-only reason
   // surfaces as the app's notice.
 
-  // Seed ONE transcript store with the stored records and the fetched session
-  // — synthetic frames through the same ingest path the live stream uses, so
-  // the first paint is instant and streamSession resumes past the seeded
+  // Seed ONE transcript store with the stored records and the fetched session,
+  // so the first paint is instant and streamSession resumes past the seeded
   // cursor instead of replaying history. --no-records skips *rendering* the
   // seeded history (minRenderFeedSeq), not re-streaming it.
   const store = new SessionTranscriptStore()
   const page = (await client.sessions.records(sessionId)).response
-  const ordered = [...page.records].sort((a, b) => a.feed_seq - b.feed_seq)
-  // Seed the session + open inbox as a synthetic snapshot frame (protocol v3:
-  // the store folds the inbox from the snapshot projection and the message_*
-  // records that ride the feed), then replay the records to advance the cursor
-  // so streamSession resumes past the seeded history rather than re-replaying.
-  store.ingest({
-    type: 'snapshot',
-    protocol: SESSION_STREAM_PROTOCOL_VERSION,
-    earliest_feed_seq: page.earliest_feed_seq ?? null,
+  // The cast bridges the SDK's two generated flavors of the same wire shape:
+  // REST responses mark nullable fields optional, the frame types require
+  // them. Identical JSON either way.
+  seedTranscriptStore(store, {
     session,
-    messages: page.messages ?? [],
-  })
-  if (ordered.length) store.ingest({ type: 'records_append', records: ordered })
+    records: page.records,
+    messages: page.messages,
+    earliestFeedSeq: page.earliest_feed_seq,
+  } as Parameters<typeof seedTranscriptStore>[1])
 
   // Written by the app when it exits because the conversation closed (terminal;
   // nothing left to reconnect to), so the detach sign-off below stays honest.

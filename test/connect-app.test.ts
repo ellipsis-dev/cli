@@ -1,17 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import {
-  awaitingAgentPhase,
-  cursorLineDown,
-  cursorLineUp,
-  deliveredUnechoedSends,
-  deriveSandboxState,
-  lastLines,
-  hookPhrase,
-  humanDuration,
-  reshapeTranscript,
-  sandboxSummary,
-  sessionLogText,
-} from '../src/ui/ConnectApp'
+import { groupRecordsToChatTurns } from '@ellipsis-dev/sdk/store'
+import { cursorLineDown, cursorLineUp } from '../src/ui/ConnectApp'
+import { chatTurnsToItems, undisplayedRecordCount } from '../src/lib/chatItems'
+import { deriveSandboxState, sessionLogText } from '../src/lib/steps'
 import {
   gutterFor,
   itemRows,
@@ -27,12 +18,15 @@ import { theme } from '../src/lib/theme'
 import type { TranscriptItem } from '@ellipsis-dev/sdk/store'
 
 let seq = 0
-// `record_format` is what recordToItems switches on, so a fixture carries the
-// same token the wire does: claude_sdk@1 for agent records, ellipsis_lifecycle@1
-// for platform ones.
+// `record_format` is what recordToItems and groupRecordsToChatTurns switch on,
+// so a fixture carries the same token the wire does: claude_sdk@1 for agent
+// records, ellipsis_lifecycle@1 for platform ones.
 function rec(recordType: string, payload: Record<string, unknown> = {}, source = 'lifecycle') {
+  const feed = ++seq
   return {
-    feed_seq: ++seq,
+    id: `rec${feed}`,
+    created_at: '2026-01-01T00:00:00Z',
+    feed_seq: feed,
     source,
     record_type: recordType,
     record_format: source === 'lifecycle' ? 'ellipsis_lifecycle@1' : 'claude_sdk@1',
@@ -40,541 +34,198 @@ function rec(recordType: string, payload: Record<string, unknown> = {}, source =
   }
 }
 
-describe('deriveSandboxState', () => {
-  // The whole startup story is ONE flat log, in feed order — the shape that
-  // replaced the old session → sandbox → phase → per-phase-tail tree.
+// The derivations themselves (deriveSandboxState, awaitingAgentPhase,
+// deliveredUnechoedSends, lastLines, humanDuration, hookPhrase, …) are the
+// SDK's now, tested there with its middot wording. What the CLI owns is the
+// comma wording: src/lib/steps.ts wraps the SDK functions and swaps ' · '
+// separators for ', ', so the terminal reads plain sentences.
+describe('deriveSandboxState comma wording', () => {
   const texts = (state: ReturnType<typeof deriveSandboxState>) =>
     (state?.log ?? []).map((l) => l.text)
-  const kinds = (state: ReturnType<typeof deriveSandboxState>) =>
-    (state?.log ?? []).map((l) => l.kind)
 
-  it('returns null before any lifecycle record', () => {
-    expect(deriveSandboxState([], 0)).toBeNull()
-    expect(deriveSandboxState([rec('assistant', {}, 'claude_code')], 0)).toBeNull()
-  })
-
-  it('walks the live headline: scheduled → starting → done', () => {
-    const scheduled = deriveSandboxState([rec('session_scheduled', { source: 'cli' })], 0)
-    expect(scheduled?.headline).toBe('Session scheduled…')
-    expect(scheduled?.done).toBe(false)
-
-    const starting = deriveSandboxState(
-      [
-        rec('session_scheduled', { source: 'cli', config_name: 'my-agent' }),
-        rec('session_starting', { attempt: 0, wake_index: 0 }),
-      ],
-      0,
-    )
-    expect(starting?.headline).toBe('Starting cloud agent…')
-    expect(starting?.done).toBe(false)
-
-    const ready = deriveSandboxState(
-      [
-        rec('session_starting', { attempt: 0, wake_index: 0 }),
-        rec('sandbox_starting', {}),
-        rec('sandbox_ready', { cache_tier: 'exact' }),
-      ],
-      0,
-    )
-    expect(ready?.done).toBe(true)
-    expect(ready?.sandboxDone).toBe(true)
-  })
-
-  it('heads the log with the config, and keeps it across the starting transition', () => {
-    const state = deriveSandboxState(
-      [
-        rec('session_scheduled', {
-          source: 'cli',
-          config_name: 'deployer',
-          config_commit_sha: 'abc1234def5678',
-        }),
-        rec('session_starting', { attempt: 0, wake_index: 0 }),
-      ],
-      0,
-    )
-    // The config outlives the restart that clears the log below it.
-    expect(state?.headline).toBe('Starting cloud agent…')
-    expect(state?.configName).toBe('deployer')
-    expect(texts(state)[0]).toBe('Using deployer @ abc1234')
-  })
-
-  it('logs each phase as ONE line, opened then closed in place', () => {
+  it('writes phase readouts comma-separated, not middot-separated', () => {
     const state = deriveSandboxState(
       [
         rec('sandbox_starting', { repositories: ['o/r'] }),
-        rec('sandbox_phase', { phase: 'image', status: 'started' }),
         rec('sandbox_phase', {
           phase: 'image',
           status: 'completed',
           duration_ms: 1200,
           detail: { cache_tier: 'exact' },
         }),
-        rec('sandbox_phase', { phase: 'clone', status: 'started' }),
-      ],
-      0,
-    )
-    // Not "Preparing image…" AND "Preparing image ✓" — the same line closes.
-    expect(texts(state)).toEqual([
-      'Starting sandbox…',
-      'Preparing image, cached image, 1.2s',
-      'Fetching repositories…',
-    ])
-    expect(kinds(state)).toEqual(['step', 'done', 'step'])
-  })
-
-  it('puts build and setup OUTPUT in the same flat log, in order', () => {
-    const state = deriveSandboxState(
-      [
-        rec('sandbox_phase', { phase: 'image', step: 'build', status: 'started' }),
-        rec('sandbox_output', { phase: 'image', step: 'build', chunk: 0, lines: ['#1 FROM base'] }),
-        rec('sandbox_output', { phase: 'image', step: 'build', chunk: 1, lines: ['#2 RUN npm ci'] }),
-        rec('sandbox_phase', {
-          phase: 'image',
-          step: 'build',
-          status: 'completed',
-          duration_ms: 42000,
-        }),
-        rec('sandbox_phase', { phase: 'hooks', step: 'post_clone', status: 'started' }),
-        rec('sandbox_output', { phase: 'hooks', step: 'post_clone', chunk: 0, lines: ['npm ci'] }),
-      ],
-      0,
-    )
-    // This is the point of the flat log: the output you want while a session
-    // is slow to start is right there, not three keystrokes deep.
-    expect(texts(state)).toEqual([
-      'Building image, 42s',
-      '#1 FROM base',
-      '#2 RUN npm ci',
-      'Post-clone setup…',
-      'npm ci',
-    ])
-    expect(kinds(state)).toEqual(['done', 'output', 'output', 'step', 'output'])
-  })
-
-  it('logs output that arrives with no phase transition to open it', () => {
-    const state = deriveSandboxState(
-      [
-        rec('sandbox_starting'),
-        rec('sandbox_output', { phase: 'setup', chunk: 0, lines: ['a'] }),
-        rec('sandbox_output', { phase: 'setup', chunk: 1, lines: ['b', 'c'] }),
-      ],
-      0,
-    )
-    expect(texts(state)).toEqual(['Starting sandbox…', 'a', 'b', 'c'])
-  })
-
-  it('labels phases through the open vocabulary, unknown ones verbatim', () => {
-    expect(
-      texts(deriveSandboxState([rec('sandbox_phase', { phase: 'warmup', status: 'started' })], 0)),
-    ).toEqual(['Warmup…'])
-    expect(
-      texts(
-        deriveSandboxState(
-          [rec('sandbox_phase', { phase: 'image', step: 'warm_cache', status: 'started' })],
-          0,
-        ),
-      ),
-    ).toEqual(['warm_cache…'])
-  })
-
-  it('marks a failed phase and keeps its duration', () => {
-    const state = deriveSandboxState(
-      [
-        rec('sandbox_phase', { phase: 'setup', status: 'started' }),
-        rec('sandbox_phase', { phase: 'setup', status: 'failed', duration_ms: 4000 }),
-      ],
-      0,
-    )
-    expect(texts(state)).toEqual(['Running setup failed, 4s'])
-    expect(kinds(state)).toEqual(['failed'])
-  })
-
-  it('closes on sandbox_ready with the phase_timings total, not step durations', () => {
-    const state = deriveSandboxState(
-      [
-        rec('session_scheduled', { source: 'cli' }),
-        rec('session_starting', { attempt: 0, wake_index: 0 }),
-        rec('sandbox_starting', { repositories: ['o/r'] }),
-        rec('sandbox_phase', { phase: 'image', status: 'started' }),
         rec('sandbox_ready', {
-          repositories: ['o/r'],
           cache_tier: 'exact',
           phase_timings: { image: 1.5, clone: 27.5 },
         }),
       ],
       0,
     )
-    expect(state?.done).toBe(true)
-    expect(state?.sandboxDone).toBe(true)
-    expect(state?.readySeconds).toBe(29)
     expect(texts(state)).toEqual([
       'Starting sandbox…',
-      'Preparing image…',
+      'Preparing image, cached image, 1.2s',
       'Sandbox ready, cached image, 29s',
     ])
-    // A phase still open when the box came up is no longer live.
-    expect(kinds(state)).toEqual(['step', 'done', 'done'])
   })
 
-  it('starts a fresh log on a wake, dropping the previous start', () => {
-    const state = deriveSandboxState(
-      [
-        rec('session_scheduled', { source: 'cli' }),
-        rec('session_starting', { attempt: 0, wake_index: 0 }),
-        rec('sandbox_starting'),
-        rec('sandbox_output', { phase: 'setup', chunk: 0, lines: ['old'] }),
-        rec('sandbox_ready', {}),
-        rec('session_idle', {}),
-        rec('session_starting', { attempt: 0, wake_index: 1 }),
-        rec('sandbox_starting'),
-        rec('sandbox_phase', { phase: 'restore', status: 'started' }),
-      ],
-      0,
-    )
-    expect(state?.headline).toBe('Waking the session…')
-    expect(state?.done).toBe(false)
-    expect(texts(state)).toEqual(['Starting sandbox…', 'Restoring workspace…'])
-
-    const resumed = deriveSandboxState(
-      [
-        rec('session_starting', { attempt: 0, wake_index: 1 }),
-        rec('sandbox_starting'),
-        rec('sandbox_ready', { cache_tier: 'exact' }),
-        rec('session_resumed', { wake_index: 1 }),
-      ],
-      0,
-    )
-    expect(resumed?.done).toBe(true)
-  })
-
-  it('settles on session_idle WITHOUT rewriting the headline', () => {
-    // The block narrates the START. Folding live status into it made an old
-    // session's opening line read "Session asleep", which is not what happened
-    // first — the sleep has its own transcript line further down.
+  it('writes the retry headline comma-separated', () => {
     const state = deriveSandboxState(
       [
         rec('session_starting', { attempt: 0, wake_index: 0 }),
-        rec('sandbox_starting'),
-        rec('sandbox_ready', {}),
-        rec('session_idle', {}),
-      ],
-      0,
-    )
-    expect(state?.headline).toBe('Starting cloud agent…')
-    expect(state?.done).toBe(true)
-  })
-
-  it('summarizes a settled start in one line, dropping unknown timings', () => {
-    const timed = deriveSandboxState(
-      [
-        rec('session_starting', { attempt: 0, wake_index: 0 }),
-        rec('sandbox_starting'),
-        rec('sandbox_ready', { phase_timings: { image: 12, clone: 30 } }),
-      ],
-      0,
-    )
-    expect(timed?.readySeconds).toBe(42)
-    expect(sandboxSummary(timed)).toBe('Sandbox ready in 42s')
-
-    // An old feed whose sandbox_ready carried no timings: no invented duration.
-    const untimed = deriveSandboxState(
-      [rec('session_starting', { attempt: 0, wake_index: 0 }), rec('sandbox_ready', {})],
-      0,
-    )
-    expect(untimed?.readySeconds).toBeNull()
-    expect(sandboxSummary(untimed)).toBe('Sandbox started')
-  })
-
-  it('shows Retrying as the headline and drops the failed start log', () => {
-    const state = deriveSandboxState(
-      [
-        rec('session_starting', { attempt: 0, wake_index: 0 }),
-        rec('sandbox_starting'),
         rec('session_retrying', { reason: 'sandbox provisioning failed', attempt: 1 }),
       ],
       0,
     )
     expect(state?.headline).toBe('Retrying, sandbox provisioning failed')
-    expect(state?.done).toBe(false)
-    expect(state?.log).toHaveLength(0)
   })
 
-  it('ignores records at or below the render cursor (--no-records)', () => {
-    const starting = rec('sandbox_starting')
-    const ready = rec('sandbox_ready', {})
-    expect(deriveSandboxState([starting, ready], ready.feed_seq)).toBeNull()
+  it('passes null through — no lifecycle records means no block', () => {
+    expect(deriveSandboxState([], 0)).toBeNull()
   })
 })
 
-describe('lastLines', () => {
-  const log = Array.from({ length: 25 }, (_, i) => ({
-    key: `k${i}`,
-    kind: 'output' as const,
-    text: `line ${i}`,
-  }))
-
-  it('keeps the NEWEST lines — the tail is what you watch during a build', () => {
-    expect(lastLines(log, 10).map((l) => l.text)).toEqual([
-      'line 15','line 16','line 17','line 18','line 19',
-      'line 20','line 21','line 22','line 23','line 24',
-    ])
-  })
-
-  it('returns everything when the log is shorter than the window', () => {
-    expect(lastLines(log.slice(0, 3), 10)).toHaveLength(3)
-    expect(lastLines([], 10)).toEqual([])
-  })
-})
-
-describe('awaitingAgentPhase', () => {
-  it('is null with no turn in flight — including the bare interactive session', () => {
-    expect(awaitingAgentPhase([])).toBeNull()
-    // A no-prompt `agent` session sits at 'working' status waiting for its
-    // first message: no turn, no Claude Code process, nothing to narrate.
-    expect(awaitingAgentPhase([rec('session_starting'), rec('sandbox_ready')])).toBeNull()
-  })
-
-  it("reports 'boot' for a fresh execution's first turn (Claude Code starting)", () => {
-    expect(
-      awaitingAgentPhase([rec('session_starting'), rec('sandbox_ready'), rec('turn_started')]),
-    ).toBe('boot')
-  })
-
-  it("reports 'turn' through a running turn's lull, even after the harness spoke", () => {
-    expect(
-      awaitingAgentPhase([
-        rec('session_starting'),
-        rec('turn_started'),
-        rec('assistant', {}, 'claude_code'),
-      ]),
-    ).toBe('turn')
-  })
-
-  it('clears when the turn completes or fails', () => {
-    const turn = [
-      rec('turn_started'),
-      rec('assistant', {}, 'claude_code'),
-      rec('turn_completed'),
-    ]
-    expect(awaitingAgentPhase(turn)).toBeNull()
-    expect(awaitingAgentPhase([rec('turn_started'), rec('turn_failed')])).toBeNull()
-  })
-
-  it('resets to boot on a wake (a fresh execution boots the harness again)', () => {
-    expect(
-      awaitingAgentPhase([
-        rec('turn_started'),
-        rec('assistant', {}, 'claude_code'),
-        rec('turn_completed'),
-        rec('session_starting'),
-        rec('turn_started'),
-      ]),
-    ).toBe('boot')
-  })
-})
-
-describe('deliveredUnechoedSends', () => {
-  const received = (id: string, body: string) => rec('message_received', { message_id: id, body })
-  const delivered = (id: string, turn = 't1') =>
-    rec('message_delivered', { message_id: id, turn_id: turn })
-  const requeued = (id: string) => rec('message_requeued', { message_id: id })
-  const turnFailed = (turn = 't1') => rec('turn_failed', { turn_id: turn, turn_index: 0 })
-  const echo = (id: string | null) => ({
-    ...rec('user', {}, 'claude_code'),
-    session_message_id: id,
-  })
-
-  it('bridges the gap between delivery and the user-echo record', () => {
-    expect(deliveredUnechoedSends([received('m1', 'hi'), delivered('m1')])).toEqual([
-      { id: 'm1', body: 'hi', cancelled: false },
-    ])
-  })
-
-  it('marks a send cancelled when the turn that took it died unanswered', () => {
-    expect(
-      deliveredUnechoedSends([received('m1', 'hi'), delivered('m1', 't7'), turnFailed('t7')]),
-    ).toEqual([{ id: 'm1', body: 'hi', cancelled: true }])
-  })
-
-  it('leaves a send waiting when a DIFFERENT turn failed', () => {
-    expect(
-      deliveredUnechoedSends([received('m1', 'hi'), delivered('m1', 't7'), turnFailed('t8')]),
-    ).toEqual([{ id: 'm1', body: 'hi', cancelled: false }])
-  })
-
-  it('retires the send once its echo record lands', () => {
-    expect(deliveredUnechoedSends([received('m1', 'hi'), delivered('m1'), echo('m1')])).toEqual([])
-  })
-
-  it('excludes pending (undelivered) and requeued messages', () => {
-    expect(deliveredUnechoedSends([received('m1', 'hi')])).toEqual([])
-    expect(
-      deliveredUnechoedSends([received('m1', 'hi'), delivered('m1'), requeued('m1')]),
-    ).toEqual([])
-  })
-
-  it('keeps delivery order and ignores unrelated echoes', () => {
-    expect(
-      deliveredUnechoedSends([
-        received('m1', 'first'),
-        received('m2', 'second'),
-        delivered('m1'),
-        delivered('m2'),
-        echo(null),
-      ]),
-    ).toEqual([
-      { id: 'm1', body: 'first', cancelled: false },
-      { id: 'm2', body: 'second', cancelled: false },
-    ])
-  })
-})
-
-describe('reshapeTranscript', () => {
+describe('chatTurnsToItems', () => {
   const assistant = (text: string) =>
     rec('cc', { kind: 'assistant', content: [{ type: 'text', text }] }, 'claude_code')
+  const user = (text: string) => rec('cc', { kind: 'user', content: text }, 'claude_code')
+  const toolCall = (id: string, name = 'Bash', input: Record<string, unknown> = { command: 'ls' }) =>
+    rec('cc', { kind: 'assistant', content: [{ type: 'tool_use', id, name, input }] }, 'claude_code')
+  const toolResult = (id: string, text = 'ok') =>
+    rec(
+      'cc',
+      { kind: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: text }] },
+      'claude_code',
+    )
   const result = (over: Record<string, unknown> = {}) =>
     rec(
       'cc',
       { kind: 'result', duration_ms: 4000, cost_usd: 0.1, is_error: false, ...over },
       'claude_code',
     )
+  const items = (records: ReturnType<typeof rec>[]) =>
+    chatTurnsToItems(groupRecordsToChatTurns(records as never))
 
-  it('drops a turn-closing summary entirely — duration and cost are not conversation', () => {
-    const { items } = reshapeTranscript([assistant('done!'), result()], 0)
-    expect(items.map((i) => i.kind)).toEqual(['assistant'])
+  it('maps prose, user messages and paired tool calls onto transcript items', () => {
+    const out = items([user('do it'), toolCall('t1'), toolResult('t1', 'files'), assistant('done')])
+    expect(out.map((i) => i.kind)).toEqual(['user', 'tool', 'tool_result', 'assistant'])
+    expect(out.map((i) => i.text)).toEqual(['do it', 'Bash', 'files', 'done'])
   })
 
-  it('drops every turn summary across a multi-turn transcript', () => {
-    const { items } = reshapeTranscript(
-      [
-        assistant('one'),
-        result({ cost_usd: 0.1 }),
-        assistant('two'),
-        result({ cost_usd: 0.25, duration_ms: 2000 }),
-      ],
-      0,
-    )
-    expect(items.map((i) => i.text)).toEqual(['one', 'two'])
+  it('renders a still-running tool call without a result row', () => {
+    const out = items([toolCall('t1')])
+    expect(out.map((i) => i.kind)).toEqual(['tool'])
   })
 
-  it('drops a summary with no assistant message before it', () => {
-    expect(reshapeTranscript([result()], 0).items).toEqual([])
+  it('drops a turn-closing summary — duration and cost are not conversation', () => {
+    expect(items([assistant('one'), result(), assistant('two'), result()]).map((i) => i.text))
+      .toEqual(['one', 'two'])
+    expect(items([result()])).toEqual([])
   })
 
-  it('skips records at or below the render cursor (--no-records)', () => {
-    const hidden = [assistant('old'), result({ cost_usd: 0.1 })]
-    const cursor = hidden[hidden.length - 1].feed_seq
-    const { items } = reshapeTranscript(
-      [...hidden, assistant('new'), result({ cost_usd: 0.18 })],
-      cursor,
-    )
-    expect(items.map((i) => i.text)).toEqual(['new'])
-  })
-
-  it('keeps an error summary as its own line under a plain label', () => {
-    const { items } = reshapeTranscript([assistant('oops'), result({ is_error: true })], 0)
-    expect(items.map((i) => i.kind)).toEqual(['assistant', 'summary'])
-    expect(items[1].text).toBe('turn ended with an error')
-    expect(items[1].isError).toBe(true)
+  it('keeps a failed turn as its own red line under a plain label', () => {
+    const out = items([assistant('oops'), result({ is_error: true })])
+    expect(out.map((i) => i.kind)).toEqual(['assistant', 'summary'])
+    expect(out[1].text).toBe('turn ended with an error')
+    expect(out[1].isError).toBe(true)
   })
 
   it('settles the waking line in place instead of logging the wake twice', () => {
+    // The result record closes the turn before the session parks, as on the
+    // wire — an unclosed turn would keep collecting the post-wake response.
     const records = [
       assistant('done for now'),
+      result(),
       rec('session_idle'),
       rec('session_starting', { wake_index: 1 }),
     ]
-    const waking = reshapeTranscript(records, 0)
-    expect(waking.items.map((i) => i.text)).toEqual([
+    const waking = items(records)
+    expect(waking.map((i) => i.text)).toEqual([
       'done for now',
       'Session asleep',
       'Waking the session…',
     ])
-    const awake = reshapeTranscript([...records, rec('session_resumed'), assistant('back')], 0)
-    expect(awake.items.map((i) => i.text)).toEqual([
+    const awake = items([...records, rec('session_resumed'), assistant('back')])
+    expect(awake.map((i) => i.text)).toEqual([
       'done for now',
       'Session asleep',
       'Session awake',
       'back',
     ])
-    // Same key, so settling the line can't slide the scroll anchor.
-    expect(awake.items[2].key).toBe(waking.items[2].key)
+    // Same key, so settling the line can't slide the scroll anchor or
+    // re-print the flushed row.
+    expect(awake[2].key).toBe(waking[2].key)
   })
 
   it('leaves startup detail out of the chat — that story is the startup block', () => {
-    const { items } = reshapeTranscript(
-      [
-        rec('sandbox_starting'),
-        rec('sandbox_phase', { phase: 'setup', status: 'started' }),
-        rec('sandbox_output', { lines: ['installing…'] }),
-        rec('sandbox_ready', { cache_tier: 'exact' }),
-        rec('turn_started'),
-        assistant('hello'),
-      ],
-      0,
-    )
-    expect(items.map((i) => i.text)).toEqual(['hello'])
+    const out = items([
+      rec('sandbox_starting'),
+      rec('sandbox_phase', { phase: 'setup', status: 'started' }),
+      rec('sandbox_output', { lines: ['installing…'] }),
+      rec('sandbox_ready', { cache_tier: 'exact' }),
+      assistant('hello'),
+    ])
+    expect(out.map((i) => i.text)).toEqual(['hello'])
   })
+
+  it('writes lifecycle reasons comma-separated through the wrapper', () => {
+    const out = items([rec('session_retrying', { reason: 'node lost' })])
+    expect(out.map((i) => i.text)).toEqual(['Retrying, node lost'])
+  })
+})
+
+describe('undisplayedRecordCount', () => {
+  const assistant = (text: string) =>
+    rec('cc', { kind: 'assistant', content: [{ type: 'text', text }] }, 'claude_code')
+  const count = (records: ReturnType<typeof rec>[], min = 0) =>
+    undisplayedRecordCount(records as never, min)
 
   it('counts agent records that render nothing, so a shape it cannot read is visible', () => {
     // A payload this build's reader returns nothing for.
     const shapeless = rec('assistant', { kind: 'assistant', content: [] }, 'claude_code')
-    expect(reshapeTranscript([shapeless], 0)).toEqual({ items: [], undisplayed: 1 })
-    expect(reshapeTranscript([assistant('fine'), shapeless], 0).undisplayed).toBe(1)
-    // A harness this build has no reader for at all: recordToItems returns
-    // undefined for an unknown record_format, which must count, not throw.
+    expect(count([shapeless])).toBe(1)
+    expect(count([assistant('fine'), shapeless])).toBe(1)
+    // A harness this build has no reader for at all: recordToItems renders
+    // nothing for an unknown record_format, which must count, not throw.
     const future = {
       ...rec('assistant', { kind: 'assistant' }, 'grok'),
       record_format: 'grok_native@1',
     }
-    expect(reshapeTranscript([future], 0)).toEqual({ items: [], undisplayed: 1 })
-    // A payload the reader THROWS on (an unknown kind reaches blocksOf) costs
-    // one row, never the whole transcript.
+    expect(count([future])).toBe(1)
+    // A payload the reader THROWS on costs one count, never the whole
+    // transcript.
     const hostile = rec('assistant', { kind: 'video' }, 'claude_code')
-    expect(reshapeTranscript([assistant('before'), hostile], 0)).toEqual({
-      items: [expect.objectContaining({ text: 'before' })],
-      undisplayed: 1,
-    })
-    // A readable transcript never warns, and a silent-by-design init doesn't count.
-    expect(reshapeTranscript([assistant('fine'), result()], 0).undisplayed).toBe(0)
-    expect(
-      reshapeTranscript([rec('system', { type: 'system', subtype: 'init' }, 'claude_code')], 0)
-        .undisplayed,
-    ).toBe(0)
+    expect(count([assistant('before'), hostile])).toBe(1)
+  })
+
+  it('never warns on a readable transcript, silent-by-design records included', () => {
+    const result = rec(
+      'cc',
+      { kind: 'result', duration_ms: 4000, cost_usd: 0.1, is_error: false },
+      'claude_code',
+    )
+    expect(count([assistant('fine'), result])).toBe(0)
+    expect(count([rec('system', { type: 'system', subtype: 'init' }, 'claude_code')])).toBe(0)
+    expect(count([rec('session_idle')])).toBe(0)
+  })
+
+  it('skips records at or below the render cursor (--no-records)', () => {
+    const shapeless = rec('assistant', { kind: 'assistant', content: [] }, 'claude_code')
+    expect(count([shapeless], shapeless.feed_seq)).toBe(0)
   })
 })
 
-describe('sessionLogText', () => {
-  const lc = (record_type: string, payload: Record<string, unknown> = {}) =>
-    ({ feed_seq: 1, source: 'lifecycle', record_type, payload })
-
-  it('does not log the FIRST start — the startup block tells that story', () => {
-    expect(sessionLogText(lc('session_starting', {}))).toBeNull()
-    expect(sessionLogText(lc('session_starting', { wake_index: 0 }))).toBeNull()
-  })
-
-  it('logs a wake, which happens long after the startup block settled', () => {
-    expect(sessionLogText(lc('session_starting', { wake_index: 2 }))).toBe('Waking the session…')
-  })
-
-  it('logs an infra retry distinctly from a wake', () => {
-    expect(sessionLogText(lc('session_starting', { attempt: 1 }))).toContain('transient error')
-    expect(sessionLogText(lc('session_retrying', { reason: 'node lost' }))).toBe(
+describe('sessionLogText comma wording', () => {
+  it('writes reasons comma-separated, not middot-separated', () => {
+    expect(sessionLogText('session_retrying', { reason: 'node lost' })).toBe(
       'Retrying, node lost',
     )
-  })
-
-  it('logs a cancellation with its reason when there is one', () => {
-    expect(sessionLogText(lc('session_cancelled', {}))).toBe('Session cancelled')
-    expect(sessionLogText(lc('session_cancelled', { reason: 'budget' }))).toBe(
+    expect(sessionLogText('session_cancelled', { reason: 'budget' })).toBe(
       'Session cancelled, budget',
     )
   })
 
-  it('ignores provisioning chatter', () => {
-    for (const t of ['sandbox_starting', 'sandbox_phase', 'sandbox_output', 'sandbox_ready', 'turn_started']) {
-      expect(sessionLogText(lc(t))).toBeNull()
-    }
+  it('passes plain lines and nulls through unchanged', () => {
+    expect(sessionLogText('session_idle', {})).toBe('Session asleep')
+    expect(sessionLogText('session_starting', { wake_index: 0 })).toBeNull()
   })
 })
 
@@ -653,42 +304,6 @@ describe('gutterFor', () => {
     expect(gutterFor(item('tool_result', '⎿'))).toBe('⎿')
     expect(gutterFor(item('thinking', '✻'))).toBe('✻')
     expect(gutterFor(item('summary'))).toBe('')
-  })
-})
-
-describe('humanDuration', () => {
-  it('scales precision down with size: ms under 1s, one decimal under 5s', () => {
-    expect(humanDuration(0.428)).toBe('428ms')
-    expect(humanDuration(1.2)).toBe('1.2s')
-    expect(humanDuration(4.7)).toBe('4.7s')
-    expect(humanDuration(3)).toBe('3s')
-  })
-
-  it('reads as compact h/m/s components, dropping zero parts', () => {
-    expect(humanDuration(0)).toBe('0s')
-    expect(humanDuration(3)).toBe('3s')
-    expect(humanDuration(62)).toBe('1m 2s')
-    expect(humanDuration(120)).toBe('2m')
-    expect(humanDuration(3600)).toBe('1h')
-    expect(humanDuration(3810)).toBe('1h 3m 30s')
-    expect(humanDuration(5400)).toBe('1h 30m')
-  })
-
-  it('rounds fractional seconds and clamps negatives', () => {
-    expect(humanDuration(1.2)).toBe('1.2s')
-    expect(humanDuration(59.7)).toBe('1m')
-    expect(humanDuration(-5)).toBe('0s')
-  })
-})
-
-describe('hookPhrase', () => {
-  it('maps known step/phase keys and passes unknown ones through', () => {
-    expect(hookPhrase('setup')).toBe('Building image')
-    expect(hookPhrase('image.setup')).toBe('Building image')
-    expect(hookPhrase('clone')).toBe('Fetching repositories')
-    expect(hookPhrase('post_clone')).toBe('Post-clone setup')
-    expect(hookPhrase('post_start')).toBe('Post-start setup')
-    expect(hookPhrase('custom.step')).toBe('custom.step')
   })
 })
 
