@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useInput, useStdin, useStdout } from 'ink'
 import type { OpenSocket } from '@ellipsis-dev/sdk/stream'
-import { SESSION_STREAM_PROTOCOL_VERSION } from '@ellipsis-dev/sdk/stream'
-import { SessionTranscriptStore } from '@ellipsis-dev/sdk/store'
+import { SessionTranscriptStore, seedTranscriptStore } from '@ellipsis-dev/sdk/store'
 import type { Ellipsis } from '@ellipsis-dev/sdk'
 import { errorDetail } from '../lib/api'
 import type {
@@ -224,9 +223,8 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   const [loadError, setLoadError] = useState<string | null>(null)
   const loading = useRef(new Set<string>())
 
-  // Seed a transcript store exactly like the solo connect: a synthetic
-  // snapshot frame (session + open inbox) then the stored records, so the
-  // first paint is instant and the stream resumes past the seeded cursor.
+  // Seed a transcript store exactly like the solo connect, so the first
+  // paint is instant and the stream resumes past the seeded cursor.
   const loadEntry = useCallback(
     async (sessionId: string, configName?: string, notice?: string): Promise<void> => {
       if (loading.current.has(sessionId)) return
@@ -238,15 +236,14 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
           api.sessions.records(sessionId).then((p) => p.response),
         ])
         const store = new SessionTranscriptStore()
-        const ordered = [...page.records].sort((a, b) => a.feed_seq - b.feed_seq)
-        store.ingest({
-          type: 'snapshot',
-          protocol: SESSION_STREAM_PROTOCOL_VERSION,
-          earliest_feed_seq: page.earliest_feed_seq ?? null,
+        // Same cast as runConnect: REST marks nullable fields optional, the
+        // frame types require them. Identical JSON either way.
+        seedTranscriptStore(store, {
           session,
-          messages: page.messages ?? [],
-        })
-        if (ordered.length) store.ingest({ type: 'records_append', records: ordered })
+          records: page.records,
+          messages: page.messages,
+          earliestFeedSeq: page.earliest_feed_seq,
+        } as Parameters<typeof seedTranscriptStore>[1])
         const c = connectability(session)
         const entry: ChatEntry = {
           store,
