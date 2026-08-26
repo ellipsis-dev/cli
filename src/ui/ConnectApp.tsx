@@ -18,21 +18,20 @@ import {
   collapseToolRuns,
   deliveredUnechoedSends,
   foldCosts,
+  groupRecordsToChatTurns,
   humanDuration,
   lastLines,
   pendingToolCalls,
   recordSlice,
-  recordToItems,
   sandboxSummary,
   statusActivityText,
-  type RecordSlice,
   type SandboxState,
   type SessionTranscriptStore,
-  type TranscriptItem,
 } from '@ellipsis-dev/sdk/store'
-import { deriveSandboxState, sessionLogText } from '../lib/steps'
+import { deriveSandboxState } from '../lib/steps'
+import { chatTurnsToItems, undisplayedRecordCount } from '../lib/chatItems'
 import { errorDetail } from '../lib/api'
-import type { Ellipsis, SdkRecord, SessionRecord } from '@ellipsis-dev/sdk'
+import type { Ellipsis, SdkRecord } from '@ellipsis-dev/sdk'
 import { hyperlink } from '../lib/urls'
 import { usdNumberFromMillicents } from '../lib/output'
 import { applyEditShortcut } from '../lib/editing'
@@ -302,22 +301,33 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // lands first (session frame, poll, stream outcome).
   const closingDown = useRef(false)
 
-  // The committed transcript, derived from the store's record log. Keys ride
-  // feed_seq (the shared per-session order), so items are stable across
-  // re-derivations.
-  // Lifecycle records are excluded entirely: the sandbox story renders as the
-  // one-line progress block up top (sandboxProgress), not as transcript rows.
-  // Each turn's closing duration/cost summary is dropped too (see
-  // reshapeTranscript) — the footer carries the session's spend.
+  // The committed transcript: the SDK's shared ChatTurn grouping (the same
+  // turns the dashboard's chat renders — tool calls paired with results,
+  // failed turns marked), mapped onto the terminal's item vocabulary.
+  // store.chatTurns() memoizes on the records array identity; --no-records
+  // (minRenderFeedSeq > 0) groups a filtered slice instead, since turns don't
+  // carry feed_seq.
+  // The sandbox story is excluded: it renders as the one-line progress block
+  // up top, not as transcript rows. Each turn's closing duration/cost summary
+  // is dropped too — the footer carries the session's spend.
   const { items, undisplayed } = useMemo(() => {
-    const shaped = reshapeTranscript(recordSlice(snapshot.records), props.minRenderFeedSeq)
+    const turns =
+      props.minRenderFeedSeq > 0
+        ? groupRecordsToChatTurns(
+            snapshot.records.filter((r) => r.feed_seq > props.minRenderFeedSeq),
+          )
+        : store.chatTurns()
+    const items = chatTurnsToItems(turns)
     // Client-side notes land at the end: they describe what you just did, so
     // they belong under everything the server has sent so far.
     for (const note of chatNotes) {
-      shaped.items.push({ key: note.key, kind: 'notice', text: note.text, spaceBefore: true })
+      items.push({ key: note.key, kind: 'notice', text: note.text, spaceBefore: true })
     }
-    return shaped
-  }, [snapshot.records, props.minRenderFeedSeq, chatNotes])
+    return {
+      items,
+      undisplayed: undisplayedRecordCount(snapshot.records, props.minRenderFeedSeq),
+    }
+  }, [snapshot.records, props.minRenderFeedSeq, chatNotes, store])
 
   // Footer spend: the server's ledger total (the session frame's four cost
   // columns — the billing authority, resent on every cost tick) with the
@@ -1459,75 +1469,6 @@ function fit(text: string, width: number): string {
 // over the chat window. Anything older is counted in the "… +N earlier lines"
 // head above them.
 const SANDBOX_LOG_ROWS = 10
-
-// The chat is a LOG of the session: what was said, and what happened to the
-// session while it was being said. So the milestones — it went to sleep, it is
-// waking again, it was cancelled — land in the transcript, in feed order,
-// alongside the conversation (see SESSION_LOG_RECORDS). Without them a session
-// that naps between turns leaves an unexplained gap, and the only account of
-// the wake is the startup block up top silently rewriting itself.
-//
-// Each turn's closing `result` summary is dropped: its duration and cost are
-// bookkeeping, not conversation — the footer's running spend is where that
-// story lives. An error summary survives as its own (red) line under a plain
-// label: a failed turn is content. Pure, for tests.
-// `undisplayed` counts agent records that arrived and rendered NOTHING — the
-// signal for a payload shape this build cannot read (a harness change on the
-// server, an out-of-date CLI). Without it such a record is invisible twice
-// over: no row, and no hint that a row is missing. Init events are excluded:
-// they are deliberately silent here.
-export function reshapeTranscript(
-  records: readonly RecordSlice[],
-  minRenderFeedSeq: number,
-): { items: TranscriptItem[]; undisplayed: number } {
-  const items: TranscriptItem[] = []
-  let undisplayed = 0
-  // Index of the "Waking the session…" line still awaiting its outcome, so the
-  // resumed record can settle it in place instead of adding a second row. The
-  // line KEEPS ITS KEY, so settling it doesn't move the scroll anchor or the
-  // ↑/↓ walk.
-  let wakeAt = -1
-  for (const r of records) {
-    if (r.feed_seq <= minRenderFeedSeq) continue
-    if (r.source === 'lifecycle') {
-      if (r.record_type === 'session_resumed' && wakeAt >= 0) {
-        items[wakeAt] = { ...items[wakeAt], text: 'Session awake' }
-        wakeAt = -1
-        continue
-      }
-      const text = sessionLogText(r.record_type, r.payload)
-      if (text) {
-        items.push({ key: `s${r.feed_seq}`, kind: 'notice', text, spaceBefore: true })
-        wakeAt = text === 'Waking the session…' ? items.length - 1 : -1
-      }
-      continue
-    }
-    const isResult = r.source === 'claude_code' && r.payload.kind === 'result'
-    // recordToItems reads the structural slice plus record_format, which it
-    // switches on; its typed per-harness param isn't the slice these
-    // derivations pass, hence the cast. It returns undefined for a
-    // record_format this SDK build has no reader for — a new harness against an
-    // old CLI — which counts as undisplayed just like an unreadable payload.
-    // A record the reader THROWS on (an unrecognized payload kind reaches
-    // blocksOf(undefined) inside the SDK) must cost one row, not the whole
-    // transcript: the render is the last place that should die of a wire change.
-    let rendered: TranscriptItem[]
-    try {
-      rendered = recordToItems(r as Parameters<typeof recordToItems>[0], `s${r.feed_seq}`) ?? []
-    } catch {
-      rendered = []
-    }
-    if (rendered.length === 0 && r.record_type !== 'system') undisplayed++
-    for (const item of rendered) {
-      if (item.kind === 'summary' && isResult) {
-        if (item.isError) items.push({ ...item, text: 'turn ended with an error' })
-        continue
-      }
-      items.push(item)
-    }
-  }
-  return { items, undisplayed }
-}
 
 // One screen row. Exactly one terminal line by construction: the text was
 // pre-fitted to the pane (see transcriptRows), and wrap="truncate" is the

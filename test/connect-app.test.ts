@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { cursorLineDown, cursorLineUp, reshapeTranscript } from '../src/ui/ConnectApp'
+import { groupRecordsToChatTurns } from '@ellipsis-dev/sdk/store'
+import { cursorLineDown, cursorLineUp } from '../src/ui/ConnectApp'
+import { chatTurnsToItems, undisplayedRecordCount } from '../src/lib/chatItems'
 import { deriveSandboxState, sessionLogText } from '../src/lib/steps'
 import {
   gutterFor,
@@ -16,12 +18,15 @@ import { theme } from '../src/lib/theme'
 import type { TranscriptItem } from '@ellipsis-dev/sdk/store'
 
 let seq = 0
-// `record_format` is what recordToItems switches on, so a fixture carries the
-// same token the wire does: claude_sdk@1 for agent records, ellipsis_lifecycle@1
-// for platform ones.
+// `record_format` is what recordToItems and groupRecordsToChatTurns switch on,
+// so a fixture carries the same token the wire does: claude_sdk@1 for agent
+// records, ellipsis_lifecycle@1 for platform ones.
 function rec(recordType: string, payload: Record<string, unknown> = {}, source = 'lifecycle') {
+  const feed = ++seq
   return {
-    feed_seq: ++seq,
+    id: `rec${feed}`,
+    created_at: '2026-01-01T00:00:00Z',
+    feed_seq: feed,
     source,
     record_type: recordType,
     record_format: source === 'lifecycle' ? 'ellipsis_lifecycle@1' : 'claude_sdk@1',
@@ -78,118 +83,133 @@ describe('deriveSandboxState comma wording', () => {
   })
 })
 
-describe('reshapeTranscript', () => {
+describe('chatTurnsToItems', () => {
   const assistant = (text: string) =>
     rec('cc', { kind: 'assistant', content: [{ type: 'text', text }] }, 'claude_code')
+  const user = (text: string) => rec('cc', { kind: 'user', content: text }, 'claude_code')
+  const toolCall = (id: string, name = 'Bash', input: Record<string, unknown> = { command: 'ls' }) =>
+    rec('cc', { kind: 'assistant', content: [{ type: 'tool_use', id, name, input }] }, 'claude_code')
+  const toolResult = (id: string, text = 'ok') =>
+    rec(
+      'cc',
+      { kind: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: text }] },
+      'claude_code',
+    )
   const result = (over: Record<string, unknown> = {}) =>
     rec(
       'cc',
       { kind: 'result', duration_ms: 4000, cost_usd: 0.1, is_error: false, ...over },
       'claude_code',
     )
+  const items = (records: ReturnType<typeof rec>[]) =>
+    chatTurnsToItems(groupRecordsToChatTurns(records as never))
 
-  it('drops a turn-closing summary entirely — duration and cost are not conversation', () => {
-    const { items } = reshapeTranscript([assistant('done!'), result()], 0)
-    expect(items.map((i) => i.kind)).toEqual(['assistant'])
+  it('maps prose, user messages and paired tool calls onto transcript items', () => {
+    const out = items([user('do it'), toolCall('t1'), toolResult('t1', 'files'), assistant('done')])
+    expect(out.map((i) => i.kind)).toEqual(['user', 'tool', 'tool_result', 'assistant'])
+    expect(out.map((i) => i.text)).toEqual(['do it', 'Bash', 'files', 'done'])
   })
 
-  it('drops every turn summary across a multi-turn transcript', () => {
-    const { items } = reshapeTranscript(
-      [
-        assistant('one'),
-        result({ cost_usd: 0.1 }),
-        assistant('two'),
-        result({ cost_usd: 0.25, duration_ms: 2000 }),
-      ],
-      0,
-    )
-    expect(items.map((i) => i.text)).toEqual(['one', 'two'])
+  it('renders a still-running tool call without a result row', () => {
+    const out = items([toolCall('t1')])
+    expect(out.map((i) => i.kind)).toEqual(['tool'])
   })
 
-  it('drops a summary with no assistant message before it', () => {
-    expect(reshapeTranscript([result()], 0).items).toEqual([])
+  it('drops a turn-closing summary — duration and cost are not conversation', () => {
+    expect(items([assistant('one'), result(), assistant('two'), result()]).map((i) => i.text))
+      .toEqual(['one', 'two'])
+    expect(items([result()])).toEqual([])
   })
 
-  it('skips records at or below the render cursor (--no-records)', () => {
-    const hidden = [assistant('old'), result({ cost_usd: 0.1 })]
-    const cursor = hidden[hidden.length - 1].feed_seq
-    const { items } = reshapeTranscript(
-      [...hidden, assistant('new'), result({ cost_usd: 0.18 })],
-      cursor,
-    )
-    expect(items.map((i) => i.text)).toEqual(['new'])
-  })
-
-  it('keeps an error summary as its own line under a plain label', () => {
-    const { items } = reshapeTranscript([assistant('oops'), result({ is_error: true })], 0)
-    expect(items.map((i) => i.kind)).toEqual(['assistant', 'summary'])
-    expect(items[1].text).toBe('turn ended with an error')
-    expect(items[1].isError).toBe(true)
+  it('keeps a failed turn as its own red line under a plain label', () => {
+    const out = items([assistant('oops'), result({ is_error: true })])
+    expect(out.map((i) => i.kind)).toEqual(['assistant', 'summary'])
+    expect(out[1].text).toBe('turn ended with an error')
+    expect(out[1].isError).toBe(true)
   })
 
   it('settles the waking line in place instead of logging the wake twice', () => {
+    // The result record closes the turn before the session parks, as on the
+    // wire — an unclosed turn would keep collecting the post-wake response.
     const records = [
       assistant('done for now'),
+      result(),
       rec('session_idle'),
       rec('session_starting', { wake_index: 1 }),
     ]
-    const waking = reshapeTranscript(records, 0)
-    expect(waking.items.map((i) => i.text)).toEqual([
+    const waking = items(records)
+    expect(waking.map((i) => i.text)).toEqual([
       'done for now',
       'Session asleep',
       'Waking the session…',
     ])
-    const awake = reshapeTranscript([...records, rec('session_resumed'), assistant('back')], 0)
-    expect(awake.items.map((i) => i.text)).toEqual([
+    const awake = items([...records, rec('session_resumed'), assistant('back')])
+    expect(awake.map((i) => i.text)).toEqual([
       'done for now',
       'Session asleep',
       'Session awake',
       'back',
     ])
-    // Same key, so settling the line can't slide the scroll anchor.
-    expect(awake.items[2].key).toBe(waking.items[2].key)
+    // Same key, so settling the line can't slide the scroll anchor or
+    // re-print the flushed row.
+    expect(awake[2].key).toBe(waking[2].key)
   })
 
   it('leaves startup detail out of the chat — that story is the startup block', () => {
-    const { items } = reshapeTranscript(
-      [
-        rec('sandbox_starting'),
-        rec('sandbox_phase', { phase: 'setup', status: 'started' }),
-        rec('sandbox_output', { lines: ['installing…'] }),
-        rec('sandbox_ready', { cache_tier: 'exact' }),
-        rec('turn_started'),
-        assistant('hello'),
-      ],
-      0,
-    )
-    expect(items.map((i) => i.text)).toEqual(['hello'])
+    const out = items([
+      rec('sandbox_starting'),
+      rec('sandbox_phase', { phase: 'setup', status: 'started' }),
+      rec('sandbox_output', { lines: ['installing…'] }),
+      rec('sandbox_ready', { cache_tier: 'exact' }),
+      assistant('hello'),
+    ])
+    expect(out.map((i) => i.text)).toEqual(['hello'])
   })
+
+  it('writes lifecycle reasons comma-separated through the wrapper', () => {
+    const out = items([rec('session_retrying', { reason: 'node lost' })])
+    expect(out.map((i) => i.text)).toEqual(['Retrying, node lost'])
+  })
+})
+
+describe('undisplayedRecordCount', () => {
+  const assistant = (text: string) =>
+    rec('cc', { kind: 'assistant', content: [{ type: 'text', text }] }, 'claude_code')
+  const count = (records: ReturnType<typeof rec>[], min = 0) =>
+    undisplayedRecordCount(records as never, min)
 
   it('counts agent records that render nothing, so a shape it cannot read is visible', () => {
     // A payload this build's reader returns nothing for.
     const shapeless = rec('assistant', { kind: 'assistant', content: [] }, 'claude_code')
-    expect(reshapeTranscript([shapeless], 0)).toEqual({ items: [], undisplayed: 1 })
-    expect(reshapeTranscript([assistant('fine'), shapeless], 0).undisplayed).toBe(1)
-    // A harness this build has no reader for at all: recordToItems returns
-    // undefined for an unknown record_format, which must count, not throw.
+    expect(count([shapeless])).toBe(1)
+    expect(count([assistant('fine'), shapeless])).toBe(1)
+    // A harness this build has no reader for at all: recordToItems renders
+    // nothing for an unknown record_format, which must count, not throw.
     const future = {
       ...rec('assistant', { kind: 'assistant' }, 'grok'),
       record_format: 'grok_native@1',
     }
-    expect(reshapeTranscript([future], 0)).toEqual({ items: [], undisplayed: 1 })
-    // A payload the reader THROWS on (an unknown kind reaches blocksOf) costs
-    // one row, never the whole transcript.
+    expect(count([future])).toBe(1)
+    // A payload the reader THROWS on costs one count, never the whole
+    // transcript.
     const hostile = rec('assistant', { kind: 'video' }, 'claude_code')
-    expect(reshapeTranscript([assistant('before'), hostile], 0)).toEqual({
-      items: [expect.objectContaining({ text: 'before' })],
-      undisplayed: 1,
-    })
-    // A readable transcript never warns, and a silent-by-design init doesn't count.
-    expect(reshapeTranscript([assistant('fine'), result()], 0).undisplayed).toBe(0)
-    expect(
-      reshapeTranscript([rec('system', { type: 'system', subtype: 'init' }, 'claude_code')], 0)
-        .undisplayed,
-    ).toBe(0)
+    expect(count([assistant('before'), hostile])).toBe(1)
+  })
+
+  it('never warns on a readable transcript, silent-by-design records included', () => {
+    const result = rec(
+      'cc',
+      { kind: 'result', duration_ms: 4000, cost_usd: 0.1, is_error: false },
+      'claude_code',
+    )
+    expect(count([assistant('fine'), result])).toBe(0)
+    expect(count([rec('system', { type: 'system', subtype: 'init' }, 'claude_code')])).toBe(0)
+    expect(count([rec('session_idle')])).toBe(0)
+  })
+
+  it('skips records at or below the render cursor (--no-records)', () => {
+    const shapeless = rec('assistant', { kind: 'assistant', content: [] }, 'claude_code')
+    expect(count([shapeless], shapeless.feed_seq)).toBe(0)
   })
 })
 
