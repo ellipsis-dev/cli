@@ -99,12 +99,16 @@ export function registerSession(program: Command): void {
       'start from a maintained session template (e.g. ellipsis-helper)',
     )
     .option(
-      '--config-override <yaml>',
-      'partial agent config (YAML/JSON) merged onto the chosen config for this session, e.g. "budget:\\n  session: 5"',
+      '-e, --environment <environment-id>',
+      'run in a saved environment, by id or name (only without -c/-f: an agent config decides its own environment)',
     )
     .option(
-      '--config-override-file <path>',
-      'read the partial config override from a file (.yaml/.yml or .json) instead of inline',
+      '--override <yaml>',
+      'partial patch (YAML/JSON) on the resolved session config, applied last, e.g. "budget:\\n  session: 5"',
+    )
+    .option(
+      '--override-file <path>',
+      'read the partial override from a file (.yaml/.yml or .json) instead of inline',
     )
     .option(
       '--model <model-id>',
@@ -156,8 +160,9 @@ export function registerSession(program: Command): void {
           config?: string
           configFile?: string
           template?: string
-          configOverride?: string
-          configOverrideFile?: string
+          environment?: string
+          override?: string
+          overrideFile?: string
           model?: string
           system?: string
           repo: string[]
@@ -213,7 +218,23 @@ export function registerSession(program: Command): void {
           }
           if (opts.config) req.config_id = opts.config
           if (opts.configFile) req.config = readConfigFile(opts.configFile) as AgentConfig
-          if (opts.template) req.template_id = opts.template
+          // Templates left the start request (#6394): resolve the slug to its
+          // YAML via GET /v1/agents/templates/{slug} and start inline.
+          if (opts.template) {
+            const template = await api().agents.templates.get(opts.template)
+            req.config = parseYaml(template.yaml) as AgentConfig
+          }
+          // The environment is only a session-level choice when no config
+          // decides it; the server 400s the combination, so pre-check locally
+          // for a clearer error.
+          if (opts.environment) {
+            if (opts.config || opts.configFile) {
+              throw new Error(
+                '--environment cannot be combined with --config/--config-file: the agent config decides its environment',
+              )
+            }
+            req.environment = opts.environment
+          }
           // The repo we're standing in (origin remote), sent unconditionally —
           // with no config source it picks the repo rung of the server's
           // defaults ladder, and either way the server merges it into the
@@ -222,22 +243,19 @@ export function registerSession(program: Command): void {
           const contextRepo = repoFromCwd(process.cwd())
           if (contextRepo) req.repository = contextRepo
           // Sugar flags (--model, --repo, --cpu, ...) and the raw
-          // --config-override are merged into one structured override, applied
+          // --override are merged into one structured override, applied
           // onto the chosen (or default) config and re-validated server-side.
           const override = buildStartOverride(opts)
-          if (override) req.config_override = override
+          if (override) req.override = override
           // Appended to the initial user query at build time; gives this
           // session instructions on top of the config's shared system prompt.
           if (promptText) req.prompt = promptText
           // Skip the image cache for the initial provision (wakes cache as
           // usual); the fresh build's snapshot becomes the new cache entry.
           if (opts.rebuild) req.force_rebuild = true
-          // A promptless connect (a bare `agent`) starts the session idle:
-          // no fabricated kickoff message, Claude Code waits at the prompt
-          // for whatever is typed into the composer, like a local `claude`.
-          // A promptless --watch/--detach start still runs the config's
-          // workflow, so this only applies to the interactive open.
-          if (opts.connect && !promptText) req.idle_start = true
+          // A promptless start opens idle: no fabricated kickoff message,
+          // Claude Code waits at the prompt like a local `claude` (the
+          // server-side contract since #6394 — nothing extra to send).
 
           const client = api()
           const { session } = await client.sessions.start(req)
@@ -255,6 +273,21 @@ export function registerSession(program: Command): void {
             } else if (session.agent.source === 'account_default') {
               configNote = `using config "${resolvedConfigName}" (account default)`
             }
+          }
+          // Same transparency for the environment ladder: say which
+          // environment the server resolved when the session didn't name one.
+          const environmentSource = session.environment?.source
+          if (session.environment?.environment_id && environmentSource !== 'request') {
+            const label =
+              environmentSource === 'repo_default'
+                ? 'repo default'
+                : environmentSource === 'account_default'
+                  ? 'account default'
+                  : environmentSource === 'agent_config'
+                    ? 'from the agent config'
+                    : environmentSource
+            const note = `using environment ${session.environment.environment_id} (${label})`
+            configNote = configNote ? `${configNote}; ${note}` : note
           }
 
           if (opts.connect) {
@@ -630,12 +663,12 @@ export function registerSession(program: Command): void {
       "run against a different saved agent config instead of the original session's snapshot",
     )
     .option(
-      '--config-override <yaml>',
-      'partial agent config (YAML/JSON) merged onto the config for this replay, e.g. "claude:\\n  model: claude-opus-4-8"',
+      '--override <yaml>',
+      'partial patch (YAML/JSON) on the replayed config, e.g. "claude:\\n  model: claude-opus-4-8"',
     )
     .option(
-      '--config-override-file <path>',
-      'read the partial config override from a file (.yaml/.yml or .json) instead of inline',
+      '--override-file <path>',
+      'read the partial override from a file (.yaml/.yml or .json) instead of inline',
     )
     .option(
       '-p, --prompt <text>',
@@ -652,8 +685,8 @@ export function registerSession(program: Command): void {
         sessionId: string,
         opts: {
           config?: string
-          configOverride?: string
-          configOverrideFile?: string
+          override?: string
+          overrideFile?: string
           prompt?: string
           watch?: boolean
           quiet?: boolean
@@ -905,36 +938,39 @@ async function printSessionUrl(client: Ellipsis, sessionId: string): Promise<voi
   console.log(`  ${sessionUrl(resolveAppBase(), me.customer_login, sessionId)}`)
 }
 
-// Apply the mutually-exclusive config-override flags onto a session request.
-// `--config-override` is an inline YAML/JSON string passed straight through as
-// config_override_yaml; `--config-override-file` is read and parsed to a mapping
-// and sent as the structured config_override. Both merge identically server-side.
+// Apply the mutually-exclusive override flags onto a session request: an
+// inline YAML/JSON string or a file, both parsed to the one structured
+// `override` patch applied onto the resolved config server-side.
 export function applyConfigOverride(
   req: {
-    config_override?: Record<string, unknown> | null
-    config_override_yaml?: string | null
+    override?: Record<string, unknown> | null
   },
-  opts: { configOverride?: string; configOverrideFile?: string },
+  opts: { override?: string; overrideFile?: string },
 ): void {
-  if (opts.configOverride && opts.configOverrideFile) {
-    throw new Error('provide only one of --config-override / --config-override-file')
+  if (opts.override && opts.overrideFile) {
+    throw new Error('provide only one of --override / --override-file')
   }
-  if (opts.configOverride) req.config_override_yaml = opts.configOverride
-  if (opts.configOverrideFile) {
-    req.config_override = readMappingFile(opts.configOverrideFile, 'config override')
+  if (opts.overrideFile) {
+    req.override = readMappingFile(opts.overrideFile, 'override')
+  } else if (opts.override) {
+    const parsed = parseYaml(opts.override)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error('--override must be a YAML/JSON mapping of fields to override')
+    }
+    req.override = parsed as Record<string, unknown>
   }
 }
 
 // Build the single structured config override for `session start`. The raw
-// --config-override / --config-override-file supplies the base mapping (any
+// --override / --override-file supplies the base mapping (any
 // field); the sugar flags (--model, --system, --repo, --cpu, --memory,
 // --timeout, --budget) are assembled into a partial config and deep-merged on
 // top, so an explicit flag wins over the same field in a raw override. Returns
 // undefined when nothing was set (no override sent). The result is applied onto
 // the chosen (or default) config and re-validated server-side.
 export function buildStartOverride(opts: {
-  configOverride?: string
-  configOverrideFile?: string
+  override?: string
+  overrideFile?: string
   model?: string
   system?: string
   repo?: string[]
@@ -943,14 +979,14 @@ export function buildStartOverride(opts: {
   timeout?: string
   budget?: number
 }): Record<string, unknown> | undefined {
-  if (opts.configOverride && opts.configOverrideFile) {
-    throw new Error('provide only one of --config-override / --config-override-file')
+  if (opts.override && opts.overrideFile) {
+    throw new Error('provide only one of --override / --override-file')
   }
   let base: Record<string, unknown> = {}
-  if (opts.configOverrideFile) {
-    base = readMappingFile(opts.configOverrideFile, 'config override')
-  } else if (opts.configOverride) {
-    const parsed = parseYaml(opts.configOverride)
+  if (opts.overrideFile) {
+    base = readMappingFile(opts.overrideFile, 'override')
+  } else if (opts.override) {
+    const parsed = parseYaml(opts.override)
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('config override must be a mapping of fields')
     }

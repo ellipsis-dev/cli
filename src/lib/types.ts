@@ -54,11 +54,18 @@ export type AgentConfig = S['AgentConfig']
 export type SavedAgentConfig = S['Config']
 export type ListAgentConfigsResponse = S['AgentConfigsListResponse']
 export type CreateAgentConfigRequest = Parameters<Ellipsis['agents']['configs']['create']>[0]
-export type CreatedAgentConfig = S['CreateAgentConfigResponse']
+export type CreatedAgentConfig = S['AgentConfigResponse']
 export type ConfigManagedBy = S['ConfigManagedBy']
 export type LinkedAgentConfig = S['LinkAgentConfigResponse']
 export type AgentDefaults = S['AgentDefaults']
 export type PutAgentDefaultRequest = S['PutAgentDefaultRequest']
+
+// ------------------------------ environments -------------------------------
+
+export type EnvironmentConfig = S['EnvironmentConfig']
+export type SavedEnvironment = S['Environment']
+export type ListEnvironmentsResponse = S['EnvironmentsListResponse']
+export type EnvironmentDefaults = S['EnvironmentDefaults']
 
 // -------------------------------- templates -------------------------------
 

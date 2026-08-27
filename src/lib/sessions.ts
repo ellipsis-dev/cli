@@ -465,7 +465,7 @@ export function applyComposerChoices(
       delete req.repository
     }
   }
-  if (Object.keys(override).length > 0) req.config_override = override
+  if (Object.keys(override).length > 0) req.override = override
   return req
 }
 

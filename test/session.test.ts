@@ -155,41 +155,41 @@ describe('applyConfigOverride', () => {
   }
 
   it('passes an inline override through as the YAML/JSON string', () => {
-    const req: { config_override?: Record<string, unknown>; config_override_yaml?: string } = {}
-    applyConfigOverride(req, { configOverride: 'claude:\n  model: claude-opus-4-8' })
-    expect(req).toEqual({ config_override_yaml: 'claude:\n  model: claude-opus-4-8' })
+    const req: { override?: Record<string, unknown> } = {}
+    applyConfigOverride(req, { override: 'claude:\n  model: claude-opus-4-8' })
+    expect(req).toEqual({ override: { claude: { model: 'claude-opus-4-8' } } })
   })
 
   it('reads and parses a file override into the structured mapping', () => {
     const path = write('override.yaml', 'budget:\n  session: 5\n')
-    const req: { config_override?: Record<string, unknown>; config_override_yaml?: string } = {}
-    applyConfigOverride(req, { configOverrideFile: path })
-    expect(req).toEqual({ config_override: { budget: { session: 5 } } })
+    const req: { override?: Record<string, unknown> } = {}
+    applyConfigOverride(req, { overrideFile: path })
+    expect(req).toEqual({ override: { budget: { session: 5 } } })
   })
 
   it('rejects passing both inline and file forms', () => {
     const path = write('both.yaml', 'enabled: false\n')
     expect(() =>
-      applyConfigOverride({}, { configOverride: 'enabled: false', configOverrideFile: path }),
-    ).toThrow(/only one of --config-override \/ --config-override-file/)
+      applyConfigOverride({}, { override: 'enabled: false', overrideFile: path }),
+    ).toThrow(/only one of --override \/ --override-file/)
   })
 
   it('is a no-op when neither form is given', () => {
-    const req: { config_override?: Record<string, unknown>; config_override_yaml?: string } = {}
+    const req: { override?: Record<string, unknown> } = {}
     applyConfigOverride(req, {})
     expect(req).toEqual({})
   })
 
   it('surfaces an override-specific error when the file is missing', () => {
-    expect(() => applyConfigOverride({}, { configOverrideFile: join(dir, 'nope.yaml') })).toThrow(
-      /could not read config override file/,
+    expect(() => applyConfigOverride({}, { overrideFile: join(dir, 'nope.yaml') })).toThrow(
+      /could not read override file/,
     )
   })
 
   it('surfaces an override-specific error for a non-mapping file', () => {
     const path = write('list.yaml', '- a\n- b\n')
-    expect(() => applyConfigOverride({}, { configOverrideFile: path })).toThrow(
-      /could not parse YAML config override file/,
+    expect(() => applyConfigOverride({}, { overrideFile: path })).toThrow(
+      /could not parse YAML override file/,
     )
   })
 })
@@ -230,7 +230,7 @@ describe('buildStartOverride', () => {
   it('deep-merges sugar flags on top of a raw inline override (flags win)', () => {
     expect(
       buildStartOverride({
-        configOverride: 'claude:\n  model: claude-haiku-4-5-20251001\n  system: base\nenabled: false',
+        override: 'claude:\n  model: claude-haiku-4-5-20251001\n  system: base\nenabled: false',
         model: 'claude-opus-4-8',
       }),
     ).toEqual({
@@ -241,7 +241,7 @@ describe('buildStartOverride', () => {
 
   it('uses a file override as the base', () => {
     const path = write('base.yaml', 'budget:\n  session: 1\n')
-    expect(buildStartOverride({ configOverrideFile: path, budget: 5 })).toEqual({
+    expect(buildStartOverride({ overrideFile: path, budget: 5 })).toEqual({
       budget: { session: 5 },
     })
   })
@@ -249,12 +249,12 @@ describe('buildStartOverride', () => {
   it('rejects both inline and file override forms', () => {
     const path = write('both.yaml', 'enabled: false\n')
     expect(() =>
-      buildStartOverride({ configOverride: 'enabled: false', configOverrideFile: path }),
-    ).toThrow(/only one of --config-override \/ --config-override-file/)
+      buildStartOverride({ override: 'enabled: false', overrideFile: path }),
+    ).toThrow(/only one of --override \/ --override-file/)
   })
 
   it('rejects a non-mapping inline override', () => {
-    expect(() => buildStartOverride({ configOverride: '- a\n- b\n' })).toThrow(
+    expect(() => buildStartOverride({ override: '- a\n- b\n' })).toThrow(
       /config override must be a mapping/,
     )
   })

@@ -549,7 +549,7 @@ describe('applyComposerChoices', () => {
 
   it('sends no repository override while the picker is untouched', () => {
     const req = applyComposerChoices({ repository: 'acme/api' }, { ...untouched, model: 'claude-opus-5' })
-    expect(req.config_override).toEqual({ claude: { model: 'claude-opus-5' } })
+    expect(req.override).toEqual({ claude: { model: 'claude-opus-5' } })
     expect(req.repository).toBe('acme/api')
   })
 
@@ -559,7 +559,7 @@ describe('applyComposerChoices', () => {
       { repository: 'acme/api' },
       { ...untouched, repos: ['acme/api', 'acme/web', 'acme/infra'] },
     )
-    expect(req.config_override).toEqual({
+    expect(req.override).toEqual({
       environment: {
         repositories: [
           { owner: 'acme', name: 'api' },
@@ -575,7 +575,7 @@ describe('applyComposerChoices', () => {
 
   it('checks out no repository at all when every box is unchecked', () => {
     const req = applyComposerChoices({ repository: 'acme/api' }, { ...untouched, repos: [] })
-    expect(req.config_override).toEqual({ environment: { repositories: [] } })
+    expect(req.override).toEqual({ environment: { repositories: [] } })
     // The server merges `repository` into the checkout unconditionally, so an
     // empty set only holds if the context repo goes too.
     expect(req.repository).toBeUndefined()
@@ -583,7 +583,7 @@ describe('applyComposerChoices', () => {
 
   it('drops the context repo when the selection excludes it', () => {
     const req = applyComposerChoices({ repository: 'acme/api' }, { ...untouched, repos: ['acme/web'] })
-    expect(req.config_override).toEqual({
+    expect(req.override).toEqual({
       environment: { repositories: [{ owner: 'acme', name: 'web' }] },
     })
     expect(req.repository).toBeUndefined()
@@ -591,8 +591,8 @@ describe('applyComposerChoices', () => {
 
   it('overrides under the environment key the config schema uses, not the old sandbox one', () => {
     const req = applyComposerChoices({}, { ...untouched, repos: ['acme/web'] })
-    expect(req.config_override).not.toHaveProperty('sandbox')
-    expect(req.config_override).toHaveProperty('environment')
+    expect(req.override).not.toHaveProperty('sandbox')
+    expect(req.override).toHaveProperty('environment')
   })
 
   it('carries a chosen agent config and model through', () => {
@@ -603,7 +603,7 @@ describe('applyComposerChoices', () => {
     expect(req).toEqual({
       prompt: 'ship it',
       config_id: 'cfg_1',
-      config_override: { claude: { model: 'claude-fable-5' } },
+      override: { claude: { model: 'claude-fable-5' } },
     })
   })
 
