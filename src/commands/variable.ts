@@ -12,7 +12,6 @@ export function registerVariable(program: Command): void {
       .description('Manage the env variables injected into every sandbox (values are write-only)'),
     'variables',
     'var',
-    'env',
   )
 
   apiRoutes(

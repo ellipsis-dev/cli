@@ -40,9 +40,10 @@ export function canHostSessionsUi(): boolean {
 // Claude Code waits at its prompt, so the first composer message opens turn 0
 // (a local `claude` with no argument).
 export function defaultStartRequest(prompt: string): StartAgentSessionRequest {
+  // A promptless start opens idle by definition (the server-side contract
+  // since #6394): Claude Code waits at its prompt for the first message.
   const req: StartAgentSessionRequest = {}
   if (prompt) req.prompt = prompt
-  else req.idle_start = true
   const contextRepo = repoFromCwd(process.cwd())
   if (contextRepo) req.repository = contextRepo
   return req

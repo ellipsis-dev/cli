@@ -1,4 +1,5 @@
 import { type Command } from 'commander'
+import { parse as parseYaml } from 'yaml'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname } from 'node:path'
 import { api } from '../lib/api'
@@ -117,21 +118,36 @@ export function registerConfig(program: Command): void {
         json?: boolean
       }) => {
         await runAction(async () => {
-          // The server enforces "exactly one of config / template_id";
-          // pre-check locally for a clearer error than a bare 400.
           if (!opts.file === !opts.template) {
             throw new Error('provide exactly one of --file <path> or --template <slug>')
           }
           if (opts.path && !opts.repo) {
             throw new Error('--path names a location in a repository, so it needs --repo <name>')
           }
-          const req: CreateAgentConfigRequest = {
-            repository: opts.repo,
-            path: opts.path,
+          const client = api()
+          // Templates left the create request (#6394): resolve the slug to its
+          // YAML and create from that config.
+          const config = opts.file
+            ? (readConfigFile(opts.file) as AgentConfig)
+            : (parseYaml((await client.agents.templates.get(opts.template!)).yaml) as AgentConfig)
+          const req: CreateAgentConfigRequest = { config }
+          const created = await client.agents.configs.create(req)
+          // With --repo the agent is then moved into the repository by pull
+          // request (create + link, the two-step the API exposes today).
+          if (opts.repo) {
+            const linked = await client.agents.configs.link(created.config.id, {
+              repository: opts.repo,
+              path: opts.path,
+            })
+            if (opts.json) {
+              printJson(linked)
+              return
+            }
+            console.log(`✓ created "${configName(linked.config)}" (${linked.config.id}) — live now`)
+            console.log(`✓ opened a pull request adding the agent config (${linked.path})`)
+            console.log(linked.pull_request_url)
+            return
           }
-          if (opts.file) req.config = readConfigFile(opts.file) as AgentConfig
-          if (opts.template) req.template_id = opts.template
-          const created = await api().agents.configs.create(req)
           if (opts.json) {
             printJson(created)
             return
@@ -415,13 +431,17 @@ export function registerConfig(program: Command): void {
             return
           }
           await runAction(async () => {
-            printCreated(
-              await api().agents.configs.create({
-                template_id: opts.template,
-                repository: opts.repo!,
-                path: opts.path,
-              }),
-            )
+            const client = api()
+            const template = await client.agents.templates.get(opts.template!)
+            const created = await client.agents.configs.create({
+              config: parseYaml(template.yaml) as AgentConfig,
+            })
+            const linked = await client.agents.configs.link(created.config.id, {
+              repository: opts.repo!,
+              path: opts.path,
+            })
+            console.log(`✓ opened a pull request adding the agent config (${linked.path})`)
+            console.log(linked.pull_request_url)
           })
           return
         }
@@ -443,15 +463,7 @@ export function registerConfig(program: Command): void {
 const COMMIT_HINT =
   'Commit it to your default branch. Ellipsis syncs agent configs from GitHub.'
 
-// A create answers two ways: with a repository the agent waits on a pull
-// request, without one it is already live and has no file.
 function printCreated(created: CreatedAgentConfig): void {
-  if (created.pull_request_url) {
-    console.log(`✓ opened a pull request adding the agent config (${created.path})`)
-    console.log(created.pull_request_url)
-    console.log('Merge it to deploy the agent.')
-    return
-  }
   console.log(`✓ created "${configName(created.config)}" (${created.config.id}) — live now`)
   console.log('It has no file; change it with `agent config edit`, or `agent config link` to move it into a repo.')
 }

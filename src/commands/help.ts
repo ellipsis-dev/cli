@@ -1,10 +1,11 @@
 import type { Command } from 'commander'
+import { parse as parseYaml } from 'yaml'
 import { api, APIError } from '../lib/api'
 import { apiRoutes } from '../lib/help'
 import { runAction } from '../lib/output'
 import { repoFromCwd } from '../lib/git'
 import { startConnect } from './session'
-import type { StartAgentSessionRequest } from '../lib/types'
+import type { AgentConfig, StartAgentSessionRequest } from '../lib/types'
 
 // The template behind `agent help --interactive`. Kebab-case like every other
 // slug in the registry; it is not served yet, so a 404 here is expected and
@@ -64,14 +65,16 @@ export function resolveCommandPath(program: Command, path: string[]): Command | 
 }
 
 async function startHelperSession(): Promise<void> {
-  const req: StartAgentSessionRequest = { template_id: HELPER_TEMPLATE_SLUG }
+  const template = await api().agents.templates.get(HELPER_TEMPLATE_SLUG)
+  const req: StartAgentSessionRequest = {
+    config: parseYaml(template.yaml) as AgentConfig,
+  }
   // Same as `session start`: send the repo we're standing in so the helper can
   // answer questions about this checkout. Ignored server-side if unknown.
   const contextRepo = repoFromCwd(process.cwd())
   if (contextRepo) req.repository = contextRepo
-  // No prompt: the helper opens idle and waits for the question, like a bare
-  // `agent`, rather than running a workflow against a fabricated kickoff.
-  req.idle_start = true
+  // No prompt: the helper opens idle and waits for the question (a promptless
+  // start is idle by definition since #6394).
 
   try {
     const { session } = await api().sessions.start(req)

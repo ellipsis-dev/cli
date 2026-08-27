@@ -6,6 +6,7 @@ import { registerMe } from './commands/me'
 import { registerSession } from './commands/session'
 import { registerReview } from './commands/review'
 import { registerConfig } from './commands/config'
+import { registerEnvironment } from './commands/environment'
 import { registerVariable } from './commands/variable'
 import { registerFile } from './commands/file'
 import { registerTemplate } from './commands/template'
@@ -42,6 +43,7 @@ registerMe(program)
 registerSession(program)
 registerReview(program)
 registerConfig(program)
+registerEnvironment(program)
 registerVariable(program)
 registerFile(program)
 registerTemplate(program)
