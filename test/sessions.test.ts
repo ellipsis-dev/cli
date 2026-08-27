@@ -6,7 +6,15 @@ import {
   composerModelOptions,
   composerPickerRows,
   connectability,
+  effectiveEnvironmentDefault,
+  environmentOptions,
+  environmentPickerAt,
+  environmentPickerRows,
+  environmentRowSummary,
   filterSessions,
+  mergeVariables,
+  parseVariableEntry,
+  variableRowLabel,
   modelRate,
   rateDollars,
   isActiveStatusWord,
@@ -538,7 +546,13 @@ describe('composerPickerRows', () => {
 })
 
 describe('applyComposerChoices', () => {
-  const untouched = { configId: null, model: null, repos: null }
+  const untouched = {
+    environment: null,
+    model: null,
+    emptyEnvironment: false,
+    baseVariables: [],
+    customVariables: [],
+  }
 
   it('leaves the base request alone when nothing was picked', () => {
     expect(applyComposerChoices({ prompt: 'hi', repository: 'acme/api' }, untouched)).toEqual({
@@ -547,69 +561,302 @@ describe('applyComposerChoices', () => {
     })
   })
 
-  it('sends no repository override while the picker is untouched', () => {
-    const req = applyComposerChoices({ repository: 'acme/api' }, { ...untouched, model: 'claude-opus-5' })
+  it('keeps the context repo, which picks the repo rung of the defaults ladder', () => {
+    const req = applyComposerChoices(
+      { repository: 'acme/api' },
+      { ...untouched, model: 'claude-opus-5' },
+    )
     expect(req.override).toEqual({ claude: { model: 'claude-opus-5' } })
     expect(req.repository).toBe('acme/api')
   })
 
-  // The whole point of the fix: a sandbox takes zero, one, or many repos.
-  it('checks out many repositories at once', () => {
-    const req = applyComposerChoices(
-      { repository: 'acme/api' },
-      { ...untouched, repos: ['acme/api', 'acme/web', 'acme/infra'] },
-    )
-    expect(req.override).toEqual({
-      environment: {
-        repositories: [
-          { owner: 'acme', name: 'api' },
-          { owner: 'acme', name: 'web' },
-          { owner: 'acme', name: 'infra' },
-        ],
-      },
-    })
-    // Still in the set, so the context repo stays (it also picks the repo rung
-    // of the defaults ladder).
-    expect(req.repository).toBe('acme/api')
+  it('names a chosen environment on the request, not in the override', () => {
+    const req = applyComposerChoices({ prompt: 'ship it' }, { ...untouched, environment: 'env_1' })
+    expect(req).toEqual({ prompt: 'ship it', environment: 'env_1' })
   })
 
-  it('checks out no repository at all when every box is unchecked', () => {
-    const req = applyComposerChoices({ repository: 'acme/api' }, { ...untouched, repos: [] })
-    expect(req.override).toEqual({ environment: { repositories: [] } })
-    // The server merges `repository` into the checkout unconditionally, so an
-    // empty set only holds if the context repo goes too.
-    expect(req.repository).toBeUndefined()
-  })
-
-  it('drops the context repo when the selection excludes it', () => {
-    const req = applyComposerChoices({ repository: 'acme/api' }, { ...untouched, repos: ['acme/web'] })
-    expect(req.override).toEqual({
-      environment: { repositories: [{ owner: 'acme', name: 'web' }] },
-    })
-    expect(req.repository).toBeUndefined()
-  })
-
-  it('overrides under the environment key the config schema uses, not the old sandbox one', () => {
-    const req = applyComposerChoices({}, { ...untouched, repos: ['acme/web'] })
-    expect(req.override).not.toHaveProperty('sandbox')
-    expect(req.override).toHaveProperty('environment')
-  })
-
-  it('carries a chosen agent config and model through', () => {
+  it('carries an environment and a model through together', () => {
     const req = applyComposerChoices(
       { prompt: 'ship it' },
-      { configId: 'cfg_1', model: 'claude-fable-5', repos: null },
+      { ...untouched, environment: 'env_1', model: 'claude-fable-5' },
     )
     expect(req).toEqual({
       prompt: 'ship it',
-      config_id: 'cfg_1',
+      environment: 'env_1',
       override: { claude: { model: 'claude-fable-5' } },
     })
   })
 
+  // The launcher never sends a config source, so the server can't 400 the
+  // config + environment combination.
+  it('never sends a config id', () => {
+    const req = applyComposerChoices({}, { ...untouched, environment: 'env_1' })
+    expect(req).not.toHaveProperty('config_id')
+  })
+
   it('does not mutate the request it was given', () => {
     const base = { repository: 'acme/api' }
-    applyComposerChoices(base, { ...untouched, repos: [] })
+    applyComposerChoices(base, { ...untouched, environment: 'env_1' })
     expect(base).toEqual({ repository: 'acme/api' })
+  })
+
+  // The whole point of the custom section: an override array REPLACES the
+  // resolved list, so the picked environment's own variables have to ride along
+  // or adding one would silently drop the rest.
+  it('ships the picked environment variables alongside a custom one', () => {
+    const req = applyComposerChoices(
+      {},
+      {
+        ...untouched,
+        environment: 'env_1',
+        baseVariables: [{ name: 'NODE_ENV', value: 'production' }],
+        customVariables: [{ name: 'SENTRY_DSN', value: 'https://x' }],
+      },
+    )
+    expect(req).toEqual({
+      environment: 'env_1',
+      override: {
+        environment: {
+          variables: [
+            { name: 'NODE_ENV', value: 'production' },
+            { name: 'SENTRY_DSN', value: 'https://x' },
+          ],
+        },
+      },
+    })
+  })
+
+  it('sends no variables override while the custom section is empty', () => {
+    const req = applyComposerChoices(
+      {},
+      { ...untouched, environment: 'env_1', baseVariables: [{ name: 'NODE_ENV', value: 'x' }] },
+    )
+    expect(req).toEqual({ environment: 'env_1' })
+  })
+
+  it('omits the value of a variable that resolves from stored secrets', () => {
+    const req = applyComposerChoices(
+      {},
+      { ...untouched, customVariables: [{ name: 'API_TOKEN', value: null }] },
+    )
+    expect(req.override).toEqual({ environment: { variables: [{ name: 'API_TOKEN' }] } })
+  })
+
+  // "[empty]" names no environment, so the ladder would still resolve one:
+  // clearing the lists is what actually empties the sandbox.
+  it('clears every list for the [empty] pick, and drops the base variables', () => {
+    const req = applyComposerChoices(
+      { repository: 'acme/api' },
+      {
+        ...untouched,
+        emptyEnvironment: true,
+        baseVariables: [{ name: 'NODE_ENV', value: 'production' }],
+      },
+    )
+    expect(req).toEqual({
+      repository: 'acme/api',
+      override: { environment: { repositories: [], mcp_servers: [], variables: [] } },
+    })
+  })
+})
+
+describe('mergeVariables', () => {
+  it('appends a custom variable after the environment own', () => {
+    expect(
+      mergeVariables([{ name: 'A', value: '1' }], [{ name: 'B', value: '2' }]),
+    ).toEqual([
+      { name: 'A', value: '1' },
+      { name: 'B', value: '2' },
+    ])
+  })
+
+  // Two entries with one name would leave the server to break the tie, so a
+  // custom repeat of a base name edits it in place instead.
+  it('lets a custom variable override a base one in place', () => {
+    expect(
+      mergeVariables(
+        [
+          { name: 'A', value: '1' },
+          { name: 'B', value: '2' },
+        ],
+        [{ name: 'A', value: 'mine' }],
+      ),
+    ).toEqual([
+      { name: 'A', value: 'mine' },
+      { name: 'B', value: '2' },
+    ])
+  })
+})
+
+describe('parseVariableEntry', () => {
+  it('reads a bare name as a stored-secret lookup', () => {
+    expect(parseVariableEntry(' API_TOKEN ')).toEqual({ name: 'API_TOKEN', value: null })
+  })
+
+  it('splits on the first equals, so a value may contain more', () => {
+    expect(parseVariableEntry('DSN=https://a=b')).toEqual({ name: 'DSN', value: 'https://a=b' })
+  })
+
+  // Distinct from a bare name: the empty string is a legitimate value.
+  it('reads a trailing equals as an empty value', () => {
+    expect(parseVariableEntry('EMPTY=')).toEqual({ name: 'EMPTY', value: '' })
+  })
+
+  it('rejects a name the sandbox shell could not export', () => {
+    expect(parseVariableEntry('not-a-name=1')).toHaveProperty('error')
+    expect(parseVariableEntry('9LIVES=1')).toHaveProperty('error')
+    expect(parseVariableEntry('   ')).toHaveProperty('error')
+  })
+})
+
+describe('environmentPickerRows', () => {
+  const input = {
+    optionCount: 2,
+    secretNames: ['API_TOKEN', 'NPM_TOKEN'],
+    customVariables: [{ name: 'PORT', value: '3000' }],
+  }
+
+  // Options, divider, heading, the stored variables, what was typed here, the
+  // add button. Only the pickable rows carry a hover index.
+  it('lays the list out and numbers only the pickable rows', () => {
+    expect(environmentPickerRows(input)).toEqual([
+      { kind: 'option', at: 0, hover: 0 },
+      { kind: 'option', at: 1, hover: 1 },
+      { kind: 'divider', label: 'custom environment' },
+      { kind: 'heading', label: 'variables' },
+      { kind: 'secret', name: 'API_TOKEN', hover: 2 },
+      { kind: 'secret', name: 'NPM_TOKEN', hover: 3 },
+      { kind: 'variable', name: 'PORT', hover: 4 },
+      { kind: 'addVariable', hover: 5 },
+    ])
+  })
+
+  // Checking a stored variable adds it to customVariables, so without this it
+  // would appear twice — once as the checkbox, once as a typed entry.
+  it('gives a stored variable one row even once it is checked', () => {
+    const rows = environmentPickerRows({
+      ...input,
+      customVariables: [{ name: 'API_TOKEN', value: null }],
+    })
+    expect(rows.filter((r) => 'name' in r && r.name === 'API_TOKEN')).toHaveLength(1)
+  })
+})
+
+describe('environmentPickerAt', () => {
+  const input = {
+    optionCount: 2,
+    secretNames: ['API_TOKEN'],
+    customVariables: [] as { name: string; value: string | null }[],
+  }
+
+  it('walks options, then the stored variables, then the add button', () => {
+    expect(environmentPickerAt(input, 1)).toEqual({ kind: 'option', at: 1 })
+    expect(environmentPickerAt(input, 2)).toEqual({ kind: 'secret', name: 'API_TOKEN' })
+    expect(environmentPickerAt(input, 3)).toEqual({ kind: 'addVariable' })
+  })
+
+  it('clamps a hover past the last row', () => {
+    expect(environmentPickerAt(input, 99)).toEqual({ kind: 'addVariable' })
+  })
+})
+
+describe('environmentOptions', () => {
+  const environments = [
+    { id: 'env_1', name: 'backend' },
+    { id: 'env_2', name: 'web-e2e' },
+  ]
+
+  // Every rung the environment holds is named on its row, so the list says why
+  // one of them is checked.
+  it('tags each environment with the default rungs it holds', () => {
+    const { options, picked } = environmentOptions(
+      environments,
+      { account: 'env_1', repositories: { 'acme/api': 'env_2' } },
+      'acme/api',
+    )
+    expect(options.map((o) => o.label)).toEqual([
+      'backend (account default)',
+      'web-e2e (default for acme/api)',
+      '[empty]',
+    ])
+    // The repo rung wins for the repo we are standing in.
+    expect(picked).toBe(1)
+  })
+
+  it('checks the account rung outside a repo with a default', () => {
+    const { options, picked } = environmentOptions(
+      environments,
+      { account: 'env_1', repositories: {} },
+      null,
+    )
+    expect(options[picked].id).toBe('env_1')
+  })
+
+  // Only then is there no name to show, so the server's own resolution stands.
+  it('adds a Default row when no rung resolves', () => {
+    const { options, picked } = environmentOptions(
+      environments,
+      { account: null, repositories: {} },
+      'acme/api',
+    )
+    expect(options[0]).toEqual({ id: null, label: 'Default' })
+    expect(picked).toBe(0)
+  })
+
+  it('adds the Default row while the ladder has not landed', () => {
+    const { options, picked } = environmentOptions(environments, null, 'acme/api')
+    expect(options[picked]).toEqual({ id: null, label: 'Default' })
+  })
+})
+
+describe('variableRowLabel', () => {
+  // The name alone whenever the sandbox resolves the value; the VARIABLES
+  // heading above the rows already says what these are.
+  it('shows a value only when there is one', () => {
+    expect(variableRowLabel('API_TOKEN', undefined)).toBe('API_TOKEN')
+    expect(variableRowLabel('API_TOKEN', null)).toBe('API_TOKEN')
+    expect(variableRowLabel('PORT', '3000')).toBe('PORT=3000')
+    expect(variableRowLabel('EMPTY', '')).toBe('EMPTY=')
+  })
+})
+
+describe('environmentRowSummary', () => {
+  it('states the pick alone until the custom section adds something', () => {
+    expect(environmentRowSummary('backend-sandbox', [])).toBe('backend-sandbox')
+    expect(environmentRowSummary('backend-sandbox', [{ name: 'A', value: '1' }])).toBe(
+      'backend-sandbox +1 variable',
+    )
+    expect(
+      environmentRowSummary('backend-sandbox', [
+        { name: 'A', value: '1' },
+        { name: 'B', value: null },
+      ]),
+    ).toBe('backend-sandbox +2 variables')
+  })
+})
+
+describe('effectiveEnvironmentDefault', () => {
+  const ladder = { account: 'env_account', repositories: { 'Acme/API': 'env_repo' } }
+
+  it('prefers the repo rung over the account rung', () => {
+    expect(effectiveEnvironmentDefault(ladder, 'acme/api')).toEqual({
+      id: 'env_repo',
+      rung: 'repo',
+    })
+  })
+
+  it('falls back to the account rung for another repo, and outside a repo', () => {
+    expect(effectiveEnvironmentDefault(ladder, 'acme/web')).toEqual({
+      id: 'env_account',
+      rung: 'account',
+    })
+    expect(effectiveEnvironmentDefault(ladder, null)).toEqual({
+      id: 'env_account',
+      rung: 'account',
+    })
+  })
+
+  it('resolves nothing when no rung is set (the basic sandbox)', () => {
+    expect(effectiveEnvironmentDefault({ account: null, repositories: {} }, 'acme/api')).toBeNull()
   })
 })

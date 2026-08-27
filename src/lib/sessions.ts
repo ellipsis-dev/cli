@@ -5,6 +5,7 @@ import { theme } from './theme'
 import type {
   AgentSession,
   AgentSessionSource,
+  EnvironmentDefaults,
   ListAgentSessionsQuery,
   ModelManufacturer,
   ModelRateCard,
@@ -405,68 +406,266 @@ export function composerPickerRows(
   return rows
 }
 
-// A saved config's display name (the YAML's ellipsis.name), falling back to
-// the row id.
-export function configDisplayName(config: {
-  id: string
-  agent_config: Record<string, unknown>
-}): string {
-  const ellipsis = config.agent_config?.ellipsis
-  if (ellipsis && typeof ellipsis === 'object') {
-    const name = (ellipsis as Record<string, unknown>).name
-    if (typeof name === 'string' && name.trim()) return name
+export const CUSTOM_ENVIRONMENT_DIVIDER = 'custom environment'
+export const VARIABLES_HEADING = 'variables'
+export const ADD_VARIABLE_LABEL = '+ new variable'
+
+// The built-in "no environment at all" option's id. A sentinel, never sent: the
+// launcher translates it into the cleared-list override, since the wire has no
+// name for "empty" (omitting the environment would let the ladder resolve one).
+export const EMPTY_ENVIRONMENT_ID = 'empty:builtin'
+export const EMPTY_ENVIRONMENT_LABEL = '[empty]'
+
+// The open Environment list, top to bottom: the saved environments and
+// "[empty]" as options, a divider, then the custom section — one checkbox per
+// stored secret, then the variables typed here, then the add button.
+//
+// `hover` is the index ↑/↓ walks; rows without one are DECORATION the highlight
+// skips, which is what keeps this a plain list rather than a nested tree.
+export type EnvironmentPickerRow =
+  | { kind: 'option'; at: number; hover: number }
+  | { kind: 'divider'; label: string }
+  | { kind: 'heading'; label: string }
+  | { kind: 'secret'; name: string; hover: number }
+  | { kind: 'variable'; name: string; hover: number }
+  | { kind: 'addVariable'; hover: number }
+
+// What activating a hovered row does, without the renderer having to know the
+// list's shape.
+export type EnvironmentTarget =
+  | { kind: 'option'; at: number }
+  | { kind: 'secret'; name: string }
+  | { kind: 'variable'; name: string }
+  | { kind: 'addVariable' }
+
+export interface EnvironmentPickerInput {
+  optionCount: number
+  // The account's stored secret names (values are write-only, so checking one
+  // adds a variable with no value and the sandbox resolves it at start).
+  secretNames: readonly string[]
+  customVariables: readonly CustomVariable[]
+}
+
+export function environmentPickerRows(input: EnvironmentPickerInput): EnvironmentPickerRow[] {
+  const rows: EnvironmentPickerRow[] = []
+  let hover = 0
+  for (let at = 0; at < input.optionCount; at++) rows.push({ kind: 'option', at, hover: hover++ })
+  rows.push({ kind: 'divider', label: CUSTOM_ENVIRONMENT_DIVIDER })
+  rows.push({ kind: 'heading', label: VARIABLES_HEADING })
+  for (const name of input.secretNames) rows.push({ kind: 'secret', name, hover: hover++ })
+  // A variable typed here whose name is also a secret rides that secret's row
+  // instead of getting a second one: one name, one row, whichever way it got in.
+  for (const v of input.customVariables) {
+    if (input.secretNames.includes(v.name)) continue
+    rows.push({ kind: 'variable', name: v.name, hover: hover++ })
   }
-  return config.id
+  rows.push({ kind: 'addVariable', hover: hover++ })
+  return rows
 }
 
-// "owner/name" -> the config-override repository shape.
-export function repoOverrideEntry(fullName: string): { owner: string; name: string } | null {
-  const [owner, name] = fullName.split('/')
-  if (!owner || !name) return null
-  return { owner, name }
+// Where a hover index lands, clamped to the list.
+export function environmentPickerAt(
+  input: EnvironmentPickerInput,
+  hover: number,
+): EnvironmentTarget {
+  const rows = environmentPickerRows(input)
+  const landable = rows.filter(
+    (r): r is Extract<EnvironmentPickerRow, { hover: number }> => 'hover' in r,
+  )
+  const row = landable[Math.min(Math.max(0, hover), landable.length - 1)]
+  if (row.kind === 'option') return { kind: 'option', at: row.at }
+  if (row.kind === 'secret') return { kind: 'secret', name: row.name }
+  if (row.kind === 'variable') return { kind: 'variable', name: row.name }
+  return { kind: 'addVariable' }
 }
 
-// The composer's picks, as the new-session pane reports them. `repos` null =
-// the Repository row was never touched, so the server's own resolution stands;
-// an array is an explicit checkout set, and [] is the legitimate "no repository
-// at all" sandbox.
+export function environmentPickerCount(input: EnvironmentPickerInput): number {
+  return environmentPickerRows(input).filter((r) => 'hover' in r).length
+}
+
+// What the resting Environment row says: the picked environment, plus a count
+// of whatever the custom section adds on top of it.
+export function environmentRowSummary(
+  label: string,
+  customVariables: readonly CustomVariable[],
+): string {
+  if (customVariables.length === 0) return label
+  const n = customVariables.length
+  return `${label} +${n} variable${n === 1 ? '' : 's'}`
+}
+
+// How a variable reads in the custom section: the name alone when the sandbox
+// resolves its value from stored secrets, otherwise the value as typed. The
+// VARIABLES heading already says what these are, so a valueless row needs no
+// note of its own.
+export function variableRowLabel(name: string, value: string | null | undefined): string {
+  return value === undefined || value === null ? name : `${name}=${value}`
+}
+
+// A variable the launcher's custom section adds on top of the picked
+// environment. A null value means "resolve this name from the account's stored
+// secrets", the same reading `agent variable set NAME` and the environment YAML
+// give it.
+export interface CustomVariable {
+  name: string
+  value: string | null
+}
+
+// The composer's picks, as the new-session pane reports them. environment and
+// model null = that row was never touched, so the server resolves it (the
+// environment ladder, the account's default model). `emptyEnvironment` is the
+// built-in "[empty]" pick: no saved environment, and the resolved lists cleared.
 export interface ComposerChoices {
-  configId: string | null
+  environment: string | null
   model: string | null
-  repos: string[] | null
+  emptyEnvironment: boolean
+  // The picked environment's own variables, needed because an override array
+  // REPLACES the resolved list rather than appending to it.
+  baseVariables: readonly CustomVariable[]
+  customVariables: readonly CustomVariable[]
 }
 
-// The entry point's base request with the composer's picks layered on: a saved
-// config as the source, the model + repositories as a per-run config override
-// (the dashboard composer's shape).
+// One variable list from the two that have to end up in the override, with a
+// later name winning: a custom entry that repeats a base name is an edit of it,
+// in place, not a duplicate the server would have to break the tie on.
+export function mergeVariables(
+  base: readonly CustomVariable[],
+  custom: readonly CustomVariable[],
+): CustomVariable[] {
+  const merged: CustomVariable[] = []
+  const at = new Map<string, number>()
+  for (const v of [...base, ...custom]) {
+    const seen = at.get(v.name)
+    if (seen === undefined) {
+      at.set(v.name, merged.length)
+      merged.push(v)
+    } else merged[seen] = v
+  }
+  return merged
+}
+
+// A variable in the shape an environment override takes: `value` omitted (not
+// null) when the name resolves from stored secrets, since the config schema
+// treats an absent value as the secret lookup.
+function variableEntry(v: CustomVariable): { name: string; value?: string } {
+  return v.value === null ? { name: v.name } : { name: v.name, value: v.value }
+}
+
+// The entry point's base request with the composer's picks layered on: the
+// environment as the session's own choice, the model and any custom
+// environment edits as a per-run override (the dashboard composer's shape).
+//
+// Every list in an override REPLACES the resolved one, so a custom variable
+// ships alongside the picked environment's own — that is what makes the custom
+// section additive rather than a silent wipe of the environment it sits under.
 export function applyComposerChoices(
   base: StartAgentSessionRequest,
   choices: ComposerChoices,
 ): StartAgentSessionRequest {
   const req: StartAgentSessionRequest = { ...base }
-  if (choices.configId) req.config_id = choices.configId
+  // Never combined with a config source: the launcher sends no config_id, so
+  // the environment is always the session's to name (the server 400s both).
+  if (choices.environment) req.environment = choices.environment
   const override: Record<string, unknown> = {}
   if (choices.model) override.claude = { model: choices.model }
-  if (choices.repos !== null) {
-    // Lists replace wholesale in a config override, so this set becomes the
-    // run's entire checkout — including the empty set, which a sandbox
-    // supports (zero, one, or many repositories are all valid).
-    override.environment = {
-      repositories: choices.repos
-        .map(repoOverrideEntry)
-        .filter((e): e is { owner: string; name: string } => e !== null),
-    }
-    // The server merges the request's `repository` context into the checkout
-    // unconditionally, even under an explicit config, so leaving it on would
-    // re-add a repo the user just unchecked. Dropping it also moves default-
-    // config resolution off that repo's rung, which is the honest reading of
-    // "not this one".
-    if (req.repository != null && !choices.repos.includes(req.repository)) {
-      delete req.repository
-    }
+  const environment: Record<string, unknown> = {}
+  // "[empty]" names no environment, so the ladder would still resolve one:
+  // clearing the lists is what actually empties the sandbox.
+  if (choices.emptyEnvironment) {
+    environment.repositories = []
+    environment.mcp_servers = []
   }
+  const variables = mergeVariables(
+    choices.emptyEnvironment ? [] : choices.baseVariables,
+    choices.customVariables,
+  )
+  if (choices.emptyEnvironment || choices.customVariables.length > 0) {
+    environment.variables = variables.map(variableEntry)
+  }
+  if (Object.keys(environment).length > 0) override.environment = environment
   if (Object.keys(override).length > 0) req.override = override
   return req
+}
+
+// "NAME=value" / "NAME" as typed into the custom section's name field, or an
+// error to show in place. A bare name resolves from stored secrets (null
+// value); an empty value after the equals is a real empty string, which is a
+// legitimate thing to set a variable to.
+export function parseVariableEntry(input: string): CustomVariable | { error: string } {
+  const text = input.trim()
+  if (!text) return { error: 'name a variable' }
+  const eq = text.indexOf('=')
+  const name = (eq === -1 ? text : text.slice(0, eq)).trim()
+  if (!name) return { error: 'name a variable' }
+  // The sandbox exports these into a shell, so the name has to be a legal
+  // shell identifier or the export silently does nothing.
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    return { error: `"${name}" is not a valid variable name` }
+  }
+  return { name, value: eq === -1 ? null : text.slice(eq + 1) }
+}
+
+// Which rungs of the defaults ladder point at one environment: the account
+// rung, and every repository rung. An environment can hold several at once, so
+// this is a list — "account default, default for acme/api".
+export function environmentDefaultRungs(
+  ladder: EnvironmentDefaults | null,
+  id: string,
+): string[] {
+  if (!ladder) return []
+  return [
+    ...(ladder.account === id ? ['account default'] : []),
+    ...Object.entries(ladder.repositories)
+      .filter(([, envId]) => envId === id)
+      .map(([repo]) => `default for ${repo}`),
+  ]
+}
+
+// The Environment row's options: every saved environment, each labelled with
+// the default rungs it holds, then the built-in "[empty]". `picked` is the row
+// checked while the row is untouched — the environment the ladder resolves for
+// the repo you are standing in, so the launcher can SEND what it shows instead
+// of leaving the server to resolve something else.
+//
+// A "Default" row appears only when no rung resolves at all: then there is no
+// name to show and the server's own resolution is the honest answer.
+export function environmentOptions(
+  environments: readonly { id: string; name: string }[],
+  ladder: EnvironmentDefaults | null,
+  detectedRepo: string | null,
+): { options: { id: string | null; label: string }[]; picked: number } {
+  const resolved = ladder ? effectiveEnvironmentDefault(ladder, detectedRepo)?.id : undefined
+  const listed = environments.map((e) => {
+    const rungs = environmentDefaultRungs(ladder, e.id)
+    return {
+      id: e.id as string | null,
+      label: rungs.length > 0 ? `${e.name} (${rungs.join(', ')})` : e.name,
+    }
+  })
+  const empty = { id: EMPTY_ENVIRONMENT_ID as string | null, label: EMPTY_ENVIRONMENT_LABEL }
+  const at = resolved ? environments.findIndex((e) => e.id === resolved) : -1
+  if (at !== -1) return { options: [...listed, empty], picked: at }
+  return {
+    options: [{ id: null as string | null, label: 'Default' }, ...listed, empty],
+    picked: 0,
+  }
+}
+
+// The environment a config-less session in `repo` resolves to: the repo rung of
+// the defaults ladder, else the account rung, else null (the basic sandbox).
+// Repo names compare case-insensitively, the way GitHub treats them.
+export function effectiveEnvironmentDefault(
+  ladder: EnvironmentDefaults,
+  repo: string | null,
+): { id: string; rung: 'repo' | 'account' } | null {
+  const repoRung = repo
+    ? Object.entries(ladder.repositories).find(
+        ([name]) => name.toLowerCase() === repo.toLowerCase(),
+      )?.[1]
+    : undefined
+  if (repoRung) return { id: repoRung, rung: 'repo' }
+  if (ladder.account) return { id: ladder.account, rung: 'account' }
+  return null
 }
 
 // ------------------------------- layout ---------------------------------

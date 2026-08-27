@@ -5,6 +5,7 @@ import { api } from '../lib/api'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { repoFromCwd } from '../lib/git'
 import { formatTs, printJson, printTable, printYaml, runAction } from '../lib/output'
+import { effectiveEnvironmentDefault } from '../lib/sessions'
 import { resolveRepoFlag } from './config'
 import { readConfigFile } from './session'
 import type {
@@ -160,10 +161,9 @@ export function registerEnvironment(program: Command): void {
       await runAction(async () => {
         const ladder = await api().environments.defaults.list()
         const repo = repoFromCwd(process.cwd())
-        const repoRung = repo ? repoDefault(ladder, repo) : undefined
-        const effective = repoRung ?? ladder.account ?? null
+        const effective = effectiveEnvironmentDefault(ladder, repo ?? null)
         if (opts.json) {
-          printJson({ repository: repo ?? null, effective })
+          printJson({ repository: repo ?? null, effective: effective?.id ?? null })
           return
         }
         if (!effective) {
@@ -174,8 +174,8 @@ export function registerEnvironment(program: Command): void {
           )
           return
         }
-        const rung = repoRung ? `repo default for ${repo}` : 'account default'
-        console.log(`using environment "${effective}" (${rung})`)
+        const rung = effective.rung === 'repo' ? `repo default for ${repo}` : 'account default'
+        console.log(`using environment "${effective.id}" (${rung})`)
       })
     })
 
@@ -243,7 +243,11 @@ export function registerEnvironment(program: Command): void {
             return
           }
           const rung = repository ? `default for ${repository}` : 'account default'
-          const id = repository ? repoDefault(ladder, repository) : ladder.account
+          // Echo the id the ladder now holds for the rung we just wrote, so a
+          // name argument comes back resolved. Only that rung, never the
+          // fallback below it.
+          const set = effectiveEnvironmentDefault(ladder, repository ?? null)
+          const id = repository ? (set?.rung === 'repo' ? set.id : undefined) : ladder.account
           console.log(`✓ set ${rung} to ${id ?? environmentId}`)
         })
       },
@@ -300,13 +304,6 @@ export function registerEnvironment(program: Command): void {
 function environmentSource(e: SavedEnvironment): string {
   if (e.source_details) return e.source_details.path
   return 'api'
-}
-
-function repoDefault(ladder: EnvironmentDefaults, repo: string): string | undefined {
-  const match = Object.entries(ladder.repositories).find(
-    ([name]) => name.toLowerCase() === repo.toLowerCase(),
-  )
-  return match?.[1]
 }
 
 const STARTER_ENVIRONMENT = `# Ellipsis environment: the machine your agents run in, defined once for the

@@ -6,7 +6,8 @@ import type { Ellipsis } from '@ellipsis-dev/sdk'
 import { errorDetail } from '../lib/api'
 import type {
   AgentSession,
-  SavedAgentConfig,
+  EnvironmentDefaults,
+  SavedEnvironment,
   StartAgentSessionRequest,
   SupportedModel,
 } from '../lib/types'
@@ -14,14 +15,23 @@ import { applyEditShortcut } from '../lib/editing'
 import { CTRL_C_QUIT_HINT, useCtrlCQuit } from './ctrlC'
 import { sessionUrl } from '../lib/urls'
 import {
+  ADD_VARIABLE_LABEL,
   applyComposerChoices,
   attentionFlip,
   composerModelOptions,
   composerPickerRows,
-  configDisplayName,
   connectability,
+  EMPTY_ENVIRONMENT_ID,
+  environmentOptions,
+  environmentPickerAt,
+  environmentPickerCount,
+  environmentPickerRows,
+  environmentRowSummary,
+  parseVariableEntry,
+  variableRowLabel,
   type ComposerChoices,
   type ComposerModel,
+  type CustomVariable,
   rowDescription,
   rowGlyph,
   rowMeta,
@@ -40,11 +50,11 @@ import { ConnectApp } from './ConnectApp'
 // The multi-session UI — what a bare `agent`, `agent "prompt"`, and `agent
 // session connect <id>` all open. Two screens, both on the primary buffer:
 //
-//   * the LAUNCHER: a compact inline block — the configuration rows on top, the
-//     prompt box under them, the latest sessions last. Enter in the box starts a
-//     session; enter on a session row opens its chat. It is short by design, so
-//     ink repaints it in place like any live frame; no alternate screen, no
-//     full-height frame.
+//   * the LAUNCHER: a compact inline block — one prompt box holding the
+//     configuration rows and the input, the latest sessions under it. Enter in
+//     the box starts a session; enter on a session row opens its chat. It is
+//     short by design, so ink repaints it in place like any live frame; no
+//     alternate screen, no full-height frame.
 //   * the CHAT (ConnectApp) — owns the terminal outright. Its settled
 //     transcript is printed into the terminal's real scrollback, so the
 //     wheel, the trackpad and select/copy are the terminal's own.
@@ -280,31 +290,38 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   const [starting, setStarting] = useState(false)
   const [startError, setStartError] = useState<string | null>(null)
 
-  // The launcher's picker options, fetched once when it first shows: the
-  // dashboard composer's three choices — saved agent configs, the account's
-  // repositories, and the selectable models. A models failure (an older
-  // server without GET /models) leaves the list empty and the launcher falls
-  // back to its built-in set.
-  const [configs, setConfigs] = useState<SavedAgentConfig[] | null>(null)
-  const [repos, setRepos] = useState<string[] | null>(null)
+  // The launcher's picker options, fetched once when it first shows: the saved
+  // environments (with the defaults ladder, so the untouched row can name the
+  // one the server would resolve) and the selectable models. A models failure
+  // (an older server without GET /models) leaves the list empty and the
+  // launcher falls back to its built-in set.
+  const [environments, setEnvironments] = useState<SavedEnvironment[] | null>(null)
+  const [environmentDefaults, setEnvironmentDefaults] = useState<EnvironmentDefaults | null>(null)
+  const [secretNames, setSecretNames] = useState<string[] | null>(null)
   const [models, setModels] = useState<SupportedModel[] | null>(null)
   const pickersLoading = useRef(false)
   useEffect(() => {
     if (mainPane.type !== 'launcher' || pickersLoading.current) return
     pickersLoading.current = true
-    void api.agents.configs
+    void api.environments
       .list()
-      .then((rows) => setConfigs(rows.configs))
+      .then((rows) => setEnvironments(rows.environments))
       .catch((err) => {
-        setConfigs([])
-        reportApiError('agent configs', err)
+        setEnvironments([])
+        reportApiError('environments', err)
       })
-    void api.integrations.github
-      .repos()
-      .then((r) => setRepos(r.repositories.map((repo) => repo.full_name)))
+    void api.environments.defaults
+      .list()
+      .then(setEnvironmentDefaults)
       .catch((err) => {
-        setRepos([])
-        reportApiError('repositories', err)
+        reportApiError('default environments', err)
+      })
+    void api.secrets
+      .list()
+      .then((r) => setSecretNames(r.secrets.map((s) => s.name)))
+      .catch((err) => {
+        setSecretNames([])
+        reportApiError('variables', err)
       })
     void api.models
       .list()
@@ -425,8 +442,9 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       starting={starting}
       error={startError ?? apiError}
       armed={armed}
-      configs={configs}
-      repos={repos}
+      environments={environments}
+      environmentDefaults={environmentDefaults}
+      secretNames={secretNames}
       models={models}
       detectedRepo={props.detectedRepo}
       sessions={rows}
@@ -460,19 +478,23 @@ function EscOnlyInput({
   return null
 }
 
-// One row of the launcher's configuration block: a label + the picked value(s),
+// One row of the launcher's configuration block: a label + the picked value,
 // opened into its option list with →/enter (the dashboard composer's selects,
-// terminal-shaped). Repositories multi-select; the others pick one.
-type PickerRow = { key: 'config' | 'model' | 'repo'; label: string }
+// terminal-shaped). Both pick one.
+type PickerRow = { key: 'environment' | 'model'; label: string }
 const PICKER_ROWS: readonly PickerRow[] = [
-  { key: 'config', label: 'Config preset' },
-  { key: 'repo', label: 'Repositories' },
+  { key: 'environment', label: 'Environment' },
   { key: 'model', label: 'Model' },
 ]
 
 // What the prompt box says before you type: the whole key map for the block, so
 // nothing about the launcher has to be remembered.
 const PROMPT_HINT = 'Enter to start a session, up to configure it, down to explore old sessions...'
+
+// The variable form's placeholders, each stating what leaving that field empty
+// means, in the field it applies to.
+const NAME_PLACEHOLDER = 'MY_TOKEN'
+const VALUE_PLACEHOLDER = 'leave empty to pull from secrets'
 
 // The prompt box's interior padding, matching the chat composer's.
 const PROMPT_PAD_X = 2
@@ -485,16 +507,23 @@ type LauncherCursor =
   | { kind: 'option'; at: number }
   | { kind: 'list'; id: string }
 
-// The launcher: a compact inline block, configuration on top, prompt in the
-// middle, history at the bottom —
+// Adding a variable in the custom section: a two-field form, name over value,
+// walked with ↑/↓ — `field` is where the caret sits. Enter on either field
+// commits, so a variable whose value comes from stored secrets is name + enter.
+type VariableEditor = {
+  field: 'name' | 'value'
+  name: string
+  value: string
+  error: string | null
+}
+
+// The launcher: one painted box holding everything about the next session —
+// the configuration rows on top, the prompt under them — with history below —
 //
-//     Config preset: none
-//     Repositories: acme/cli
-//     Model: claude-opus-5
-//
+//    | ▶ Environment: backend-sandbox (account default)
+//    |   Model: claude-opus-5
 //    |
-//    | Enter to start a session, up to configure it, down to explore old…
-//    |
+//    |   Enter to start a session, up to configure it, down to explore old…
 //
 //    Recent sessions:                                    @me in account
 //    ● latest session                               $0.20, 2m ago
@@ -504,13 +533,38 @@ type LauncherCursor =
 // live filter over the list below, so finding old work and starting new work
 // are the same gesture. Enter starts a session with the text (empty text
 // starts it idle). ↑ walks up into the configuration rows, where enter (or →)
-// opens that row's dropdown in place — nothing swaps out, the session list
-// stays. ↓ walks down into the list, where enter opens a session.
+// opens that row's dropdown in place — inside the box, growing it downward, so
+// nothing swaps out and the session list stays. ↓ walks down into the list,
+// where enter opens a session.
 //
-// The ▶ glyph marks whichever row holds the cursor. Typing anywhere returns
-// the cursor to the prompt. "Default" everywhere means the server resolves it.
-// Repositories is the one multi-select ([x] toggles; uncheck everything for a
-// sandbox with no checkout).
+// All three rows share one glyph gutter, so the ▶ moves down a single left
+// edge; the box's accent bar stays lit throughout, marking the block rather
+// than any one row. Typing anywhere returns the cursor to the prompt. Agent
+// configs stay a CLI choice (`agent session start -c`), since a config decides
+// its own environment and the server refuses both at once.
+//
+// The open Environment list has two halves —
+//
+//      [x] backend-sandbox (default for acme/api)
+//      [ ] web-e2e (account default)
+//      [ ] [empty]
+//      ─── custom environment ───
+//      VARIABLES
+//        [x] API_TOKEN
+//        [ ] NPM_TOKEN
+//        [x] PORT=3000
+//        + new variable
+//            name: SENTRY_DSN
+//          ▶ value: leave empty to pull from secrets
+//
+// — every saved environment plus the built-in [empty] above the divider, and
+// below it what you can set for this run alone. Each environment names the
+// default rungs it holds, and the one the ladder resolves for the cwd's repo
+// starts out checked, so an untouched row SENDS the environment it shows.
+//
+// The two halves compose: a variable added down there layers ON TOP of whichever
+// environment is checked above (see applyComposerChoices, which has to re-send
+// that environment's own variables because an override array replaces the list).
 function Launcher({
   width,
   whoLine,
@@ -518,8 +572,9 @@ function Launcher({
   starting,
   error,
   armed,
-  configs,
-  repos,
+  environments,
+  environmentDefaults,
+  secretNames,
   models,
   detectedRepo,
   sessions,
@@ -537,11 +592,15 @@ function Launcher({
   error: string | null
   armed: boolean
   // null while loading; [] when the account has none / the fetch failed.
-  configs: SavedAgentConfig[] | null
-  repos: string[] | null
+  environments: SavedEnvironment[] | null
   models: SupportedModel[] | null
-  // The cwd's repo ("owner/name") — what the server's default resolution
-  // checks out; named on the Repository row instead of a bare "Default".
+  // The account's stored variable names, checkable in the custom section.
+  secretNames: string[] | null
+  // The defaults ladder; null until it lands (or its fetch failed), which just
+  // leaves the untouched Environment row reading "Default".
+  environmentDefaults: EnvironmentDefaults | null
+  // The cwd's repo ("owner/name") — picks the repo rung of the ladder above,
+  // so it decides which environment starts out checked.
   detectedRepo: string | null
   sessions: readonly AgentSession[]
   polledOnce: boolean
@@ -554,34 +613,61 @@ function Launcher({
   const [text, setText] = useState('')
   const [textCursor, setTextCursor] = useState(0)
   const [cursor, setCursor] = useState<LauncherCursor>({ kind: 'prompt' })
-  // Single-pick indices; 0 is always "Default" (server-resolved).
-  const [configIdx, setConfigIdx] = useState(0)
+  // null = the environment row is untouched, so it tracks whichever option the
+  // defaults ladder resolves (see environmentIdx). The list arrives async, so
+  // there is no index to seed this with at mount.
+  const [environmentPick, setEnvironmentPick] = useState<number | null>(null)
   // null = the model row is untouched, so it tracks whichever row carries the
   // server-resolved pick (see modelIdx). The list arrives async, so there is no
   // index to seed this with at mount.
   const [modelPick, setModelPick] = useState<number | null>(null)
-  // The multi-select repository set ("owner/name" full names). null = the
-  // picker is untouched: the run inherits the server's resolution (the
-  // detected repo + whatever the resolved config declares). The first toggle
-  // materializes an explicit set — zero, one, or many repos are all valid —
-  // seeded with the detected repo, since that is what the [x] showed.
-  const [repoSel, setRepoSel] = useState<ReadonlySet<string> | null>(null)
   // The open row's dropdown state: which picker is open and where its
   // highlight sits. null = no subtree open.
   const [openPicker, setOpenPicker] = useState<{ key: PickerRow['key']; hover: number } | null>(
     null,
   )
+  // What the custom section below the divider adds on top of the picked
+  // environment. Survives closing and reopening the list, so a variable typed
+  // before choosing an environment is not lost.
+  const [customVariables, setCustomVariables] = useState<readonly CustomVariable[]>([])
+  // The open custom key's editor, or null. `field` is which of the two steps is
+  // being typed; `name`/`value` hold what has been typed so far.
+  const [editor, setEditor] = useState<VariableEditor | null>(null)
 
-  // All three pickers deal in the same option shape (ComposerModel), so the
-  // renderer can ask any of them for a group heading or a subtext; only the
+  // Both pickers deal in the same option shape (ComposerModel), so the
+  // renderer can ask either of them for a group heading or a subtext; only the
   // model list fills those in.
-  const configOptions = useMemo<ComposerModel[]>(
-    () => [
-      { id: null as string | null, label: 'none' },
-      ...(configs ?? []).map((c) => ({ id: c.id as string | null, label: configDisplayName(c) })),
-    ],
-    [configs],
+  //
+  // Every saved environment is listed, each tagged with the default rungs it
+  // holds ("(account default)", "(default for acme/api)"), and the one the
+  // ladder resolves for the cwd's repo starts out checked — so an untouched row
+  // SENDS the environment it shows rather than leaving the server to resolve
+  // something the row never named.
+  const { options: environmentOptionList, picked: resolvedIdx } = useMemo(
+    () => environmentOptions(environments ?? [], environmentDefaults, detectedRepo),
+    [environments, environmentDefaults, detectedRepo],
   )
+  const environmentOptionRows = useMemo<ComposerModel[]>(
+    () => environmentOptionList.map((o) => ({ id: o.id, label: o.label })),
+    [environmentOptionList],
+  )
+  const environmentIdx =
+    environmentPick !== null
+      ? Math.min(environmentPick, environmentOptionRows.length - 1)
+      : resolvedIdx
+  // The picked environment's own variables. They have to ride the override
+  // alongside the custom ones, since an override array replaces the resolved
+  // list rather than appending to it.
+  const pickedEnvironment = environmentOptionRows[environmentIdx]
+  const baseVariables = useMemo<CustomVariable[]>(() => {
+    const id = pickedEnvironment?.id
+    if (!id || id === EMPTY_ENVIRONMENT_ID) return []
+    const found = (environments ?? []).find((e) => e.id === id)
+    return (found?.environment.variables ?? []).map((v) => ({
+      name: v.name,
+      value: v.value ?? null,
+    }))
+  }, [environments, pickedEnvironment])
   // The server's selectable set (GET /models); before it lands — and on an
   // older server that has no such route — the built-in fallback list.
   const modelOptions = useMemo(() => composerModelOptions(models ?? []), [models])
@@ -592,64 +678,91 @@ function Launcher({
     const at = modelOptions.findIndex((o) => o.id === null)
     return at === -1 ? 0 : at
   }, [modelPick, modelOptions])
-  // When the cwd names a repo there is no "Default" row: the detected repo
-  // heads the list as a normal checkable entry — it reads [x] while the
-  // selection is untouched (the server checks it out by default) and can be
-  // unchecked, or checked alongside any others (repositories multi-select).
-  // Only with no detection does the null Default row appear (the server still
-  // resolves the checkout, but there's no name to show).
-  const repoOptions = useMemo<ComposerModel[]>(() => {
-    const listed = (repos ?? []).filter((r) => r !== detectedRepo)
-    return detectedRepo
-      ? [detectedRepo, ...listed].map((r) => ({ id: r as string | null, label: r }))
-      : [
-          { id: null as string | null, label: 'Default' },
-          ...listed.map((r) => ({ id: r as string | null, label: r })),
-        ]
-  }, [repos, detectedRepo])
   const optionsFor = (key: PickerRow['key']) =>
-    key === 'config' ? configOptions : key === 'model' ? modelOptions : repoOptions
-  // The set a toggle starts from: an explicit selection once one exists, else
-  // what the untouched row was already showing as checked (the detected repo).
-  // Without this seed, checking a SECOND repo would silently drop the first.
-  const repoBaseSet = (prev: ReadonlySet<string> | null): Set<string> =>
-    new Set(prev ?? (detectedRepo ? [detectedRepo] : []))
-  // Whether an option is currently picked. Repo is a multi-select: an
-  // untouched selection is the server's default checkout, so the detected repo
-  // (or the null Default row) reads [x] until you touch the list; the
-  // single-pickers match their index.
-  const isPicked = (key: PickerRow['key'], at: number): boolean => {
-    if (key === 'repo') {
-      const id = repoOptions[at]?.id
-      if (repoSel === null) return id === null || id === detectedRepo
-      return id !== null && repoSel.has(id)
-    }
-    const idx = key === 'config' ? configIdx : modelIdx
-    return at === Math.min(idx, optionsFor(key).length - 1)
-  }
-  // Activating an option: single-pickers pick and close; the repo list
-  // TOGGLES the entry ([x]↔[ ]) and stays open so several can be checked, or
-  // all of them unchecked for a sandbox with no checkout. The null Default row
-  // (shown only with no detected repo) hands resolution back to the server.
+    key === 'environment' ? environmentOptionRows : modelOptions
+  const pickedIdx = (key: PickerRow['key']): number =>
+    key === 'environment' ? environmentIdx : modelIdx
+  const isPicked = (key: PickerRow['key'], at: number): boolean =>
+    at === Math.min(pickedIdx(key), optionsFor(key).length - 1)
+  const emptyPicked = pickedEnvironment?.id === EMPTY_ENVIRONMENT_ID
+  // Both rows single-pick, so activating an OPTION closes the dropdown. The
+  // Environment list's custom rows below the divider are not options: they
+  // toggle or type in place and keep the list up.
   const activate = (key: PickerRow['key'], at: number): void => {
-    if (key === 'config') {
-      setConfigIdx(at)
-      setOpenPicker(null)
-    } else if (key === 'model') {
-      setModelPick(at)
-      setOpenPicker(null)
-    } else {
-      const id = repoOptions[at]?.id
-      if (id == null) setRepoSel(null)
-      else {
-        setRepoSel((prev) => {
-          const next = repoBaseSet(prev)
-          if (next.has(id)) next.delete(id)
-          else next.add(id)
-          return next
-        })
-      }
+    if (key === 'environment') setEnvironmentPick(at)
+    else setModelPick(at)
+    setOpenPicker(null)
+  }
+  // The open Environment list's shape, shared by its navigation and its
+  // renderer: the options, then the custom section's secrets, typed variables
+  // and add button.
+  const environmentPicker = useMemo(
+    () => ({
+      optionCount: environmentOptionRows.length,
+      secretNames: secretNames ?? [],
+      customVariables,
+    }),
+    [environmentOptionRows.length, secretNames, customVariables],
+  )
+  const environmentHoverCount = environmentPickerCount(environmentPicker)
+  // Whether a variable of this name is in the run: a checked secret and a typed
+  // entry are the same thing once committed.
+  const variableFor = (name: string): CustomVariable | undefined =>
+    customVariables.find((v) => v.name === name)
+  // Enter (or →) on a row of the open Environment list: an option picks and
+  // closes; a secret toggles; a typed variable re-opens for editing; the add
+  // button opens an empty editor.
+  const activateEnvironmentRow = (hover: number): void => {
+    const row = environmentPickerAt(environmentPicker, hover)
+    if (row.kind === 'option') {
+      activate('environment', row.at)
+      return
     }
+    if (row.kind === 'secret') {
+      // Values are write-only, so a checked secret is a variable with no value:
+      // the sandbox resolves the name from stored secrets at start.
+      setCustomVariables((prev) =>
+        prev.some((v) => v.name === row.name)
+          ? prev.filter((v) => v.name !== row.name)
+          : [...prev, { name: row.name, value: null }],
+      )
+      return
+    }
+    if (row.kind === 'variable') {
+      setEditor({
+        field: 'value',
+        name: row.name,
+        value: variableFor(row.name)?.value ?? '',
+        error: null,
+      })
+      return
+    }
+    setEditor({ field: 'name', name: '', value: '', error: null })
+  }
+  // Enter commits from either field. A name that isn't a legal shell identifier
+  // keeps the form open with the reason. An empty value means the sandbox
+  // resolves the name from stored variables.
+  const commitEditor = (): void => {
+    if (!editor) return
+    const parsed = parseVariableEntry(editor.name)
+    if ('error' in parsed) {
+      setEditor({ ...editor, error: parsed.error })
+      return
+    }
+    // "NAME=value" typed into the name field carries its own value, so it wins
+    // over the (necessarily untouched) value field.
+    const value = parsed.value !== null ? parsed.value : editor.value === '' ? null : editor.value
+    setCustomVariables((prev) => {
+      const next = [...prev]
+      const entry = { name: parsed.name, value }
+      // A repeat of a name already in the list replaces it in place, so the
+      // second typing of a name reads as an edit and not a duplicate row.
+      const existing = next.findIndex((v) => v.name === parsed.name)
+      if (existing !== -1) next[existing] = entry
+      else next.push(entry)
+      return next
+    })
+    setEditor(null)
   }
 
   // Enter with an empty prompt is a real start: the session comes up idle and
@@ -657,9 +770,11 @@ function Launcher({
   // what to ask it.
   const submit = (): void => {
     onSubmit(text.trim(), {
-      configId: configOptions[Math.min(configIdx, configOptions.length - 1)]?.id ?? null,
+      environment: emptyPicked ? null : (pickedEnvironment?.id ?? null),
       model: modelOptions[modelIdx]?.id ?? null,
-      repos: repoSel === null ? null : [...repoSel],
+      emptyEnvironment: emptyPicked,
+      baseVariables,
+      customVariables,
     })
   }
 
@@ -680,12 +795,43 @@ function Launcher({
 
   useInput(
     (ch, key) => {
-      // An open dropdown is a modal subtree: ↑/↓ walk the options,
-      // → (or enter/space) activates the highlighted one — single-pickers
-      // close on pick, the repo list toggles and stays open for more —
-      // ← (or esc) backs out of the subtree.
+      // The variable form is the innermost modal: while it is up it owns every
+      // key, so space is typed text rather than list navigation. ↑/↓ move the
+      // caret between the two fields, enter commits, esc backs out.
+      if (editor !== null) {
+        if (key.escape) {
+          setEditor(null)
+          return
+        }
+        if (key.return) {
+          commitEditor()
+          return
+        }
+        if (key.upArrow) {
+          setEditor({ ...editor, field: 'name' })
+          return
+        }
+        if (key.downArrow) {
+          setEditor({ ...editor, field: 'value' })
+          return
+        }
+        const field = editor.field
+        const typed = field === 'name' ? editor.name : editor.value
+        if (key.backspace || key.delete) {
+          setEditor({ ...editor, [field]: typed.slice(0, -1), error: null })
+          return
+        }
+        if (ch && !key.ctrl && !key.meta) {
+          setEditor({ ...editor, [field]: typed + ch, error: null })
+        }
+        return
+      }
+      // An open dropdown is a modal subtree: ↑/↓ walk the rows,
+      // → (or enter/space) activates the highlighted one — an option picks and
+      // closes, a custom key opens its editor — ← (or esc) backs out.
       if (openPicker !== null) {
-        const options = optionsFor(openPicker.key)
+        const isEnv = openPicker.key === 'environment'
+        const rowCount = isEnv ? environmentHoverCount : optionsFor(openPicker.key).length
         if (key.escape || key.leftArrow) {
           setOpenPicker(null)
           return
@@ -695,11 +841,13 @@ function Launcher({
           return
         }
         if (key.downArrow) {
-          setOpenPicker((p) => p && { ...p, hover: Math.min(options.length - 1, p.hover + 1) })
+          setOpenPicker((p) => p && { ...p, hover: Math.min(rowCount - 1, p.hover + 1) })
           return
         }
         if (key.rightArrow || key.return || ch === ' ') {
-          activate(openPicker.key, Math.min(openPicker.hover, options.length - 1))
+          const hover = Math.min(openPicker.hover, rowCount - 1)
+          if (isEnv) activateEnvironmentRow(hover)
+          else activate(openPicker.key, hover)
           return
         }
         return
@@ -808,29 +956,31 @@ function Launcher({
     { isActive: focused && rawMode },
   )
 
-  // The summary shown on a row: the single pick's label, or the checked repo
-  // set joined (the detected repo while the list is untouched, "none" once you
-  // have explicitly unchecked everything — a sandbox with no checkout). Never
-  // "loading…": every resting value is known locally, so a pending fetch has
-  // nothing to do with what this run would use.
+  // The summary shown on a row: the pick's label, plus what the custom section
+  // adds on top of it. Never "loading…": every resting value is known locally,
+  // so a pending fetch has nothing to do with what this run would use.
   const rowValue = (key: PickerRow['key']): string => {
-    if (key === 'repo') {
-      if (repoSel === null) return detectedRepo ?? 'Default'
-      if (repoSel.size === 0) return 'none'
-      return [...repoSel].join(', ')
-    }
     const options = optionsFor(key)
-    const idx = key === 'config' ? configIdx : modelIdx
-    return options[Math.min(idx, options.length - 1)]?.label ?? 'Default'
+    const label = options[Math.min(pickedIdx(key), options.length - 1)]?.label ?? 'Default'
+    return key === 'environment' ? environmentRowSummary(label, customVariables) : label
   }
 
+  // Columns available inside the prompt box: the terminal minus its left accent
+  // bar and the interior padding on both sides. The configuration rows and the
+  // open dropdown live in there now, so it — not `width` — is what their layout
+  // has to fit.
+  const contentWidth = Math.max(1, width - 1 - PROMPT_PAD_X * 2)
   const open = openPicker
   const openOptions = open ? optionsFor(open.key) : []
-  const openHover = open ? Math.min(open.hover, openOptions.length - 1) : 0
+  const openIsEnv = open?.key === 'environment'
+  const openRowCount = openIsEnv ? environmentHoverCount : openOptions.length
+  const openHover = open ? Math.min(open.hover, openRowCount - 1) : 0
   // Every option plus its group heading — an open dropdown prints the whole
   // list, so a long model list grows the block and the terminal scrolls rather
-  // than hiding rows behind a window.
-  const visibleRows = open ? composerPickerRows(openOptions) : []
+  // than hiding rows behind a window. The Environment list adds the divider and
+  // its custom key rows below the options.
+  const visibleRows = open && !openIsEnv ? composerPickerRows(openOptions) : []
+  const environmentRows = openIsEnv ? environmentPickerRows(environmentPicker) : []
   // The price table's column widths: the label column, then one numeric column
   // per lane, each as wide as its widest cell (its heading included) so the
   // dollars read down a right-aligned column. null when there is no price to
@@ -842,7 +992,7 @@ function Launcher({
     const input = Math.max(2, ...openOptions.map((o) => (o.rate?.input ?? '').length))
     const output = Math.max(3, ...openOptions.map((o) => (o.rate?.output ?? '').length))
     const total = OPTION_GUTTER + label + 2 + input + 2 + output + RATE_UNIT.length
-    return total <= width ? { label, input, output } : null
+    return total <= contentWidth ? { label, input, output } : null
   })()
   // A row's price cells, right-aligned into the table's columns. A model the
   // server quoted no card for prints blank cells rather than shifting the ones
@@ -864,114 +1014,264 @@ function Launcher({
 
   return (
     <Box flexDirection="column" width={width}>
-      {/* What the next run will use, on top: three rows you walk with ↑ from the
-          prompt box, each opening its own list in place. */}
-      {PICKER_ROWS.map((r, i) => {
-        const active = focused && cursor.kind === 'option' && cursor.at === i
-        const isOpen = open?.key === r.key
-        return (
-          <Box key={r.key} flexDirection="column" width={width}>
-            <Box width={width}>
-              <Box width={2} flexShrink={0}>
-                <Text color={theme.cursor}>{active ? SELECTION_GLYPH : ' '}</Text>
-              </Box>
-              <Text wrap="truncate">
-                <Text color={theme.muted}>{r.label}: </Text>
-                <Text color={active ? theme.foreground : theme.muted}>{rowValue(r.key)}</Text>
-              </Text>
-            </Box>
-            {/* The price table's column heads, over the numeric columns they
-                name, with the unit stated once here instead of on every row. */}
-            {isOpen && rateTable && (
-              <Box width={width}>
-                <Text wrap="truncate" color={theme.muted}>
-                  {' '.repeat(OPTION_GUTTER + rateTable.label)}
-                  {rateCells({ input: 'IN', output: 'OUT' })}
-                  {RATE_UNIT}
-                </Text>
-              </Box>
-            )}
-            {isOpen &&
-              visibleRows.map((pickerRow) => {
-                // A group heading: the vendor that built the models under it,
-                // upper-cased into an eyebrow the way the dashboard's
-                // rate-card table sets its own, and muted so it reads as
-                // structure rather than as another pickable row.
-                if (pickerRow.kind === 'group') {
-                  return (
-                    <Box key={`group:${pickerRow.label}`} width={width}>
-                      <Text wrap="truncate" color={theme.muted}>
-                        {'    '}
-                        {pickerRow.label.toUpperCase()}
-                      </Text>
-                    </Box>
-                  )
-                }
-                const at = pickerRow.at
-                const opt = openOptions[at]
-                if (!opt) return null
-                const hovered = at === openHover
-                const picked = isPicked(r.key, at)
-                return (
-                  <Box key={opt.id ?? 'default'} width={width}>
-                    <Text wrap="truncate">
-                      {'   '}
-                      <Text color={theme.cursor}>
-                        {hovered ? SELECTION_GLYPH : ' '}
-                      </Text>{' '}
-                      <Text color={hovered || picked ? theme.foreground : theme.muted}>
-                        {`[${picked ? 'x' : ' '}] ${rateTable ? opt.label.padEnd(rateTable.label) : opt.label}`}
-                      </Text>
-                      {/* The prices, always muted — the table's numbers next
-                          to the id whether or not the row is the highlighted
-                          one, so walking the list never moves the eye off the
-                          name. */}
-                      <Text color={theme.muted}>{rateCells(opt.rate)}</Text>
-                    </Text>
-                  </Box>
-                )
-              })}
-          </Box>
-        )
-      })}
       {/* The prompt box: the chat composer's painted slab, with an accent bar
-          down its left edge and a blank row of padding above and below the
-          input. Wraps instead of truncating, so a long prompt grows the box
-          downward rather than running off the right edge. The key remounts the
-          node so a stale measurement can't misplace the caret. */}
-      <Text> </Text>
+          down its left edge and a blank row of padding above and below its
+          contents — the configuration rows first, then the input.
+
+          The bar stays the cursor color throughout: the box holds three rows
+          now, so it marks the whole block rather than any one of them, and the
+          ▶ in the shared gutter is what says which row you are on. */}
       <Box
         width={width}
+        flexDirection="column"
         backgroundColor={inputSurface}
         borderStyle="bold"
         borderTop={false}
         borderRight={false}
         borderBottom={false}
-        borderLeftColor={focused && cursor.kind === 'prompt' ? theme.cursor : theme.muted}
+        borderLeftColor={theme.cursor}
         paddingY={1}
         paddingX={PROMPT_PAD_X}
       >
-        <Text
-          wrap="wrap"
-          key={`${text}:${textCursor}:${cursor.kind === 'prompt'}`}
-          color={theme.foreground}
-        >
-          {text.slice(0, textCursor)}
-          {caretVisible && text !== '' && (
-            <Text inverse>{textCursor < text.length ? text[textCursor] : ' '}</Text>
-          )}
-          {textCursor < text.length ? text.slice(textCursor + (caretVisible ? 1 : 0)) : ''}
-          {/* Empty input: the hint sits where typed text will land, its first
-              character carrying the caret (inverse) instead of a caret cell of
-              its own pushing it a column right. */}
-          {text === '' && caretVisible && (
-            <Text>
-              <Text inverse>{PROMPT_HINT[0]}</Text>
-              <Text color={theme.muted}>{PROMPT_HINT.slice(1)}</Text>
+        {/* What the next run will use, on top: two rows you walk with ↑ from
+            the input below, each opening its own list in place. */}
+        {PICKER_ROWS.map((r, i) => {
+          const active = focused && cursor.kind === 'option' && cursor.at === i
+          const isOpen = open?.key === r.key
+          return (
+            <Box key={r.key} flexDirection="column" width={contentWidth}>
+              <Box width={contentWidth}>
+                <Box width={2} flexShrink={0}>
+                  <Text color={theme.cursor}>{active ? SELECTION_GLYPH : ' '}</Text>
+                </Box>
+                <Text wrap="truncate">
+                  <Text color={theme.muted}>{r.label}: </Text>
+                  <Text color={active ? theme.foreground : theme.muted}>{rowValue(r.key)}</Text>
+                </Text>
+              </Box>
+              {/* The price table's column heads, over the numeric columns they
+                  name, with the unit stated once here instead of on every row. */}
+              {isOpen && rateTable && (
+                <Box width={contentWidth}>
+                  <Text wrap="truncate" color={theme.muted}>
+                    {' '.repeat(OPTION_GUTTER + rateTable.label)}
+                    {rateCells({ input: 'IN', output: 'OUT' })}
+                    {RATE_UNIT}
+                  </Text>
+                </Box>
+              )}
+              {isOpen &&
+                visibleRows.map((pickerRow) => {
+                  // A group heading: the vendor that built the models under it,
+                  // upper-cased into an eyebrow the way the dashboard's
+                  // rate-card table sets its own, and muted so it reads as
+                  // structure rather than as another pickable row.
+                  if (pickerRow.kind === 'group') {
+                    return (
+                      <Box key={`group:${pickerRow.label}`} width={contentWidth}>
+                        <Text wrap="truncate" color={theme.muted}>
+                          {'    '}
+                          {pickerRow.label.toUpperCase()}
+                        </Text>
+                      </Box>
+                    )
+                  }
+                  const at = pickerRow.at
+                  const opt = openOptions[at]
+                  if (!opt) return null
+                  const hovered = at === openHover
+                  const picked = isPicked(r.key, at)
+                  return (
+                    <Box key={opt.id ?? 'default'} width={contentWidth}>
+                      <Text wrap="truncate">
+                        {'   '}
+                        <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
+                        <Text color={hovered || picked ? theme.foreground : theme.muted}>
+                          {`[${picked ? 'x' : ' '}] ${rateTable ? opt.label.padEnd(rateTable.label) : opt.label}`}
+                        </Text>
+                        {/* The prices, always muted — the table's numbers next
+                            to the id whether or not the row is the highlighted
+                            one, so walking the list never moves the eye off the
+                            name. */}
+                        <Text color={theme.muted}>{rateCells(opt.rate)}</Text>
+                      </Text>
+                    </Box>
+                  )
+                })}
+              {/* The Environment list: its options, the divider, then the custom
+                  section — a checkbox per stored variable, whatever was typed
+                  here, and the add button. */}
+              {isOpen &&
+                environmentRows.map((envRow) => {
+                  if (envRow.kind === 'divider') {
+                    return (
+                      <Box key="divider" width={contentWidth}>
+                        <Text wrap="truncate" color={theme.muted}>
+                          {'    '}
+                          {`─── ${envRow.label} ───`}
+                        </Text>
+                      </Box>
+                    )
+                  }
+                  if (envRow.kind === 'heading') {
+                    return (
+                      <Box key={`heading:${envRow.label}`} width={contentWidth}>
+                        <Text wrap="truncate" color={theme.muted}>
+                          {'    '}
+                          {envRow.label.toUpperCase()}
+                        </Text>
+                      </Box>
+                    )
+                  }
+                  // The form owns the caret while it is open, so the list's own
+                  // highlight goes dark rather than showing a second one.
+                  const hovered = envRow.hover === openHover && editor === null
+                  if (envRow.kind === 'option') {
+                    const opt = openOptions[envRow.at]
+                    if (!opt) return null
+                    const picked = isPicked('environment', envRow.at)
+                    return (
+                      <Box key={opt.id ?? 'default'} width={contentWidth}>
+                        <Text wrap="truncate">
+                          {'   '}
+                          <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
+                          <Text color={hovered || picked ? theme.foreground : theme.muted}>
+                            {`[${picked ? 'x' : ' '}] ${opt.label}`}
+                          </Text>
+                        </Text>
+                      </Box>
+                    )
+                  }
+                  if (envRow.kind === 'addVariable') {
+                    return (
+                      <Box key="addVariable" flexDirection="column" width={contentWidth}>
+                        <Box width={contentWidth}>
+                          <Text wrap="truncate">
+                            {'   '}
+                            <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
+                            <Text color={hovered ? theme.foreground : theme.muted}>
+                              {'    '}
+                              {ADD_VARIABLE_LABEL}
+                            </Text>
+                          </Text>
+                        </Box>
+                        {/* The form, one level in from the button that opened
+                            it: both fields at once, the ▶ on whichever ↑/↓ put
+                            the caret on. */}
+                        {editor !== null && (
+                          <Box flexDirection="column" width={contentWidth}>
+                            {(['name', 'value'] as const).map((field) => {
+                              const here = editor.field === field
+                              const typed = field === 'name' ? editor.name : editor.value
+                              // The value's placeholder says what an empty one
+                              // means, in the field it applies to.
+                              const ghost =
+                                field === 'value' && typed === ''
+                                  ? VALUE_PLACEHOLDER
+                                  : field === 'name' && typed === ''
+                                    ? NAME_PLACEHOLDER
+                                    : null
+                              return (
+                                <Box key={field} width={contentWidth}>
+                                  <Text wrap="truncate">
+                                    {'       '}
+                                    <Text color={theme.cursor}>
+                                      {here ? SELECTION_GLYPH : ' '}
+                                    </Text>{' '}
+                                    <Text color={theme.muted}>{`${field}: `}</Text>
+                                    <Text color={theme.foreground}>{typed}</Text>
+                                    {/* The caret sits on the placeholder's first
+                                        character rather than pushing it right. */}
+                                    {ghost ? (
+                                      <Text>
+                                        {here ? (
+                                          <Text inverse>{ghost[0]}</Text>
+                                        ) : (
+                                          <Text color={theme.muted}>{ghost[0]}</Text>
+                                        )}
+                                        <Text color={theme.muted}>{ghost.slice(1)}</Text>
+                                      </Text>
+                                    ) : (
+                                      here && <Text inverse> </Text>
+                                    )}
+                                  </Text>
+                                </Box>
+                              )
+                            })}
+                            {editor.error !== null && (
+                              <Box width={contentWidth}>
+                                <Text wrap="truncate" color={theme.muted}>
+                                  {'           '}
+                                  {editor.error}
+                                </Text>
+                              </Box>
+                            )}
+                          </Box>
+                        )}
+                      </Box>
+                    )
+                  }
+                  // A stored variable (checkbox) or one typed here. Both read as
+                  // one row per name: checking a stored one and typing a value
+                  // for it are the same entry.
+                  const entry = variableFor(envRow.name)
+                  const checked = entry !== undefined
+                  const label =
+                    envRow.kind === 'secret'
+                      ? variableRowLabel(envRow.name, entry ? entry.value : undefined)
+                      : variableRowLabel(envRow.name, entry?.value ?? null)
+                  return (
+                    <Box key={`var:${envRow.name}`} width={contentWidth}>
+                      <Text wrap="truncate">
+                        {'   '}
+                        <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
+                        <Text color={hovered || checked ? theme.foreground : theme.muted}>
+                          {`    [${checked ? 'x' : ' '}] ${label}`}
+                        </Text>
+                      </Text>
+                    </Box>
+                  )
+                })}
+            </Box>
+          )
+        })}
+        {/* One blank row between the configuration rows and what you type. */}
+        <Text> </Text>
+        {/* The input, in the same glyph gutter as the rows above it, so all
+            three read down one left edge and the ▶ moves between them. */}
+        <Box width={contentWidth}>
+          <Box width={2} flexShrink={0}>
+            <Text color={theme.cursor}>
+              {focused && cursor.kind === 'prompt' ? SELECTION_GLYPH : ' '}
             </Text>
-          )}
-          {text === '' && !caretVisible && <Text color={theme.muted}>{PROMPT_HINT}</Text>}
-        </Text>
+          </Box>
+          {/* Takes the columns the gutter left, so a long prompt wraps inside
+              the box instead of running past its right edge. The key remounts
+              the node so a stale measurement can't misplace the caret. */}
+          <Box flexGrow={1} flexShrink={1}>
+            <Text
+              wrap="wrap"
+              key={`${text}:${textCursor}:${cursor.kind === 'prompt'}`}
+              color={theme.foreground}
+            >
+              {text.slice(0, textCursor)}
+              {caretVisible && text !== '' && (
+                <Text inverse>{textCursor < text.length ? text[textCursor] : ' '}</Text>
+              )}
+              {textCursor < text.length ? text.slice(textCursor + (caretVisible ? 1 : 0)) : ''}
+              {/* Empty input: the hint sits where typed text will land, its
+                  first character carrying the caret (inverse) instead of a
+                  caret cell of its own pushing it a column right. */}
+              {text === '' && caretVisible && (
+                <Text>
+                  <Text inverse>{PROMPT_HINT[0]}</Text>
+                  <Text color={theme.muted}>{PROMPT_HINT.slice(1)}</Text>
+                </Text>
+              )}
+              {text === '' && !caretVisible && <Text color={theme.muted}>{PROMPT_HINT}</Text>}
+            </Text>
+          </Box>
+        </Box>
       </Box>
       {/* Two blank rows splitting what you are about to start from what you have
           already run. */}
