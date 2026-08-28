@@ -407,8 +407,114 @@ export function composerPickerRows(
 }
 
 export const CUSTOM_ENVIRONMENT_DIVIDER = 'custom environment'
+export const REPOSITORIES_HEADING = 'repositories'
 export const VARIABLES_HEADING = 'variables'
-export const ADD_VARIABLE_LABEL = '+ new variable'
+export const ADD_VARIABLE_LABEL = '+ new'
+export const COMPUTE_HEADING = 'compute'
+export const IMAGE_HEADING = 'image'
+export const HOOKS_HEADING = 'hooks'
+export const MCP_SERVERS_HEADING = 'mcp servers'
+export const ADD_MCP_SERVER_LABEL = '+ new'
+
+// The compute fields, in the order their rows appear. Each is an inline text
+// input like a repo's branch row; blank = whatever the server resolves.
+export const COMPUTE_FIELDS = ['cpu', 'memory', 'timeout'] as const
+export type ComputeField = (typeof COMPUTE_FIELDS)[number]
+
+// What the custom section's compute rows hold, as typed. Strings even for cpu:
+// these are input fields, and the override conversion is where parsing lives.
+export type CustomCompute = Readonly<Record<ComputeField, string>>
+
+export const EMPTY_COMPUTE: CustomCompute = { cpu: '', memory: '', timeout: '' }
+
+// The image customization fields: `dockerfile_append` layers onto the image
+// before any repo exists, `setup` runs at build time after checkout and is
+// captured by the cached snapshot. One-line inputs here — a longer script
+// belongs in an environment YAML.
+export const IMAGE_FIELDS = ['dockerfile_append', 'setup'] as const
+export type ImageField = (typeof IMAGE_FIELDS)[number]
+
+export type CustomImage = Readonly<Record<ImageField, string>>
+
+export const EMPTY_IMAGE: CustomImage = { dockerfile_append: '', setup: '' }
+
+// The lifecycle hooks: `post_start` runs after the container starts (before
+// any repo is cloned), `post_clone` after checkout, before the agent. Per-run
+// scripts, never cached — same one-line inputs as image.
+export const HOOK_FIELDS = ['post_start', 'post_clone'] as const
+export type HookField = (typeof HOOK_FIELDS)[number]
+
+export type CustomHooks = Readonly<Record<HookField, string>>
+
+export const EMPTY_HOOKS: CustomHooks = { post_start: '', post_clone: '' }
+
+// The platform's built-in MCP servers an agent opts into by name, shown as
+// checkboxes when the matching integration is connected (an unconnected one
+// has no server to opt into).
+export function builtInMcpServers(integrations: {
+  linear?: unknown
+  slack?: unknown
+}): string[] {
+  return [
+    ...(integrations.linear ? ['linear'] : []),
+    ...(integrations.slack ? ['slack'] : []),
+  ]
+}
+
+// An MCP server added in the launcher's custom section. A built-in checkbox is
+// a name alone; the "+ new server" form fills name plus exactly one of
+// command (stdio — the harness spawns it in the sandbox) or url (remote).
+// args/env/headers stay YAML-only: past a command line, define the server in
+// an environment file.
+export interface CustomMcpServer {
+  name: string
+  command: string | null
+  url: string | null
+}
+
+// A custom server in the shape the mcp_servers override takes: `{name}` opts
+// into a built-in; a command line splits into command + args (the schema's
+// stdio shape); a url is the remote shape.
+export function mcpServerEntry(s: CustomMcpServer): Record<string, unknown> {
+  if (s.command) {
+    const [command, ...args] = s.command.split(/\s+/)
+    return args.length > 0 ? { name: s.name, command, args } : { name: s.name, command }
+  }
+  if (s.url) return { name: s.name, url: s.url }
+  return { name: s.name }
+}
+
+// The form's commit check: a name is required, and command/url pick the server
+// type so both at once is ambiguous. Both empty is fine — a bare name opts
+// into a built-in.
+export function validateMcpServer(s: CustomMcpServer): string | null {
+  if (!s.name.trim()) return 'name a server'
+  if (s.command && s.url) return 'fill command or url, not both'
+  return null
+}
+
+// The set fields of a string-record section, for a merging object override.
+export function fieldsOverride(fields: Readonly<Record<string, string>>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(fields)) {
+    if (value.trim() !== '') out[key] = value.trim()
+  }
+  return out
+}
+
+// The compute override from the typed fields: only the set ones, since an
+// override's nested objects merge key by key (unlike its arrays). cpu parses
+// to the number the schema wants; unparseable cpu is dropped rather than sent
+// as a string the server would 400 on (the input row only admits digits, so
+// this is belt and braces).
+export function computeOverride(compute: CustomCompute): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  const cpu = compute.cpu.trim()
+  if (cpu !== '' && !Number.isNaN(Number(cpu))) out.cpu = Number(cpu)
+  if (compute.memory.trim() !== '') out.memory = compute.memory.trim()
+  if (compute.timeout.trim() !== '') out.timeout = compute.timeout.trim()
+  return out
+}
 
 // The built-in "no environment at all" option's id. A sentinel, never sent: the
 // launcher translates it into the cleared-list override, since the wire has no
@@ -418,7 +524,8 @@ export const EMPTY_ENVIRONMENT_LABEL = '[empty]'
 
 // The open Environment list, top to bottom: the saved environments and
 // "[empty]" as options, a divider, then the custom section — one checkbox per
-// stored secret, then the variables typed here, then the add button.
+// connected repository, one per stored secret, then the variables typed here,
+// then the add button.
 //
 // `hover` is the index ↑/↓ walks; rows without one are DECORATION the highlight
 // skips, which is what keeps this a plain list rather than a nested tree.
@@ -426,24 +533,48 @@ export type EnvironmentPickerRow =
   | { kind: 'option'; at: number; hover: number }
   | { kind: 'divider'; label: string }
   | { kind: 'heading'; label: string }
+  | { kind: 'repo'; fullName: string; hover: number }
+  | { kind: 'repoRef'; fullName: string; hover: number }
   | { kind: 'secret'; name: string; hover: number }
   | { kind: 'variable'; name: string; hover: number }
   | { kind: 'addVariable'; hover: number }
+  | { kind: 'compute'; field: ComputeField; hover: number }
+  | { kind: 'image'; field: ImageField; hover: number }
+  | { kind: 'hook'; field: HookField; hover: number }
+  | { kind: 'mcpServer'; name: string; hover: number }
+  | { kind: 'addMcpServer'; hover: number }
 
 // What activating a hovered row does, without the renderer having to know the
 // list's shape.
 export type EnvironmentTarget =
   | { kind: 'option'; at: number }
+  | { kind: 'repo'; fullName: string }
+  | { kind: 'repoRef'; fullName: string }
   | { kind: 'secret'; name: string }
   | { kind: 'variable'; name: string }
   | { kind: 'addVariable' }
+  | { kind: 'compute'; field: ComputeField }
+  | { kind: 'image'; field: ImageField }
+  | { kind: 'hook'; field: HookField }
+  | { kind: 'mcpServer'; name: string }
+  | { kind: 'addMcpServer' }
 
 export interface EnvironmentPickerInput {
   optionCount: number
+  // The account's connected repositories ("owner/name"), checkable in the
+  // custom section; each clones at its default branch unless a ref is typed.
+  repoNames: readonly string[]
+  // Which of those are in the run. A checked repo grows a `branch:` input row
+  // under it, where ↓ lands and typing sets the ref (blank = default branch).
+  checkedRepoNames: readonly string[]
   // The account's stored secret names (values are write-only, so checking one
   // adds a variable with no value and the sandbox resolves it at start).
   secretNames: readonly string[]
   customVariables: readonly CustomVariable[]
+  // The built-in MCP servers connected on this account (checkboxes), and the
+  // servers defined here whose names aren't among them.
+  builtInMcpServers: readonly string[]
+  customMcpServers: readonly CustomMcpServer[]
 }
 
 export function environmentPickerRows(input: EnvironmentPickerInput): EnvironmentPickerRow[] {
@@ -451,6 +582,26 @@ export function environmentPickerRows(input: EnvironmentPickerInput): Environmen
   let hover = 0
   for (let at = 0; at < input.optionCount; at++) rows.push({ kind: 'option', at, hover: hover++ })
   rows.push({ kind: 'divider', label: CUSTOM_ENVIRONMENT_DIVIDER })
+  // No REPOSITORIES heading while there are no rows to sit under it — the repo
+  // list is empty until the fetch lands (or when the account has none).
+  if (input.repoNames.length > 0) {
+    rows.push({ kind: 'heading', label: REPOSITORIES_HEADING })
+    for (const fullName of input.repoNames) {
+      rows.push({ kind: 'repo', fullName, hover: hover++ })
+      if (input.checkedRepoNames.includes(fullName)) {
+        rows.push({ kind: 'repoRef', fullName, hover: hover++ })
+      }
+    }
+  }
+  rows.push({ kind: 'heading', label: MCP_SERVERS_HEADING })
+  for (const name of input.builtInMcpServers)
+    rows.push({ kind: 'mcpServer', name, hover: hover++ })
+  // Like variables: a typed name that is also a built-in rides that row.
+  for (const s of input.customMcpServers) {
+    if (input.builtInMcpServers.includes(s.name)) continue
+    rows.push({ kind: 'mcpServer', name: s.name, hover: hover++ })
+  }
+  rows.push({ kind: 'addMcpServer', hover: hover++ })
   rows.push({ kind: 'heading', label: VARIABLES_HEADING })
   for (const name of input.secretNames) rows.push({ kind: 'secret', name, hover: hover++ })
   // A variable typed here whose name is also a secret rides that secret's row
@@ -460,6 +611,12 @@ export function environmentPickerRows(input: EnvironmentPickerInput): Environmen
     rows.push({ kind: 'variable', name: v.name, hover: hover++ })
   }
   rows.push({ kind: 'addVariable', hover: hover++ })
+  rows.push({ kind: 'heading', label: IMAGE_HEADING })
+  for (const field of IMAGE_FIELDS) rows.push({ kind: 'image', field, hover: hover++ })
+  rows.push({ kind: 'heading', label: HOOKS_HEADING })
+  for (const field of HOOK_FIELDS) rows.push({ kind: 'hook', field, hover: hover++ })
+  rows.push({ kind: 'heading', label: COMPUTE_HEADING })
+  for (const field of COMPUTE_FIELDS) rows.push({ kind: 'compute', field, hover: hover++ })
   return rows
 }
 
@@ -474,8 +631,15 @@ export function environmentPickerAt(
   )
   const row = landable[Math.min(Math.max(0, hover), landable.length - 1)]
   if (row.kind === 'option') return { kind: 'option', at: row.at }
+  if (row.kind === 'repo') return { kind: 'repo', fullName: row.fullName }
+  if (row.kind === 'repoRef') return { kind: 'repoRef', fullName: row.fullName }
   if (row.kind === 'secret') return { kind: 'secret', name: row.name }
   if (row.kind === 'variable') return { kind: 'variable', name: row.name }
+  if (row.kind === 'compute') return { kind: 'compute', field: row.field }
+  if (row.kind === 'image') return { kind: 'image', field: row.field }
+  if (row.kind === 'hook') return { kind: 'hook', field: row.field }
+  if (row.kind === 'mcpServer') return { kind: 'mcpServer', name: row.name }
+  if (row.kind === 'addMcpServer') return { kind: 'addMcpServer' }
   return { kind: 'addVariable' }
 }
 
@@ -488,10 +652,23 @@ export function environmentPickerCount(input: EnvironmentPickerInput): number {
 export function environmentRowSummary(
   label: string,
   customVariables: readonly CustomVariable[],
+  customRepositories: readonly CustomRepository[] = [],
+  customCompute: CustomCompute = EMPTY_COMPUTE,
+  customImage: CustomImage = EMPTY_IMAGE,
+  customHooks: CustomHooks = EMPTY_HOOKS,
+  customMcpServers: readonly CustomMcpServer[] = [],
 ): string {
-  if (customVariables.length === 0) return label
-  const n = customVariables.length
-  return `${label} +${n} variable${n === 1 ? '' : 's'}`
+  const extras: string[] = []
+  const r = customRepositories.length
+  if (r > 0) extras.push(`+${r} repo${r === 1 ? '' : 's'}`)
+  const v = customVariables.length
+  if (v > 0) extras.push(`+${v} variable${v === 1 ? '' : 's'}`)
+  const m = customMcpServers.length
+  if (m > 0) extras.push(`+${m} mcp`)
+  if (Object.keys(computeOverride(customCompute)).length > 0) extras.push('+compute')
+  if (Object.keys(fieldsOverride(customImage)).length > 0) extras.push('+image')
+  if (Object.keys(fieldsOverride(customHooks)).length > 0) extras.push('+hooks')
+  return extras.length === 0 ? label : `${label} ${extras.join(' ')}`
 }
 
 // How a variable reads in the custom section: the name alone when the sandbox
@@ -511,6 +688,23 @@ export interface CustomVariable {
   value: string | null
 }
 
+// A repository the launcher's custom section adds on top of the picked
+// environment, by full "owner/name". A null ref means the default branch, the
+// same reading the environment YAML gives an entry with no `ref`.
+export interface CustomRepository {
+  fullName: string
+  ref: string | null
+}
+
+// How a checked repository's branch row reads: the typed ref, else the repo's
+// default branch as the resting value.
+export function repositoryRefLabel(
+  ref: string | null | undefined,
+  defaultBranch: string | null | undefined,
+): string | null {
+  return ref ?? defaultBranch ?? null
+}
+
 // The composer's picks, as the new-session pane reports them. environment and
 // model null = that row was never touched, so the server resolves it (the
 // environment ladder, the account's default model). `emptyEnvironment` is the
@@ -519,10 +713,21 @@ export interface ComposerChoices {
   environment: string | null
   model: string | null
   emptyEnvironment: boolean
-  // The picked environment's own variables, needed because an override array
+  // The picked environment's own lists, needed because an override array
   // REPLACES the resolved list rather than appending to it.
   baseVariables: readonly CustomVariable[]
   customVariables: readonly CustomVariable[]
+  baseRepositories: readonly CustomRepository[]
+  customRepositories: readonly CustomRepository[]
+  // The picked environment's own servers ride the override verbatim (they can
+  // be shapes the launcher can't build, e.g. stdio with env).
+  baseMcpServers: readonly unknown[]
+  customMcpServers: readonly CustomMcpServer[]
+  // No base counterparts: these are scalars in merging object overrides, so
+  // unset fields keep the resolved values.
+  customCompute: CustomCompute
+  customImage: CustomImage
+  customHooks: CustomHooks
 }
 
 // One variable list from the two that have to end up in the override, with a
@@ -549,6 +754,37 @@ export function mergeVariables(
 // treats an absent value as the secret lookup.
 function variableEntry(v: CustomVariable): { name: string; value?: string } {
   return v.value === null ? { name: v.name } : { name: v.name, value: v.value }
+}
+
+// One repository list from the two that have to end up in the override, with a
+// later full name winning — same reading as mergeVariables.
+export function mergeRepositories(
+  base: readonly CustomRepository[],
+  custom: readonly CustomRepository[],
+): CustomRepository[] {
+  const merged: CustomRepository[] = []
+  const at = new Map<string, number>()
+  for (const r of [...base, ...custom]) {
+    const seen = at.get(r.fullName)
+    if (seen === undefined) {
+      at.set(r.fullName, merged.length)
+      merged.push(r)
+    } else merged[seen] = r
+  }
+  return merged
+}
+
+// A repository in the shape an environment override takes: owner and name
+// split, `ref` omitted (not null) for the default branch, since the config
+// schema treats an absent ref as "the repo's default".
+function repositoryEntry(r: CustomRepository): { owner?: string; name: string; ref?: string } {
+  const slash = r.fullName.indexOf('/')
+  const entry: { owner?: string; name: string; ref?: string } =
+    slash === -1
+      ? { name: r.fullName }
+      : { owner: r.fullName.slice(0, slash), name: r.fullName.slice(slash + 1) }
+  if (r.ref !== null) entry.ref = r.ref
+  return entry
 }
 
 // The entry point's base request with the composer's picks layered on: the
@@ -582,6 +818,35 @@ export function applyComposerChoices(
   if (choices.emptyEnvironment || choices.customVariables.length > 0) {
     environment.variables = variables.map(variableEntry)
   }
+  const repositories = mergeRepositories(
+    choices.emptyEnvironment ? [] : choices.baseRepositories,
+    choices.customRepositories,
+  )
+  if (choices.emptyEnvironment || choices.customRepositories.length > 0) {
+    environment.repositories = repositories.map(repositoryEntry)
+  }
+  // MCP servers merge like the other lists: the base definitions verbatim,
+  // then the servers added here whose names the base doesn't already carry.
+  if (!choices.emptyEnvironment && choices.customMcpServers.length > 0) {
+    const baseNames = new Set(
+      choices.baseMcpServers.map((s) =>
+        typeof s === 'string' ? s : ((s as { name?: string }).name ?? ''),
+      ),
+    )
+    environment.mcp_servers = [
+      ...choices.baseMcpServers,
+      ...choices.customMcpServers.filter((s) => !baseNames.has(s.name)).map(mcpServerEntry),
+    ]
+  }
+  if (choices.emptyEnvironment && choices.customMcpServers.length > 0) {
+    environment.mcp_servers = choices.customMcpServers.map(mcpServerEntry)
+  }
+  const compute = computeOverride(choices.customCompute)
+  if (Object.keys(compute).length > 0) environment.compute = compute
+  const image = fieldsOverride(choices.customImage)
+  if (Object.keys(image).length > 0) environment.image = image
+  const hooks = fieldsOverride(choices.customHooks)
+  if (Object.keys(hooks).length > 0) environment.hooks = hooks
   if (Object.keys(environment).length > 0) override.environment = environment
   if (Object.keys(override).length > 0) req.override = override
   return req
@@ -621,11 +886,31 @@ export function environmentDefaultRungs(
   ]
 }
 
+// Where a synced environment's definition lives, for its option row:
+// "owner/name/path/to/file.yaml @ sha1234". Only what the API already gave us —
+// no source_details (an API-managed environment) means null, and the repo id
+// resolves to a name only if the connected-repos list holds it.
+export function environmentSourceLabel(
+  e: {
+    source_details?: { repo_id: number; path: string } | null
+    last_synced_commit_sha?: string | null
+  },
+  repoNamesById: ReadonlyMap<number, string>,
+): string | null {
+  const src = e.source_details
+  if (!src) return null
+  const repo = repoNamesById.get(src.repo_id)
+  if (!repo) return null
+  const sha = e.last_synced_commit_sha ? ` @ ${e.last_synced_commit_sha.slice(0, 7)}` : ''
+  return `${repo}/${src.path}${sha}`
+}
+
 // The Environment row's options: every saved environment, each labelled with
-// the default rungs it holds, then the built-in "[empty]". `picked` is the row
-// checked while the row is untouched — the environment the ladder resolves for
-// the repo you are standing in, so the launcher can SEND what it shows instead
-// of leaving the server to resolve something else.
+// the default rungs it holds and the file it syncs from, then the built-in
+// "[empty]". `picked` is the row checked while the row is untouched — the
+// environment the ladder resolves for the repo you are standing in, so the
+// launcher can SEND what it shows instead of leaving the server to resolve
+// something else.
 //
 // A "Default" row appears only when no rung resolves at all: then there is no
 // name to show and the server's own resolution is the honest answer.
@@ -633,13 +918,15 @@ export function environmentOptions(
   environments: readonly { id: string; name: string }[],
   ladder: EnvironmentDefaults | null,
   detectedRepo: string | null,
+  sourceLabels: ReadonlyMap<string, string> = new Map(),
 ): { options: { id: string | null; label: string }[]; picked: number } {
   const resolved = ladder ? effectiveEnvironmentDefault(ladder, detectedRepo)?.id : undefined
   const listed = environments.map((e) => {
-    const rungs = environmentDefaultRungs(ladder, e.id)
+    const notes = [...(sourceLabels.has(e.id) ? [sourceLabels.get(e.id) as string] : []),
+      ...environmentDefaultRungs(ladder, e.id)]
     return {
       id: e.id as string | null,
-      label: rungs.length > 0 ? `${e.name} (${rungs.join(', ')})` : e.name,
+      label: notes.length > 0 ? `${e.name} (${notes.join(', ')})` : e.name,
     }
   })
   const empty = { id: EMPTY_ENVIRONMENT_ID as string | null, label: EMPTY_ENVIRONMENT_LABEL }

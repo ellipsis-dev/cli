@@ -7,6 +7,7 @@ import { errorDetail } from '../lib/api'
 import type {
   AgentSession,
   EnvironmentDefaults,
+  RepositorySummary,
   SavedEnvironment,
   StartAgentSessionRequest,
   SupportedModel,
@@ -15,8 +16,10 @@ import { applyEditShortcut } from '../lib/editing'
 import { CTRL_C_QUIT_HINT, useCtrlCQuit } from './ctrlC'
 import { sessionUrl } from '../lib/urls'
 import {
+  ADD_MCP_SERVER_LABEL,
   ADD_VARIABLE_LABEL,
   applyComposerChoices,
+  builtInMcpServers,
   attentionFlip,
   composerModelOptions,
   composerPickerRows,
@@ -27,11 +30,23 @@ import {
   environmentPickerCount,
   environmentPickerRows,
   environmentRowSummary,
+  environmentSourceLabel,
   parseVariableEntry,
+  repositoryRefLabel,
   variableRowLabel,
+  EMPTY_COMPUTE,
+  EMPTY_HOOKS,
+  EMPTY_IMAGE,
   type ComposerChoices,
   type ComposerModel,
+  type ComputeField,
+  type CustomCompute,
+  type CustomHooks,
+  type CustomImage,
+  type CustomMcpServer,
+  type CustomRepository,
   type CustomVariable,
+  validateMcpServer,
   rowDescription,
   rowGlyph,
   rowMeta,
@@ -298,7 +313,11 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   const [environments, setEnvironments] = useState<SavedEnvironment[] | null>(null)
   const [environmentDefaults, setEnvironmentDefaults] = useState<EnvironmentDefaults | null>(null)
   const [secretNames, setSecretNames] = useState<string[] | null>(null)
+  const [repos, setRepos] = useState<RepositorySummary[] | null>(null)
   const [models, setModels] = useState<SupportedModel[] | null>(null)
+  // The built-in MCP server names available on this account (from the
+  // connected integrations); [] until the fetch lands or when none are.
+  const [builtInServers, setBuiltInServers] = useState<string[]>([])
   const pickersLoading = useRef(false)
   useEffect(() => {
     if (mainPane.type !== 'launcher' || pickersLoading.current) return
@@ -322,6 +341,19 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       .catch((err) => {
         setSecretNames([])
         reportApiError('variables', err)
+      })
+    void api.integrations.github
+      .repos()
+      .then((r) => setRepos(r.repositories))
+      .catch((err) => {
+        setRepos([])
+        reportApiError('repositories', err)
+      })
+    void api.integrations
+      .list()
+      .then((r) => setBuiltInServers(builtInMcpServers(r)))
+      .catch((err) => {
+        reportApiError('integrations', err)
       })
     void api.models
       .list()
@@ -445,6 +477,8 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       environments={environments}
       environmentDefaults={environmentDefaults}
       secretNames={secretNames}
+      repos={repos}
+      builtInServers={builtInServers}
       models={models}
       detectedRepo={props.detectedRepo}
       sessions={rows}
@@ -517,6 +551,20 @@ type VariableEditor = {
   error: string | null
 }
 
+// Adding an MCP server: three fields walked with ↑/↓. A bare name opts into a
+// built-in; command makes it a stdio server, url a remote one (one or the
+// other — validateMcpServer). Enter commits from any field, esc backs out.
+type ServerEditor = {
+  field: 'name' | 'command' | 'url'
+  name: string
+  command: string
+  url: string
+  error: string | null
+}
+
+const SERVER_EDITOR_FIELDS = ['name', 'command', 'url'] as const
+
+
 // The launcher: one painted box holding everything about the next session —
 // the configuration rows on top, the prompt under them — with history below —
 //
@@ -575,6 +623,8 @@ function Launcher({
   environments,
   environmentDefaults,
   secretNames,
+  repos,
+  builtInServers,
   models,
   detectedRepo,
   sessions,
@@ -596,6 +646,10 @@ function Launcher({
   models: SupportedModel[] | null
   // The account's stored variable names, checkable in the custom section.
   secretNames: string[] | null
+  // The account's connected repositories, checkable in the custom section.
+  repos: RepositorySummary[] | null
+  // The built-in MCP server names available on this account.
+  builtInServers: string[]
   // The defaults ladder; null until it lands (or its fetch failed), which just
   // leaves the untouched Environment row reading "Default".
   environmentDefaults: EnvironmentDefaults | null
@@ -630,6 +684,13 @@ function Launcher({
   // environment. Survives closing and reopening the list, so a variable typed
   // before choosing an environment is not lost.
   const [customVariables, setCustomVariables] = useState<readonly CustomVariable[]>([])
+  const [customRepositories, setCustomRepositories] = useState<readonly CustomRepository[]>([])
+  const [customCompute, setCustomCompute] = useState<CustomCompute>(EMPTY_COMPUTE)
+  const [customImage, setCustomImage] = useState<CustomImage>(EMPTY_IMAGE)
+  const [customHooks, setCustomHooks] = useState<CustomHooks>(EMPTY_HOOKS)
+  const [customMcpServers, setCustomMcpServers] = useState<readonly CustomMcpServer[]>([])
+  // The "+ new server" form's state, or null while closed.
+  const [serverEditor, setServerEditor] = useState<ServerEditor | null>(null)
   // The open custom key's editor, or null. `field` is which of the two steps is
   // being typed; `name`/`value` hold what has been typed so far.
   const [editor, setEditor] = useState<VariableEditor | null>(null)
@@ -643,9 +704,21 @@ function Launcher({
   // ladder resolves for the cwd's repo starts out checked — so an untouched row
   // SENDS the environment it shows rather than leaving the server to resolve
   // something the row never named.
+  // Each synced environment's option row names the file it came from — only
+  // when the API already gave us the pieces (source_details + the repo list).
+  const environmentSources = useMemo(() => {
+    const byId = new Map((repos ?? []).map((r) => [r.id, r.full_name]))
+    const labels = new Map<string, string>()
+    for (const e of environments ?? []) {
+      const label = environmentSourceLabel(e, byId)
+      if (label) labels.set(e.id, label)
+    }
+    return labels
+  }, [environments, repos])
   const { options: environmentOptionList, picked: resolvedIdx } = useMemo(
-    () => environmentOptions(environments ?? [], environmentDefaults, detectedRepo),
-    [environments, environmentDefaults, detectedRepo],
+    () =>
+      environmentOptions(environments ?? [], environmentDefaults, detectedRepo, environmentSources),
+    [environments, environmentDefaults, detectedRepo, environmentSources],
   )
   const environmentOptionRows = useMemo<ComposerModel[]>(
     () => environmentOptionList.map((o) => ({ id: o.id, label: o.label })),
@@ -666,6 +739,63 @@ function Launcher({
     return (found?.environment.variables ?? []).map((v) => ({
       name: v.name,
       value: v.value ?? null,
+    }))
+  }, [environments, pickedEnvironment])
+  // The picked environment's own compute and image, as the resting
+  // placeholders of their input rows. Display only: object overrides merge key
+  // by key, so unlike the lists these never need re-sending.
+  const baseCompute = useMemo<CustomCompute>(() => {
+    const id = pickedEnvironment?.id
+    if (!id || id === EMPTY_ENVIRONMENT_ID) return EMPTY_COMPUTE
+    const found = (environments ?? []).find((e) => e.id === id)
+    const c = found?.environment.compute
+    return {
+      cpu: c?.cpu != null ? String(c.cpu) : '',
+      memory: typeof c?.memory === 'string' ? c.memory : '',
+      timeout: typeof c?.timeout === 'string' ? c.timeout : '',
+    }
+  }, [environments, pickedEnvironment])
+  // A multi-line script flattens to one line for the placeholder — the row is
+  // one line, and it only has to say "something is set here".
+  const oneLine = (s: string | null | undefined): string => (s ?? '').replace(/\s+/g, ' ').trim()
+  const baseImage = useMemo<CustomImage>(() => {
+    const id = pickedEnvironment?.id
+    if (!id || id === EMPTY_ENVIRONMENT_ID) return EMPTY_IMAGE
+    const found = (environments ?? []).find((e) => e.id === id)
+    const img = found?.environment.image
+    return { dockerfile_append: oneLine(img?.dockerfile_append), setup: oneLine(img?.setup) }
+  }, [environments, pickedEnvironment])
+  const baseHooks = useMemo<CustomHooks>(() => {
+    const id = pickedEnvironment?.id
+    if (!id || id === EMPTY_ENVIRONMENT_ID) return EMPTY_HOOKS
+    const found = (environments ?? []).find((e) => e.id === id)
+    const hooks = found?.environment.hooks
+    return { post_start: oneLine(hooks?.post_start), post_clone: oneLine(hooks?.post_clone) }
+  }, [environments, pickedEnvironment])
+  // The picked environment's own MCP servers, verbatim (they can be full
+  // stdio/remote definitions) — the override list replaces, so they ride along.
+  const baseMcpServers = useMemo<readonly unknown[]>(() => {
+    const id = pickedEnvironment?.id
+    if (!id || id === EMPTY_ENVIRONMENT_ID) return []
+    const found = (environments ?? []).find((e) => e.id === id)
+    return found?.environment.mcp_servers ?? []
+  }, [environments, pickedEnvironment])
+  const baseMcpServerNames = useMemo<string[]>(
+    () =>
+      baseMcpServers
+        .map((s) => (typeof s === 'string' ? s : ((s as { name?: string }).name ?? '')))
+        .filter(Boolean),
+    [baseMcpServers],
+  )
+  // The picked environment's own repositories — same reason as baseVariables:
+  // an override array replaces the resolved list, so they have to ride along.
+  const baseRepositories = useMemo<CustomRepository[]>(() => {
+    const id = pickedEnvironment?.id
+    if (!id || id === EMPTY_ENVIRONMENT_ID) return []
+    const found = (environments ?? []).find((e) => e.id === id)
+    return (found?.environment.repositories ?? []).map((r) => ({
+      fullName: r.owner ? `${r.owner}/${r.name}` : r.name,
+      ref: r.ref ?? null,
     }))
   }, [environments, pickedEnvironment])
   // The server's selectable set (GET /models); before it lands — and on an
@@ -696,13 +826,38 @@ function Launcher({
   // The open Environment list's shape, shared by its navigation and its
   // renderer: the options, then the custom section's secrets, typed variables
   // and add button.
+  // Whether a repository is in the run: checked in the custom section, or
+  // brought in by the picked environment itself.
+  const repositoryFor = (fullName: string): CustomRepository | undefined =>
+    customRepositories.find((r) => r.fullName === fullName) ??
+    baseRepositories.find((r) => r.fullName === fullName)
   const environmentPicker = useMemo(
     () => ({
       optionCount: environmentOptionRows.length,
+      repoNames: (repos ?? []).map((r) => r.full_name),
+      // A checked repo grows its branch input row, so ↓ can land on it.
+      checkedRepoNames: (repos ?? [])
+        .map((r) => r.full_name)
+        .filter(
+          (name) =>
+            customRepositories.some((r) => r.fullName === name) ||
+            baseRepositories.some((r) => r.fullName === name),
+        ),
       secretNames: secretNames ?? [],
       customVariables,
+      builtInMcpServers: builtInServers,
+      customMcpServers,
     }),
-    [environmentOptionRows.length, secretNames, customVariables],
+    [
+      environmentOptionRows.length,
+      repos,
+      secretNames,
+      customVariables,
+      customRepositories,
+      baseRepositories,
+      builtInServers,
+      customMcpServers,
+    ],
   )
   const environmentHoverCount = environmentPickerCount(environmentPicker)
   // Whether a variable of this name is in the run: a checked secret and a typed
@@ -710,12 +865,45 @@ function Launcher({
   const variableFor = (name: string): CustomVariable | undefined =>
     customVariables.find((v) => v.name === name)
   // Enter (or →) on a row of the open Environment list: an option picks and
-  // closes; a secret toggles; a typed variable re-opens for editing; the add
-  // button opens an empty editor.
+  // closes; a repo or secret toggles; a typed variable re-opens for editing;
+  // the add button opens an empty editor.
   const activateEnvironmentRow = (hover: number): void => {
     const row = environmentPickerAt(environmentPicker, hover)
     if (row.kind === 'option') {
       activate('environment', row.at)
+      return
+    }
+    if (row.kind === 'repo') {
+      // Unchecking drops the custom entry; a base repo (the picked
+      // environment's own) stays, since an additive list can't remove it.
+      setCustomRepositories((prev) =>
+        prev.some((r) => r.fullName === row.fullName)
+          ? prev.filter((r) => r.fullName !== row.fullName)
+          : [...prev, { fullName: row.fullName, ref: null }],
+      )
+      return
+    }
+    // The branch, compute, image and hook rows are text inputs, not toggles:
+    // enter there is a no-op, typing is what edits them (see the handler).
+    if (
+      row.kind === 'repoRef' ||
+      row.kind === 'compute' ||
+      row.kind === 'image' ||
+      row.kind === 'hook'
+    )
+      return
+    if (row.kind === 'mcpServer') {
+      // Toggling off a base server can't be expressed additively, so only
+      // servers added here uncheck (mirrors the repo rows).
+      setCustomMcpServers((prev) =>
+        prev.some((s) => s.name === row.name)
+          ? prev.filter((s) => s.name !== row.name)
+          : [...prev, { name: row.name, command: null, url: null }],
+      )
+      return
+    }
+    if (row.kind === 'addMcpServer') {
+      setServerEditor({ field: 'name', name: '', command: '', url: '', error: null })
       return
     }
     if (row.kind === 'secret') {
@@ -764,6 +952,21 @@ function Launcher({
     })
     setEditor(null)
   }
+  // Typing on a checked repo's branch row edits its ref in place: backspace
+  // erases, an emptied ref returns to the default branch (null). A base repo
+  // whose ref was edited becomes a custom entry, which wins the merge.
+  const editRepositoryRef = (fullName: string, edit: (ref: string) => string): void => {
+    const current = repositoryFor(fullName)?.ref ?? ''
+    const next = edit(current)
+    const entry = { fullName, ref: next === '' ? null : next }
+    setCustomRepositories((prev) => {
+      const existing = prev.findIndex((r) => r.fullName === fullName)
+      if (existing === -1) return [...prev, entry]
+      const out = [...prev]
+      out[existing] = entry
+      return out
+    })
+  }
 
   // Enter with an empty prompt is a real start: the session comes up idle and
   // waits for the first message, so you can open a sandbox before you know
@@ -775,6 +978,13 @@ function Launcher({
       emptyEnvironment: emptyPicked,
       baseVariables,
       customVariables,
+      baseRepositories,
+      customRepositories,
+      customCompute,
+      customImage,
+      customHooks,
+      baseMcpServers,
+      customMcpServers,
     })
   }
 
@@ -795,6 +1005,55 @@ function Launcher({
 
   useInput(
     (ch, key) => {
+      // The "+ new server" form: like the variable form, it owns every key
+      // while up. ↑/↓ walk the three fields, enter commits, esc backs out.
+      if (serverEditor !== null) {
+        if (key.escape) {
+          setServerEditor(null)
+          return
+        }
+        if (key.return) {
+          const entry: CustomMcpServer = {
+            name: serverEditor.name.trim(),
+            command: serverEditor.command.trim() || null,
+            url: serverEditor.url.trim() || null,
+          }
+          const error = validateMcpServer(entry)
+          if (error) {
+            setServerEditor({ ...serverEditor, error })
+            return
+          }
+          setCustomMcpServers((prev) => [
+            // A repeat of a name is an edit of it, not a duplicate row.
+            ...prev.filter((s) => s.name !== entry.name),
+            entry,
+          ])
+          setServerEditor(null)
+          return
+        }
+        const fields = SERVER_EDITOR_FIELDS
+        const at = fields.indexOf(serverEditor.field)
+        if (key.upArrow) {
+          setServerEditor({ ...serverEditor, field: fields[Math.max(0, at - 1)] })
+          return
+        }
+        if (key.downArrow) {
+          setServerEditor({
+            ...serverEditor,
+            field: fields[Math.min(fields.length - 1, at + 1)],
+          })
+          return
+        }
+        const typed = serverEditor[serverEditor.field]
+        if (key.backspace || key.delete) {
+          setServerEditor({ ...serverEditor, [serverEditor.field]: typed.slice(0, -1), error: null })
+          return
+        }
+        if (ch && !key.ctrl && !key.meta) {
+          setServerEditor({ ...serverEditor, [serverEditor.field]: typed + ch, error: null })
+        }
+        return
+      }
       // The variable form is the innermost modal: while it is up it owns every
       // key, so space is typed text rather than list navigation. ↑/↓ move the
       // caret between the two fields, enter commits, esc backs out.
@@ -843,6 +1102,60 @@ function Launcher({
         if (key.downArrow) {
           setOpenPicker((p) => p && { ...p, hover: Math.min(rowCount - 1, p.hover + 1) })
           return
+        }
+        // The branch and compute rows are text inputs under the cursor: typing
+        // and backspace edit them in place, blank = whatever the server
+        // resolves. Space stays list navigation (no ref or size holds one).
+        if (isEnv) {
+          const hover = Math.min(openPicker.hover, rowCount - 1)
+          const target = environmentPickerAt(environmentPicker, hover)
+          const typing =
+            ch && ch !== ' ' && !key.ctrl && !key.meta && !key.return && !key.rightArrow
+          if (target.kind === 'repoRef') {
+            if (key.backspace || key.delete) {
+              editRepositoryRef(target.fullName, (ref) => ref.slice(0, -1))
+              return
+            }
+            if (typing) {
+              editRepositoryRef(target.fullName, (ref) => ref + ch)
+              return
+            }
+          }
+          if (target.kind === 'compute') {
+            if (key.backspace || key.delete) {
+              setCustomCompute((c) => ({ ...c, [target.field]: c[target.field].slice(0, -1) }))
+              return
+            }
+            // cpu is a number on the wire, so its field only admits digits.
+            if (typing && (target.field !== 'cpu' || /^[0-9.]$/.test(ch))) {
+              setCustomCompute((c) => ({ ...c, [target.field]: c[target.field] + ch }))
+              return
+            }
+          }
+          // Image and hook fields are shell/Dockerfile lines, so space is
+          // typed text — but only once something has been typed, so space on
+          // the untouched row still activates like everywhere else.
+          if (target.kind === 'image' || target.kind === 'hook') {
+            const typed =
+              target.kind === 'image'
+                ? customImage[target.field]
+                : customHooks[target.field]
+            const set =
+              target.kind === 'image'
+                ? (edit: (s: string) => string) =>
+                    setCustomImage((c) => ({ ...c, [target.field]: edit(c[target.field]) }))
+                : (edit: (s: string) => string) =>
+                    setCustomHooks((c) => ({ ...c, [target.field]: edit(c[target.field]) }))
+            const spaceTyping = ch === ' ' && typed !== '' && !key.ctrl && !key.meta
+            if (key.backspace || key.delete) {
+              set((s) => s.slice(0, -1))
+              return
+            }
+            if (typing || spaceTyping) {
+              set((s) => s + ch)
+              return
+            }
+          }
         }
         if (key.rightArrow || key.return || ch === ' ') {
           const hover = Math.min(openPicker.hover, rowCount - 1)
@@ -962,7 +1275,17 @@ function Launcher({
   const rowValue = (key: PickerRow['key']): string => {
     const options = optionsFor(key)
     const label = options[Math.min(pickedIdx(key), options.length - 1)]?.label ?? 'Default'
-    return key === 'environment' ? environmentRowSummary(label, customVariables) : label
+    return key === 'environment'
+      ? environmentRowSummary(
+          label,
+          customVariables,
+          customRepositories,
+          customCompute,
+          customImage,
+          customHooks,
+          customMcpServers,
+        )
+      : label
   }
 
   // Columns available inside the prompt box: the terminal minus its left accent
@@ -1123,9 +1446,10 @@ function Launcher({
                       </Box>
                     )
                   }
-                  // The form owns the caret while it is open, so the list's own
+                  // A form owns the caret while it is open, so the list's own
                   // highlight goes dark rather than showing a second one.
-                  const hovered = envRow.hover === openHover && editor === null
+                  const hovered =
+                    envRow.hover === openHover && editor === null && serverEditor === null
                   if (envRow.kind === 'option') {
                     const opt = openOptions[envRow.at]
                     if (!opt) return null
@@ -1139,6 +1463,197 @@ function Launcher({
                             {`[${picked ? 'x' : ' '}] ${opt.label}`}
                           </Text>
                         </Text>
+                      </Box>
+                    )
+                  }
+                  // A connected repository: enter/space toggles it into the
+                  // run. The ref stays off the row until it is checked — the
+                  // branch input under it is where that lives.
+                  if (envRow.kind === 'repo') {
+                    const checked = repositoryFor(envRow.fullName) !== undefined
+                    return (
+                      <Box key={`repo:${envRow.fullName}`} width={contentWidth}>
+                        <Text wrap="truncate">
+                          {'   '}
+                          <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
+                          <Text color={hovered || checked ? theme.foreground : theme.muted}>
+                            {`    [${checked ? 'x' : ' '}] ${envRow.fullName}`}
+                          </Text>
+                        </Text>
+                      </Box>
+                    )
+                  }
+                  // A checked repo's branch input: typing edits the ref in
+                  // place; empty rests on the repo's default branch.
+                  if (envRow.kind === 'repoRef') {
+                    const ref = repositoryFor(envRow.fullName)?.ref ?? null
+                    const resting = repositoryRefLabel(
+                      ref,
+                      (repos ?? []).find((r) => r.full_name === envRow.fullName)
+                        ?.default_branch ?? null,
+                    )
+                    return (
+                      <Box key={`repoRef:${envRow.fullName}`} width={contentWidth}>
+                        <Text wrap="truncate">
+                          {'   '}
+                          <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
+                          {/* Aligned under the repo name, past its checkbox. */}
+                          <Text color={theme.muted}>{'        branch: '}</Text>
+                          {ref !== null ? (
+                            <Text color={theme.foreground}>
+                              {ref}
+                              {hovered && <Text inverse> </Text>}
+                            </Text>
+                          ) : (
+                            // The default branch as a placeholder: it is what
+                            // an untouched row clones, and typing replaces it.
+                            <Text color={theme.muted}>
+                              {hovered && resting ? (
+                                <Text>
+                                  <Text inverse>{resting[0]}</Text>
+                                  {resting.slice(1)}
+                                </Text>
+                              ) : (
+                                (resting ?? '')
+                              )}
+                            </Text>
+                          )}
+                        </Text>
+                      </Box>
+                    )
+                  }
+                  // A compute, image or hook field: an inline input like a
+                  // branch row. Blank rests on the picked environment's own
+                  // value (muted), which is what an untouched field keeps —
+                  // object overrides merge key by key.
+                  if (
+                    envRow.kind === 'compute' ||
+                    envRow.kind === 'image' ||
+                    envRow.kind === 'hook'
+                  ) {
+                    const typed =
+                      envRow.kind === 'compute'
+                        ? customCompute[envRow.field]
+                        : envRow.kind === 'image'
+                          ? customImage[envRow.field]
+                          : customHooks[envRow.field]
+                    const resting =
+                      envRow.kind === 'compute'
+                        ? baseCompute[envRow.field]
+                        : envRow.kind === 'image'
+                          ? baseImage[envRow.field]
+                          : baseHooks[envRow.field]
+                    return (
+                      <Box key={`${envRow.kind}:${envRow.field}`} width={contentWidth}>
+                        <Text wrap="truncate">
+                          {'   '}
+                          <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
+                          <Text color={theme.muted}>{`    ${envRow.field}: `}</Text>
+                          {typed !== '' ? (
+                            <Text color={theme.foreground}>
+                              {typed}
+                              {hovered && <Text inverse> </Text>}
+                            </Text>
+                          ) : (
+                            <Text color={theme.muted}>
+                              {hovered && resting !== '' ? (
+                                <Text>
+                                  <Text inverse>{resting[0]}</Text>
+                                  {resting.slice(1)}
+                                </Text>
+                              ) : (
+                                resting
+                              )}
+                              {hovered && resting === '' && <Text inverse> </Text>}
+                            </Text>
+                          )}
+                        </Text>
+                      </Box>
+                    )
+                  }
+                  // An MCP server: a built-in (or typed) name, checked when the
+                  // picked environment carries it or it was checked here.
+                  if (envRow.kind === 'mcpServer') {
+                    const checked =
+                      customMcpServers.some((s) => s.name === envRow.name) ||
+                      baseMcpServerNames.includes(envRow.name)
+                    return (
+                      <Box key={`mcp:${envRow.name}`} width={contentWidth}>
+                        <Text wrap="truncate">
+                          {'   '}
+                          <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
+                          <Text color={hovered || checked ? theme.foreground : theme.muted}>
+                            {`    [${checked ? 'x' : ' '}] ${envRow.name}`}
+                          </Text>
+                        </Text>
+                      </Box>
+                    )
+                  }
+                  if (envRow.kind === 'addMcpServer') {
+                    return (
+                      <Box key="addMcpServer" flexDirection="column" width={contentWidth}>
+                        <Box width={contentWidth}>
+                          <Text wrap="truncate">
+                            {'   '}
+                            <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
+                            <Text color={hovered ? theme.foreground : theme.muted}>
+                              {'    '}
+                              {ADD_MCP_SERVER_LABEL}
+                            </Text>
+                          </Text>
+                        </Box>
+                        {serverEditor !== null && (
+                          <Box flexDirection="column" width={contentWidth}>
+                            {SERVER_EDITOR_FIELDS.map((field) => {
+                              const here = serverEditor.field === field
+                              const typed = serverEditor[field]
+                              // name is required; command/url pick the type,
+                              // so their placeholders say the either/or.
+                              const ghost =
+                                typed !== ''
+                                  ? null
+                                  : field === 'name'
+                                    ? 'my-tools'
+                                    : field === 'command'
+                                      ? 'stdio: npx -y my-tools-mcp'
+                                      : 'remote: https://mcp.example.com'
+                              return (
+                                <Box key={field} width={contentWidth}>
+                                  <Text wrap="truncate">
+                                    {'   '}
+                                    <Text color={theme.cursor}>
+                                      {here ? SELECTION_GLYPH : ' '}
+                                    </Text>{' '}
+                                    {/* Aligned under the button text, past
+                                        its "+ ". */}
+                                    <Text color={theme.muted}>{`      ${field}: `}</Text>
+                                    <Text color={theme.foreground}>{typed}</Text>
+                                    {ghost ? (
+                                      <Text>
+                                        {here ? (
+                                          <Text inverse>{ghost[0]}</Text>
+                                        ) : (
+                                          <Text color={theme.muted}>{ghost[0]}</Text>
+                                        )}
+                                        <Text color={theme.muted}>{ghost.slice(1)}</Text>
+                                      </Text>
+                                    ) : (
+                                      here && <Text inverse> </Text>
+                                    )}
+                                  </Text>
+                                </Box>
+                              )
+                            })}
+                            {serverEditor.error !== null && (
+                              <Box width={contentWidth}>
+                                <Text wrap="truncate" color={theme.muted}>
+                                  {'           '}
+                                  {serverEditor.error}
+                                </Text>
+                              </Box>
+                            )}
+                          </Box>
+                        )}
                       </Box>
                     )
                   }
@@ -1174,11 +1689,13 @@ function Launcher({
                               return (
                                 <Box key={field} width={contentWidth}>
                                   <Text wrap="truncate">
-                                    {'       '}
+                                    {'   '}
                                     <Text color={theme.cursor}>
                                       {here ? SELECTION_GLYPH : ' '}
                                     </Text>{' '}
-                                    <Text color={theme.muted}>{`${field}: `}</Text>
+                                    {/* Aligned under the button text, past
+                                        its "+ ". */}
+                                    <Text color={theme.muted}>{`      ${field}: `}</Text>
                                     <Text color={theme.foreground}>{typed}</Text>
                                     {/* The caret sits on the placeholder's first
                                         character rather than pushing it right. */}
