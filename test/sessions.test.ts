@@ -2,18 +2,33 @@ import { describe, expect, it } from 'vitest'
 import {
   applyComposerChoices,
   attentionFlip,
+  builtInMcpServers,
+  mcpServerEntry,
+  validateMcpServer,
   COMPOSER_MODELS,
   composerModelOptions,
   composerPickerRows,
   connectability,
   effectiveEnvironmentDefault,
   environmentOptions,
-  environmentPickerAt,
-  environmentPickerRows,
-  environmentRowSummary,
+  environmentPane,
+  environmentPaneAt,
+  environmentPaneRows,
+  environmentSourceLabel,
+  EMPTY_COMPUTE,
+  EMPTY_HOOKS,
+  EMPTY_IMAGE,
+  EMPTY_PANE,
+  computeOverride,
+  fieldsOverride,
   filterSessions,
-  mergeVariables,
+  mcpServerName,
+  oneLine,
+  paneEquals,
+  resolveRepoFullName,
+  scriptRowLines,
   parseVariableEntry,
+  repositoryRefLabel,
   variableRowLabel,
   modelRate,
   rateDollars,
@@ -546,13 +561,9 @@ describe('composerPickerRows', () => {
 })
 
 describe('applyComposerChoices', () => {
-  const untouched = {
-    environment: null,
-    model: null,
-    emptyEnvironment: false,
-    baseVariables: [],
-    customVariables: [],
-  }
+  // Nothing stated about the environment: no name, and a null pane, so the
+  // server's own ladder resolves it.
+  const untouched = { environment: null, model: null, pane: null }
 
   it('leaves the base request alone when nothing was picked', () => {
     expect(applyComposerChoices({ prompt: 'hi', repository: 'acme/api' }, untouched)).toEqual({
@@ -570,8 +581,13 @@ describe('applyComposerChoices', () => {
     expect(req.repository).toBe('acme/api')
   })
 
+  // A named environment ships alone: the pane still matches it, so re-stating
+  // its lists could only say them worse.
   it('names a chosen environment on the request, not in the override', () => {
-    const req = applyComposerChoices({ prompt: 'ship it' }, { ...untouched, environment: 'env_1' })
+    const req = applyComposerChoices(
+      { prompt: 'ship it' },
+      { ...untouched, environment: 'env_1', pane: { ...EMPTY_PANE, variables: [{ name: 'A', value: '1' }] } },
+    )
     expect(req).toEqual({ prompt: 'ship it', environment: 'env_1' })
   })
 
@@ -600,91 +616,291 @@ describe('applyComposerChoices', () => {
     expect(base).toEqual({ repository: 'acme/api' })
   })
 
-  // The whole point of the custom section: an override array REPLACES the
-  // resolved list, so the picked environment's own variables have to ride along
-  // or adding one would silently drop the rest.
-  it('ships the picked environment variables alongside a custom one', () => {
+  // The whole point of the pane: without an environment name it IS the sandbox,
+  // and every list in an override replaces the resolved one — so all three ship
+  // together, empty included, or the ladder would fill the gaps back in.
+  it('ships the whole pane when no environment is named', () => {
     const req = applyComposerChoices(
       {},
       {
         ...untouched,
-        environment: 'env_1',
-        baseVariables: [{ name: 'NODE_ENV', value: 'production' }],
-        customVariables: [{ name: 'SENTRY_DSN', value: 'https://x' }],
+        pane: {
+          ...EMPTY_PANE,
+          repositories: [{ fullName: 'acme/api', ref: 'main' }],
+          variables: [{ name: 'NODE_ENV', value: 'production' }],
+          mcpServers: [{ name: 'linear', command: null, url: null }],
+        },
       },
     )
     expect(req).toEqual({
-      environment: 'env_1',
       override: {
         environment: {
-          variables: [
-            { name: 'NODE_ENV', value: 'production' },
-            { name: 'SENTRY_DSN', value: 'https://x' },
-          ],
+          repositories: [{ owner: 'acme', name: 'api', ref: 'main' }],
+          variables: [{ name: 'NODE_ENV', value: 'production' }],
+          mcp_servers: [{ name: 'linear' }],
         },
       },
     })
   })
 
-  it('sends no variables override while the custom section is empty', () => {
-    const req = applyComposerChoices(
-      {},
-      { ...untouched, environment: 'env_1', baseVariables: [{ name: 'NODE_ENV', value: 'x' }] },
-    )
-    expect(req).toEqual({ environment: 'env_1' })
+  // The [empty] pick is the pane emptied, and empty arrays are how "nothing" is
+  // said: omitting them would let the ladder resolve an environment instead.
+  it('clears every list for an empty pane', () => {
+    const req = applyComposerChoices({ repository: 'acme/api' }, { ...untouched, pane: EMPTY_PANE })
+    expect(req).toEqual({
+      repository: 'acme/api',
+      override: { environment: { repositories: [], variables: [], mcp_servers: [] } },
+    })
   })
 
   it('omits the value of a variable that resolves from stored secrets', () => {
     const req = applyComposerChoices(
       {},
-      { ...untouched, customVariables: [{ name: 'API_TOKEN', value: null }] },
+      { ...untouched, pane: { ...EMPTY_PANE, variables: [{ name: 'API_TOKEN', value: null }] } },
     )
-    expect(req.override).toEqual({ environment: { variables: [{ name: 'API_TOKEN' }] } })
+    expect(req.override?.environment).toMatchObject({ variables: [{ name: 'API_TOKEN' }] })
   })
 
-  // "[empty]" names no environment, so the ladder would still resolve one:
-  // clearing the lists is what actually empties the sandbox.
-  it('clears every list for the [empty] pick, and drops the base variables', () => {
+  // Compute, image and hooks are scalars in merging object overrides, so only
+  // the set fields ship — an unset one keeps whatever the server resolves.
+  it('sends only the set compute fields', () => {
     const req = applyComposerChoices(
-      { repository: 'acme/api' },
+      {},
+      { ...untouched, pane: { ...EMPTY_PANE, compute: { cpu: '4', memory: '16GB', timeout: '' } } },
+    )
+    expect(req.override?.environment).toMatchObject({ compute: { cpu: 4, memory: '16GB' } })
+  })
+
+  it('sends only the set image fields', () => {
+    const req = applyComposerChoices(
+      {},
+      { ...untouched, pane: { ...EMPTY_PANE, image: { dockerfile_append: '', setup: 'npm install' } } },
+    )
+    expect(req.override?.environment).toMatchObject({ image: { setup: 'npm install' } })
+  })
+
+  it('sends only the set hook fields', () => {
+    const req = applyComposerChoices(
+      {},
+      { ...untouched, pane: { ...EMPTY_PANE, hooks: { post_start: 'doppler setup', post_clone: '' } } },
+    )
+    expect(req.override?.environment).toMatchObject({ hooks: { post_start: 'doppler setup' } })
+  })
+
+  // A server the pane was seeded with keeps its own entry, so a definition the
+  // launcher's three fields can't hold survives a custom run.
+  it('ships a seeded server verbatim, and builds the rest from their fields', () => {
+    const seeded = { name: 'my-tools', command: 'npx', args: ['my-tools'], env: { A: '1' } }
+    const req = applyComposerChoices(
+      {},
       {
         ...untouched,
-        emptyEnvironment: true,
-        baseVariables: [{ name: 'NODE_ENV', value: 'production' }],
+        pane: {
+          ...EMPTY_PANE,
+          mcpServers: [
+            { name: 'my-tools', command: 'npx', url: null, raw: seeded },
+            { name: 'docs', command: null, url: 'https://mcp.example.com' },
+          ],
+        },
       },
     )
-    expect(req).toEqual({
-      repository: 'acme/api',
-      override: { environment: { repositories: [], mcp_servers: [], variables: [] } },
+    expect(req.override?.environment).toMatchObject({
+      mcp_servers: [seeded, { name: 'docs', url: 'https://mcp.example.com' }],
     })
   })
 })
 
-describe('mergeVariables', () => {
-  it('appends a custom variable after the environment own', () => {
+describe('environmentPane', () => {
+  it('reads every field the pane shows off an environment config', () => {
     expect(
-      mergeVariables([{ name: 'A', value: '1' }], [{ name: 'B', value: '2' }]),
-    ).toEqual([
-      { name: 'A', value: '1' },
-      { name: 'B', value: '2' },
-    ])
+      environmentPane({
+        repositories: [{ owner: 'acme', name: 'api', ref: 'main' }, { name: 'solo' }],
+        variables: [{ name: 'A', value: '1' }, { name: 'B' }],
+        mcp_servers: ['linear', { name: 'docs', url: 'https://x' }],
+        compute: { cpu: 4, memory: '16GB' },
+        image: { setup: 'npm ci' },
+        hooks: { post_clone: 'make' },
+      }),
+    ).toEqual({
+      repositories: [
+        { fullName: 'acme/api', ref: 'main' },
+        { fullName: 'solo', ref: null },
+      ],
+      variables: [
+        { name: 'A', value: '1' },
+        { name: 'B', value: null },
+      ],
+      mcpServers: [
+        { name: 'linear', command: null, url: null, raw: 'linear' },
+        { name: 'docs', command: null, url: 'https://x', raw: { name: 'docs', url: 'https://x' } },
+      ],
+      compute: { cpu: '4', memory: '16GB', timeout: '' },
+      image: { dockerfile_append: '', setup: 'npm ci' },
+      hooks: { post_start: '', post_clone: 'make' },
+    })
   })
 
-  // Two entries with one name would leave the server to break the tie, so a
-  // custom repeat of a base name edits it in place instead.
-  it('lets a custom variable override a base one in place', () => {
+  it('is the empty pane for an environment that sets nothing, and for none at all', () => {
+    expect(environmentPane({})).toEqual(EMPTY_PANE)
+    expect(environmentPane(null)).toEqual(EMPTY_PANE)
+  })
+
+  // A script keeps its newlines here: the pane ships what it holds, and only its
+  // row flattens (oneLine).
+  it('keeps a multi-line script whole', () => {
+    expect(environmentPane({ image: { setup: 'a\nb' } }).image.setup).toBe('a\nb')
+  })
+})
+
+describe('resolveRepoFullName', () => {
+  const connected = ['ellipsis-dev/ellipsis', 'ellipsis-dev/cli']
+
+  // An environment YAML may write "name: ellipsis" with no owner, and that is the
+  // same repository as the connected "ellipsis-dev/ellipsis" — one row, not two.
+  it('resolves a bare name against the connected repositories', () => {
+    expect(resolveRepoFullName('ellipsis', connected)).toBe('ellipsis-dev/ellipsis')
+    expect(resolveRepoFullName('cli', connected)).toBe('ellipsis-dev/cli')
+  })
+
+  it('leaves an owner-qualified name and an unknown one alone', () => {
+    expect(resolveRepoFullName('other-org/ellipsis', connected)).toBe('other-org/ellipsis')
+    expect(resolveRepoFullName('mystery', connected)).toBe('mystery')
+  })
+
+  // Two owners with the same repo name would be a guess, so it stays as written.
+  it('does not guess between two owners of the same name', () => {
+    expect(resolveRepoFullName('api', ['acme/api', 'other/api'])).toBe('api')
+  })
+})
+
+describe('environmentPane repository dedupe', () => {
+  it('seeds an ownerless entry onto its connected row', () => {
     expect(
-      mergeVariables(
-        [
-          { name: 'A', value: '1' },
-          { name: 'B', value: '2' },
-        ],
-        [{ name: 'A', value: 'mine' }],
-      ),
-    ).toEqual([
-      { name: 'A', value: 'mine' },
-      { name: 'B', value: '2' },
-    ])
+      environmentPane({ repositories: [{ name: 'ellipsis' }] }, ['ellipsis-dev/ellipsis'])
+        .repositories,
+    ).toEqual([{ fullName: 'ellipsis-dev/ellipsis', ref: null }])
+  })
+})
+
+describe('scriptRowLines', () => {
+  const script = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].join('\n')
+
+  it('caps a long script and counts what it hid', () => {
+    expect(scriptRowLines(script, false)).toEqual({
+      lines: ['a', 'b', 'c', 'd', 'e'],
+      hidden: 2,
+    })
+  })
+
+  it('shows every line while the row is open', () => {
+    expect(scriptRowLines(script, true).hidden).toBe(0)
+    expect(scriptRowLines(script, true).lines).toHaveLength(7)
+  })
+
+  it('hides nothing from a short script', () => {
+    expect(scriptRowLines('one\ntwo', false)).toEqual({ lines: ['one', 'two'], hidden: 0 })
+  })
+})
+
+describe('paneEquals', () => {
+  it('ignores the order a list was built in', () => {
+    const a = {
+      ...EMPTY_PANE,
+      repositories: [{ fullName: 'acme/api', ref: null }, { fullName: 'acme/web', ref: null }],
+    }
+    const b = {
+      ...EMPTY_PANE,
+      repositories: [{ fullName: 'acme/web', ref: null }, { fullName: 'acme/api', ref: null }],
+    }
+    expect(paneEquals(a, b)).toBe(true)
+  })
+
+  it('sees a changed field, a dropped entry and an edited ref', () => {
+    const base = { ...EMPTY_PANE, repositories: [{ fullName: 'acme/api', ref: null }] }
+    expect(paneEquals(base, EMPTY_PANE)).toBe(false)
+    expect(
+      paneEquals(base, { ...EMPTY_PANE, repositories: [{ fullName: 'acme/api', ref: 'dev' }] }),
+    ).toBe(false)
+    expect(paneEquals(base, { ...base, compute: { ...EMPTY_COMPUTE, cpu: '4' } })).toBe(false)
+  })
+})
+
+describe('mcpServerName', () => {
+  it('reads the name off every shape the config admits', () => {
+    expect(mcpServerName('linear')).toBe('linear')
+    expect(mcpServerName({ name: 'docs', url: 'https://x' })).toBe('docs')
+    expect(mcpServerName({})).toBe('')
+  })
+})
+
+describe('oneLine', () => {
+  it('collapses a script to the one line its row is', () => {
+    expect(oneLine('npm ci\n  npm test\n')).toBe('npm ci npm test')
+    expect(oneLine('')).toBe('')
+  })
+})
+
+describe('builtInMcpServers', () => {
+  it('lists only the connected integrations that back a built-in server', () => {
+    expect(builtInMcpServers({ linear: { org: 'x' }, slack: null })).toEqual(['linear'])
+    expect(builtInMcpServers({})).toEqual([])
+    expect(builtInMcpServers({ linear: {}, slack: {} })).toEqual(['linear', 'slack'])
+  })
+})
+
+describe('mcpServerEntry', () => {
+  it('splits a command line into the stdio shape', () => {
+    expect(
+      mcpServerEntry({ name: 't', command: 'npx -y my-tools-mcp', url: null }),
+    ).toEqual({ name: 't', command: 'npx', args: ['-y', 'my-tools-mcp'] })
+    expect(mcpServerEntry({ name: 't', command: 'server-bin', url: null })).toEqual({
+      name: 't',
+      command: 'server-bin',
+    })
+  })
+
+  it('builds the remote shape from a url, and a bare name from neither', () => {
+    expect(mcpServerEntry({ name: 'd', command: null, url: 'https://x' })).toEqual({
+      name: 'd',
+      url: 'https://x',
+    })
+    expect(mcpServerEntry({ name: 'linear', command: null, url: null })).toEqual({
+      name: 'linear',
+    })
+  })
+})
+
+describe('validateMcpServer', () => {
+  it('requires a name and rejects command with url', () => {
+    expect(validateMcpServer({ name: '', command: null, url: null })).toBeTruthy()
+    expect(validateMcpServer({ name: 'x', command: 'c', url: 'u' })).toBeTruthy()
+    expect(validateMcpServer({ name: 'x', command: 'c', url: null })).toBeNull()
+    expect(validateMcpServer({ name: 'x', command: null, url: 'u' })).toBeNull()
+    expect(validateMcpServer({ name: 'x', command: null, url: null })).toBeNull()
+  })
+})
+
+describe('computeOverride', () => {
+  it('parses cpu to a number and keeps the others as typed', () => {
+    expect(computeOverride({ cpu: '4', memory: '16GB', timeout: '30m' })).toEqual({
+      cpu: 4,
+      memory: '16GB',
+      timeout: '30m',
+    })
+  })
+
+  it('drops blank and unparseable fields', () => {
+    expect(computeOverride(EMPTY_COMPUTE)).toEqual({})
+    expect(computeOverride({ cpu: '..', memory: ' ', timeout: '' })).toEqual({})
+  })
+})
+
+describe('fieldsOverride', () => {
+  it('keeps only the set fields, trimmed', () => {
+    expect(fieldsOverride({ dockerfile_append: '', setup: ' npm install ' })).toEqual({
+      setup: 'npm install',
+    })
+    expect(fieldsOverride(EMPTY_IMAGE)).toEqual({})
   })
 })
 
@@ -709,54 +925,129 @@ describe('parseVariableEntry', () => {
   })
 })
 
-describe('environmentPickerRows', () => {
+describe('environmentPaneRows', () => {
   const input = {
-    optionCount: 2,
+    repoNames: ['acme/api'],
+    checkedRepoNames: [] as string[],
     secretNames: ['API_TOKEN', 'NPM_TOKEN'],
-    customVariables: [{ name: 'PORT', value: '3000' }],
+    variables: [{ name: 'PORT', value: '3000' }],
+    builtInMcpServers: ['linear'],
+    mcpServers: [] as { name: string; command: string | null; url: string | null }[],
   }
 
-  // Options, divider, heading, the stored variables, what was typed here, the
-  // add button. Only the pickable rows carry a hover index.
-  it('lays the list out and numbers only the pickable rows', () => {
-    expect(environmentPickerRows(input)).toEqual([
-      { kind: 'option', at: 0, hover: 0 },
-      { kind: 'option', at: 1, hover: 1 },
-      { kind: 'divider', label: 'custom environment' },
+  // The repositories, the servers, the variables, then the field sections. Only
+  // the landable rows carry a hover index; headings are decoration.
+  it('lays the pane out and numbers only the landable rows', () => {
+    expect(environmentPaneRows(input)).toEqual([
+      { kind: 'heading', label: 'repositories' },
+      { kind: 'repo', fullName: 'acme/api', hover: 0 },
+      { kind: 'heading', label: 'mcp servers' },
+      { kind: 'mcpServer', name: 'linear', hover: 1 },
+      { kind: 'addMcpServer', hover: 2 },
       { kind: 'heading', label: 'variables' },
-      { kind: 'secret', name: 'API_TOKEN', hover: 2 },
-      { kind: 'secret', name: 'NPM_TOKEN', hover: 3 },
-      { kind: 'variable', name: 'PORT', hover: 4 },
-      { kind: 'addVariable', hover: 5 },
+      { kind: 'variable', name: 'API_TOKEN', hover: 3 },
+      { kind: 'variable', name: 'NPM_TOKEN', hover: 4 },
+      { kind: 'variable', name: 'PORT', hover: 5 },
+      { kind: 'addVariable', hover: 6 },
+      { kind: 'heading', label: 'image' },
+      { kind: 'image', field: 'dockerfile_append', hover: 7 },
+      { kind: 'image', field: 'setup', hover: 8 },
+      { kind: 'heading', label: 'hooks' },
+      { kind: 'hook', field: 'post_start', hover: 9 },
+      { kind: 'hook', field: 'post_clone', hover: 10 },
+      { kind: 'heading', label: 'compute' },
+      { kind: 'compute', field: 'cpu', hover: 11 },
+      { kind: 'compute', field: 'memory', hover: 12 },
+      { kind: 'compute', field: 'timeout', hover: 13 },
     ])
   })
 
-  // Checking a stored variable adds it to customVariables, so without this it
-  // would appear twice — once as the checkbox, once as a typed entry.
-  it('gives a stored variable one row even once it is checked', () => {
-    const rows = environmentPickerRows({
+  // A server the pane carries whose name is also a built-in rides that row, like
+  // the variables: one name, one row, whichever way it got in.
+  it('gives a built-in server one row even once it is checked', () => {
+    const rows = environmentPaneRows({
       ...input,
-      customVariables: [{ name: 'API_TOKEN', value: null }],
+      mcpServers: [
+        { name: 'linear', command: null, url: null },
+        { name: 'my-server', command: 'npx my-server', url: null },
+      ],
     })
+    expect(
+      rows.filter((r) => r.kind === 'mcpServer').map((r) => (r as { name: string }).name),
+    ).toEqual(['linear', 'my-server'])
+  })
+
+  // Same for a variable: checking a stored one adds it to the pane, so without
+  // the union it would appear twice.
+  it('gives a stored variable one row even once it is checked', () => {
+    const rows = environmentPaneRows({ ...input, variables: [{ name: 'API_TOKEN', value: null }] })
     expect(rows.filter((r) => 'name' in r && r.name === 'API_TOKEN')).toHaveLength(1)
+  })
+
+  // A variable an environment brought in that the account has no secret for
+  // still gets a row: the pane shows the whole sandbox, not just what is stored.
+  it('lists a variable the account holds no secret for', () => {
+    const rows = environmentPaneRows({
+      ...input,
+      secretNames: [],
+      variables: [{ name: 'NODE_ENV', value: 'production' }],
+    })
+    expect(rows.filter((r) => r.kind === 'variable')).toEqual([
+      { kind: 'variable', name: 'NODE_ENV', hover: 3 },
+    ])
+  })
+
+  // A checked repo grows a branch input row directly under it, so ↓ can land
+  // there and type a ref.
+  it('adds a branch row under a checked repo only', () => {
+    const rows = environmentPaneRows({
+      ...input,
+      repoNames: ['acme/api', 'acme/web'],
+      checkedRepoNames: ['acme/api'],
+    })
+    expect(rows.slice(0, 4)).toEqual([
+      { kind: 'heading', label: 'repositories' },
+      { kind: 'repo', fullName: 'acme/api', hover: 0 },
+      { kind: 'repoRef', fullName: 'acme/api', hover: 1 },
+      { kind: 'repo', fullName: 'acme/web', hover: 2 },
+    ])
+  })
+
+  // An empty repo list (not landed yet, or none connected) prints no heading
+  // with nothing under it.
+  it('drops the repositories heading while there are no repos', () => {
+    const rows = environmentPaneRows({ ...input, repoNames: [] })
+    expect(rows.filter((r) => r.kind === 'heading')).toEqual([
+      { kind: 'heading', label: 'mcp servers' },
+      { kind: 'heading', label: 'variables' },
+      { kind: 'heading', label: 'image' },
+      { kind: 'heading', label: 'hooks' },
+      { kind: 'heading', label: 'compute' },
+    ])
   })
 })
 
-describe('environmentPickerAt', () => {
+describe('environmentPaneAt', () => {
   const input = {
-    optionCount: 2,
+    repoNames: ['acme/api'],
+    checkedRepoNames: ['acme/api'],
     secretNames: ['API_TOKEN'],
-    customVariables: [] as { name: string; value: string | null }[],
+    variables: [] as { name: string; value: string | null }[],
+    builtInMcpServers: [] as string[],
+    mcpServers: [] as { name: string; command: string | null; url: string | null }[],
   }
 
-  it('walks options, then the stored variables, then the add button', () => {
-    expect(environmentPickerAt(input, 1)).toEqual({ kind: 'option', at: 1 })
-    expect(environmentPickerAt(input, 2)).toEqual({ kind: 'secret', name: 'API_TOKEN' })
-    expect(environmentPickerAt(input, 3)).toEqual({ kind: 'addVariable' })
+  it('walks repos and branch rows, servers, variables, then the fields', () => {
+    expect(environmentPaneAt(input, 0)).toEqual({ kind: 'repo', fullName: 'acme/api' })
+    expect(environmentPaneAt(input, 1)).toEqual({ kind: 'repoRef', fullName: 'acme/api' })
+    expect(environmentPaneAt(input, 2)).toEqual({ kind: 'addMcpServer' })
+    expect(environmentPaneAt(input, 3)).toEqual({ kind: 'variable', name: 'API_TOKEN' })
+    expect(environmentPaneAt(input, 4)).toEqual({ kind: 'addVariable' })
+    expect(environmentPaneAt(input, 5)).toEqual({ kind: 'image', field: 'dockerfile_append' })
   })
 
   it('clamps a hover past the last row', () => {
-    expect(environmentPickerAt(input, 99)).toEqual({ kind: 'addVariable' })
+    expect(environmentPaneAt(input, 99)).toEqual({ kind: 'compute', field: 'timeout' })
   })
 })
 
@@ -807,6 +1098,18 @@ describe('environmentOptions', () => {
     const { options, picked } = environmentOptions(environments, null, 'acme/api')
     expect(options[picked]).toEqual({ id: null, label: 'Default' })
   })
+
+  // A synced environment's row explains where its definition lives, ahead of
+  // the default rungs it holds.
+  it('names the source file before the default rungs', () => {
+    const { options } = environmentOptions(
+      environments,
+      { account: 'env_1', repositories: {} },
+      null,
+      new Map([['env_1', 'acme/api/e.yaml @ abcdef1']]),
+    )
+    expect(options[0].label).toBe('backend (acme/api/e.yaml @ abcdef1, account default)')
+  })
 })
 
 describe('variableRowLabel', () => {
@@ -820,18 +1123,50 @@ describe('variableRowLabel', () => {
   })
 })
 
-describe('environmentRowSummary', () => {
-  it('states the pick alone until the custom section adds something', () => {
-    expect(environmentRowSummary('backend-sandbox', [])).toBe('backend-sandbox')
-    expect(environmentRowSummary('backend-sandbox', [{ name: 'A', value: '1' }])).toBe(
-      'backend-sandbox +1 variable',
-    )
+describe('repositoryRefLabel', () => {
+  // The branch row says which ref a start would clone: the typed one, else the
+  // repo's default branch.
+  it('shows the typed ref over the default branch', () => {
+    expect(repositoryRefLabel('release', 'main')).toBe('release')
+    expect(repositoryRefLabel(null, 'main')).toBe('main')
+    expect(repositoryRefLabel(null, null)).toBeNull()
+  })
+})
+
+describe('environmentSourceLabel', () => {
+  const repoNames = new Map([[42, 'acme/api']])
+
+  it('names the file and short sha a synced environment came from', () => {
     expect(
-      environmentRowSummary('backend-sandbox', [
-        { name: 'A', value: '1' },
-        { name: 'B', value: null },
-      ]),
-    ).toBe('backend-sandbox +2 variables')
+      environmentSourceLabel(
+        {
+          source_details: { repo_id: 42, path: 'agents/environments/dev.yaml', branch: 'main' },
+          last_synced_commit_sha: 'abcdef1234567890',
+        },
+        repoNames,
+      ),
+    ).toBe('acme/api/agents/environments/dev.yaml @ abcdef1')
+  })
+
+  it('drops the sha when the API has none', () => {
+    expect(
+      environmentSourceLabel(
+        { source_details: { repo_id: 42, path: 'e.yaml', branch: 'main' } },
+        repoNames,
+      ),
+    ).toBe('acme/api/e.yaml')
+  })
+
+  // Only what the API already gave us: no source (API-managed), or a repo the
+  // connected list can't name, says nothing rather than guessing.
+  it('says nothing for an API-managed environment or an unknown repo', () => {
+    expect(environmentSourceLabel({ source_details: null }, repoNames)).toBeNull()
+    expect(
+      environmentSourceLabel(
+        { source_details: { repo_id: 7, path: 'e.yaml', branch: 'main' } },
+        repoNames,
+      ),
+    ).toBeNull()
   })
 })
 
