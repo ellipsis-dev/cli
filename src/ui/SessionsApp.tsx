@@ -24,28 +24,26 @@ import {
   composerModelOptions,
   composerPickerRows,
   connectability,
+  CUSTOM_ENVIRONMENT_ID,
+  CUSTOM_ENVIRONMENT_LABEL,
   EMPTY_ENVIRONMENT_ID,
+  EMPTY_PANE,
   environmentOptions,
-  environmentPickerAt,
-  environmentPickerCount,
-  environmentPickerRows,
-  environmentRowSummary,
+  environmentPane,
+  environmentPaneAt,
+  environmentPaneCount,
+  environmentPaneRows,
   environmentSourceLabel,
+  paneEquals,
   parseVariableEntry,
   repositoryRefLabel,
+  scriptRowLines,
   variableRowLabel,
-  EMPTY_COMPUTE,
-  EMPTY_HOOKS,
-  EMPTY_IMAGE,
   type ComposerChoices,
   type ComposerModel,
-  type ComputeField,
-  type CustomCompute,
-  type CustomHooks,
-  type CustomImage,
   type CustomMcpServer,
-  type CustomRepository,
   type CustomVariable,
+  type EnvironmentPaneState,
   validateMcpServer,
   rowDescription,
   rowGlyph,
@@ -521,9 +519,8 @@ const PICKER_ROWS: readonly PickerRow[] = [
   { key: 'model', label: 'Model' },
 ]
 
-// What the prompt box says before you type: the whole key map for the block, so
-// nothing about the launcher has to be remembered.
-const PROMPT_HINT = 'Enter to start a session, up to configure it, down to explore old sessions...'
+// What the empty prompt box says: what this box is for, nothing else.
+const PROMPT_HINT = 'Start a cloud session...'
 
 // The variable form's placeholders, each stating what leaving that field empty
 // means, in the field it applies to.
@@ -564,14 +561,24 @@ type ServerEditor = {
 
 const SERVER_EDITOR_FIELDS = ['name', 'command', 'url'] as const
 
+// A script field opened for editing: a real multi-line caret, since a Dockerfile
+// or a setup script is written in lines. Arrows move within the text, enter
+// inserts a newline, esc commits and collapses the row back to its summary.
+type ScriptEditor = {
+  section: 'image' | 'hooks'
+  field: string
+  text: string
+  cursor: number
+}
+
 
 // The launcher: one painted box holding everything about the next session —
 // the configuration rows on top, the prompt under them — with history below —
 //
-//    | ▶ Environment: backend-sandbox (account default)
-//    |   Model: claude-opus-5
+//    | ▶ ENVIRONMENT: backend-sandbox (account default)
+//    |   MODEL: claude-opus-5
 //    |
-//    |   Enter to start a session, up to configure it, down to explore old…
+//    |   Start a cloud session...
 //
 //    Recent sessions:                                    @me in account
 //    ● latest session                               $0.20, 2m ago
@@ -585,34 +592,65 @@ const SERVER_EDITOR_FIELDS = ['name', 'command', 'url'] as const
 // nothing swaps out and the session list stays. ↓ walks down into the list,
 // where enter opens a session.
 //
-// All three rows share one glyph gutter, so the ▶ moves down a single left
-// edge; the box's accent bar stays lit throughout, marking the block rather
-// than any one row. Typing anywhere returns the cursor to the prompt. Agent
-// configs stay a CLI choice (`agent session start -c`), since a config decides
-// its own environment and the server refuses both at once.
+// Opening the Environment row shows the list AND, under it, the configuration
+// pane — the environment the cursor is on, read out rather than trusted —
 //
-// The open Environment list has two halves —
+//    |   ENVIRONMENT: backend-sandbox (account default)
+//    |     ▶ [x] backend-sandbox (default for acme/api)
+//    |       [ ] web-e2e (account default)
+//    |       [ ] [empty]
+//    |     REPOSITORIES
+//    |       [x] acme/api
+//    |            branch: main
+//    |       [ ] acme/web
+//    |     MCP SERVERS
+//    |       [x] linear
+//    |       + new
+//    |     VARIABLES
+//    |       [x] API_TOKEN
+//    |       + new
+//    |     IMAGE
+//    |       dockerfile_append: |
+//    |         RUN apt-get update && apt-get install -y gpgv
+//    |         … 4 more lines
+//    |       setup:
+//    |     HOOKS
+//    |       post_start:
+//    |       post_clone:
+//    |     COMPUTE
+//    |       cpu: 4
+//    |       memory:
+//    |       timeout:
+//    |   MODEL: claude-opus-5
 //
-//      [x] backend-sandbox (default for acme/api)
-//      [ ] web-e2e (account default)
-//      [ ] [empty]
-//      ─── custom environment ───
-//      VARIABLES
-//        [x] API_TOKEN
-//        [ ] NPM_TOKEN
-//        [x] PORT=3000
-//        + new variable
-//            name: SENTRY_DSN
-//          ▶ value: leave empty to pull from secrets
+// The row's own ▶ goes away while its list is open — the caret is on whichever
+// list or pane row the cursor is on, and two carets would say the cursor is in
+// two places. ↑/↓ run down the options and on into the pane, one walk; esc
+// closes both.
 //
-// — every saved environment plus the built-in [empty] above the divider, and
-// below it what you can set for this run alone. Each environment names the
-// default rungs it holds, and the one the ladder resolves for the cwd's repo
-// starts out checked, so an untouched row SENDS the environment it shows.
+// Walking the options MOVES THE PANE: it always reads out the row the cursor is
+// on, so the list is how you compare environments rather than a list of names
+// you have to already know. Nothing is checked by looking — enter picks.
 //
-// The two halves compose: a variable added down there layers ON TOP of whichever
-// environment is checked above (see applyComposerChoices, which has to re-send
-// that environment's own variables because an override array replaces the list).
+// The pane is the whole truth about the sandbox. Picking an environment seeds
+// every one of its rows. Editing any row is what makes the run custom: every
+// saved environment unchecks, a `custom` row appears at the bottom of the list
+// and takes the check, and from then on the pane's own lists are what ship.
+// Checking a saved environment again reseeds the pane and the `custom` row goes
+// away. That is why unchecking a repository the environment brought in actually
+// drops it: the pane replaces the resolved lists rather than adding to them (see
+// applyComposerChoices).
+//
+// A script field (image, hooks) prints as a YAML block scalar over its own lines,
+// capped at SCRIPT_ROW_LINES with a count of what is hidden. Enter opens it into
+// a real multi-line editor — arrows move within the text, enter is a newline, esc
+// commits — because a Dockerfile is written in lines, not on one.
+//
+// The rows share one glyph gutter, so the ▶ moves down a single left edge; the
+// box's accent bar stays lit throughout, marking the block rather than any one
+// row. Typing anywhere outside an input row returns the cursor to the prompt.
+// Agent configs stay a CLI choice (`agent session start -c`), since a config
+// decides its own environment and the server refuses both at once.
 function Launcher({
   width,
   whoLine,
@@ -675,25 +713,30 @@ function Launcher({
   // server-resolved pick (see modelIdx). The list arrives async, so there is no
   // index to seed this with at mount.
   const [modelPick, setModelPick] = useState<number | null>(null)
-  // The open row's dropdown state: which picker is open and where its
-  // highlight sits. null = no subtree open.
-  const [openPicker, setOpenPicker] = useState<{ key: PickerRow['key']; hover: number } | null>(
-    null,
-  )
-  // What the custom section below the divider adds on top of the picked
-  // environment. Survives closing and reopening the list, so a variable typed
-  // before choosing an environment is not lost.
-  const [customVariables, setCustomVariables] = useState<readonly CustomVariable[]>([])
-  const [customRepositories, setCustomRepositories] = useState<readonly CustomRepository[]>([])
-  const [customCompute, setCustomCompute] = useState<CustomCompute>(EMPTY_COMPUTE)
-  const [customImage, setCustomImage] = useState<CustomImage>(EMPTY_IMAGE)
-  const [customHooks, setCustomHooks] = useState<CustomHooks>(EMPTY_HOOKS)
-  const [customMcpServers, setCustomMcpServers] = useState<readonly CustomMcpServer[]>([])
+  // The open row's dropdown state: which picker is open and where its highlight
+  // sits. null = no subtree open.
+  //
+  // `hover` is always an option index. `paneHover` is where the cursor sits in
+  // the configuration pane below the open Environment list, or null while the
+  // cursor is on the options — kept apart from `hover` so walking down into the
+  // pane and back up returns to the option you left, and so the pane always
+  // knows which environment it is showing.
+  const [openPicker, setOpenPicker] = useState<{
+    key: PickerRow['key']
+    hover: number
+    paneHover: number | null
+  } | null>(null)
+  // The configuration pane: this run's sandbox, whole. null = untouched, so it
+  // shows (and sends) whatever the picked environment resolves to; the first
+  // edit seeds it and from then on the pane is the truth.
+  const [pane, setPane] = useState<EnvironmentPaneState | null>(null)
   // The "+ new server" form's state, or null while closed.
   const [serverEditor, setServerEditor] = useState<ServerEditor | null>(null)
   // The open custom key's editor, or null. `field` is which of the two steps is
   // being typed; `name`/`value` hold what has been typed so far.
   const [editor, setEditor] = useState<VariableEditor | null>(null)
+  // The open script field's editor, or null while every script row is collapsed.
+  const [scriptEditor, setScriptEditor] = useState<ScriptEditor | null>(null)
 
   // Both pickers deal in the same option shape (ComposerModel), so the
   // renderer can ask either of them for a group heading or a subtext; only the
@@ -720,6 +763,9 @@ function Launcher({
       environmentOptions(environments ?? [], environmentDefaults, detectedRepo, environmentSources),
     [environments, environmentDefaults, detectedRepo, environmentSources],
   )
+  // The saved environments plus the built-in [empty]. The `custom` row the list
+  // grows once the pane diverges is NOT here: it names no environment, so it
+  // would have nothing to seed the pane from (see environmentRowsWithCustom).
   const environmentOptionRows = useMemo<ComposerModel[]>(
     () => environmentOptionList.map((o) => ({ id: o.id, label: o.label })),
     [environmentOptionList],
@@ -728,76 +774,32 @@ function Launcher({
     environmentPick !== null
       ? Math.min(environmentPick, environmentOptionRows.length - 1)
       : resolvedIdx
-  // The picked environment's own variables. They have to ride the override
-  // alongside the custom ones, since an override array replaces the resolved
-  // list rather than appending to it.
   const pickedEnvironment = environmentOptionRows[environmentIdx]
-  const baseVariables = useMemo<CustomVariable[]>(() => {
+  // What the picked environment resolves to, as pane rows. This is what the pane
+  // shows until it is edited, and what "custom" is measured against.
+  const connectedRepoNames = useMemo(() => (repos ?? []).map((r) => r.full_name), [repos])
+  const seededPane = useMemo<EnvironmentPaneState>(() => {
     const id = pickedEnvironment?.id
-    if (!id || id === EMPTY_ENVIRONMENT_ID) return []
-    const found = (environments ?? []).find((e) => e.id === id)
-    return (found?.environment.variables ?? []).map((v) => ({
-      name: v.name,
-      value: v.value ?? null,
-    }))
-  }, [environments, pickedEnvironment])
-  // The picked environment's own compute and image, as the resting
-  // placeholders of their input rows. Display only: object overrides merge key
-  // by key, so unlike the lists these never need re-sending.
-  const baseCompute = useMemo<CustomCompute>(() => {
-    const id = pickedEnvironment?.id
-    if (!id || id === EMPTY_ENVIRONMENT_ID) return EMPTY_COMPUTE
-    const found = (environments ?? []).find((e) => e.id === id)
-    const c = found?.environment.compute
-    return {
-      cpu: c?.cpu != null ? String(c.cpu) : '',
-      memory: typeof c?.memory === 'string' ? c.memory : '',
-      timeout: typeof c?.timeout === 'string' ? c.timeout : '',
-    }
-  }, [environments, pickedEnvironment])
-  // A multi-line script flattens to one line for the placeholder — the row is
-  // one line, and it only has to say "something is set here".
-  const oneLine = (s: string | null | undefined): string => (s ?? '').replace(/\s+/g, ' ').trim()
-  const baseImage = useMemo<CustomImage>(() => {
-    const id = pickedEnvironment?.id
-    if (!id || id === EMPTY_ENVIRONMENT_ID) return EMPTY_IMAGE
-    const found = (environments ?? []).find((e) => e.id === id)
-    const img = found?.environment.image
-    return { dockerfile_append: oneLine(img?.dockerfile_append), setup: oneLine(img?.setup) }
-  }, [environments, pickedEnvironment])
-  const baseHooks = useMemo<CustomHooks>(() => {
-    const id = pickedEnvironment?.id
-    if (!id || id === EMPTY_ENVIRONMENT_ID) return EMPTY_HOOKS
-    const found = (environments ?? []).find((e) => e.id === id)
-    const hooks = found?.environment.hooks
-    return { post_start: oneLine(hooks?.post_start), post_clone: oneLine(hooks?.post_clone) }
-  }, [environments, pickedEnvironment])
-  // The picked environment's own MCP servers, verbatim (they can be full
-  // stdio/remote definitions) — the override list replaces, so they ride along.
-  const baseMcpServers = useMemo<readonly unknown[]>(() => {
-    const id = pickedEnvironment?.id
-    if (!id || id === EMPTY_ENVIRONMENT_ID) return []
-    const found = (environments ?? []).find((e) => e.id === id)
-    return found?.environment.mcp_servers ?? []
-  }, [environments, pickedEnvironment])
-  const baseMcpServerNames = useMemo<string[]>(
-    () =>
-      baseMcpServers
-        .map((s) => (typeof s === 'string' ? s : ((s as { name?: string }).name ?? '')))
-        .filter(Boolean),
-    [baseMcpServers],
-  )
-  // The picked environment's own repositories — same reason as baseVariables:
-  // an override array replaces the resolved list, so they have to ride along.
-  const baseRepositories = useMemo<CustomRepository[]>(() => {
-    const id = pickedEnvironment?.id
-    if (!id || id === EMPTY_ENVIRONMENT_ID) return []
-    const found = (environments ?? []).find((e) => e.id === id)
-    return (found?.environment.repositories ?? []).map((r) => ({
-      fullName: r.owner ? `${r.owner}/${r.name}` : r.name,
-      ref: r.ref ?? null,
-    }))
-  }, [environments, pickedEnvironment])
+    if (!id || id === EMPTY_ENVIRONMENT_ID) return EMPTY_PANE
+    return environmentPane(
+      (environments ?? []).find((e) => e.id === id)?.environment,
+      connectedRepoNames,
+    )
+  }, [environments, pickedEnvironment, connectedRepoNames])
+  // The pane as the run would use it: the edits if there are any, else the
+  // picked environment's own values.
+  const shownPane = pane ?? seededPane
+  // Once the pane no longer says what the environment it was seeded from says,
+  // no environment is checked and the pane is what ships.
+  const isCustom = pane !== null && !paneEquals(pane, seededPane)
+  // Any environment read out as pane rows.
+  const paneOf = (id: string | null | undefined): EnvironmentPaneState =>
+    !id || id === EMPTY_ENVIRONMENT_ID
+      ? EMPTY_PANE
+      : environmentPane(
+          (environments ?? []).find((e) => e.id === id)?.environment,
+          connectedRepoNames,
+        )
   // The server's selectable set (GET /models); before it lands — and on an
   // older server that has no such route — the built-in fallback list.
   const modelOptions = useMemo(() => composerModelOptions(models ?? []), [models])
@@ -808,124 +810,148 @@ function Launcher({
     const at = modelOptions.findIndex((o) => o.id === null)
     return at === -1 ? 0 : at
   }, [modelPick, modelOptions])
+  // What the open Environment list shows: the saved environments, plus the
+  // `custom` row that appears at the bottom and takes the check once the pane
+  // has diverged. A real row, so ↓ reaches it — and picking it is a no-op that
+  // just closes the list, since the pane already says what it names.
+  const environmentRowsWithCustom = useMemo<ComposerModel[]>(
+    () =>
+      isCustom
+        ? [...environmentOptionRows, { id: CUSTOM_ENVIRONMENT_ID, label: CUSTOM_ENVIRONMENT_LABEL }]
+        : environmentOptionRows,
+    [environmentOptionRows, isCustom],
+  )
   const optionsFor = (key: PickerRow['key']) =>
-    key === 'environment' ? environmentOptionRows : modelOptions
+    key === 'environment' ? environmentRowsWithCustom : modelOptions
   const pickedIdx = (key: PickerRow['key']): number =>
-    key === 'environment' ? environmentIdx : modelIdx
+    key === 'environment' ? (isCustom ? environmentOptionRows.length : environmentIdx) : modelIdx
   const isPicked = (key: PickerRow['key'], at: number): boolean =>
     at === Math.min(pickedIdx(key), optionsFor(key).length - 1)
-  const emptyPicked = pickedEnvironment?.id === EMPTY_ENVIRONMENT_ID
-  // Both rows single-pick, so activating an OPTION closes the dropdown. The
-  // Environment list's custom rows below the divider are not options: they
-  // toggle or type in place and keep the list up.
+  // Checking an environment drops the pane's edits, since the pane is a reading of
+  // whatever environment is checked. The `custom` row names no environment, so
+  // landing on it keeps the edits it stands for.
+  const pickEnvironment = (at: number): void => {
+    if (optionsFor('environment')[at]?.id === CUSTOM_ENVIRONMENT_ID) return
+    setEnvironmentPick(at)
+    setPane(null)
+  }
+  // Both rows single-pick, so activating an option closes the dropdown.
   const activate = (key: PickerRow['key'], at: number): void => {
-    if (key === 'environment') setEnvironmentPick(at)
+    if (key === 'environment') pickEnvironment(at)
     else setModelPick(at)
     setOpenPicker(null)
   }
-  // The open Environment list's shape, shared by its navigation and its
-  // renderer: the options, then the custom section's secrets, typed variables
-  // and add button.
-  // Whether a repository is in the run: checked in the custom section, or
-  // brought in by the picked environment itself.
-  const repositoryFor = (fullName: string): CustomRepository | undefined =>
-    customRepositories.find((r) => r.fullName === fullName) ??
-    baseRepositories.find((r) => r.fullName === fullName)
-  const environmentPicker = useMemo(
+  // What the pane shows. While the Environment list is open it reads out the
+  // option the list's cursor is on — walking the list is how you see what each
+  // environment holds, and nothing is checked by looking. Closed, it is the run's
+  // own configuration. The `custom` row stands for the edits themselves, so it
+  // reads them rather than an environment.
+  //
+  // The list's own cursor doesn't move while you walk the pane below it, so the
+  // pane never switches out from under you mid-edit.
+  const previewed = (() => {
+    if (openPicker?.key !== 'environment') return undefined
+    const opt = environmentRowsWithCustom[Math.min(openPicker.hover, environmentRowsWithCustom.length - 1)]
+    return opt === undefined || opt.id === CUSTOM_ENVIRONMENT_ID || isPicked('environment', openPicker.hover)
+      ? undefined
+      : opt
+  })()
+  const displayPane = previewed ? paneOf(previewed.id) : shownPane
+  // Editing any row seeds the pane from what is on screen, so the first keystroke
+  // doesn't silently drop the rest of the environment. Editing an environment you
+  // had only been LOOKING at checks it first: the edit is of what you can see, and
+  // leaving the previous pick checked would apply your change to something else.
+  const editPane = (edit: (p: EnvironmentPaneState) => EnvironmentPaneState): void => {
+    if (previewed) {
+      setEnvironmentPick(environmentOptionRows.findIndex((o) => o.id === previewed.id))
+      setPane(edit(displayPane))
+      return
+    }
+    setPane((prev) => edit(prev ?? seededPane))
+  }
+  // Whether a repository is in the run, and at which ref.
+  const repositoryFor = (fullName: string) =>
+    displayPane.repositories.find((r) => r.fullName === fullName)
+  // The pane's shape, shared by its navigation and its renderer.
+  const paneInput = useMemo(
     () => ({
-      optionCount: environmentOptionRows.length,
-      repoNames: (repos ?? []).map((r) => r.full_name),
+      // The connected repositories, plus any the picked environment named that
+      // aren't among them — the pane is the whole truth, so a repo that will be
+      // cloned has to be visible (and uncheckable) even if it is no longer
+      // connected.
+      repoNames: [
+        ...connectedRepoNames,
+        ...displayPane.repositories
+          .map((r) => r.fullName)
+          .filter((name) => !connectedRepoNames.includes(name)),
+      ],
       // A checked repo grows its branch input row, so ↓ can land on it.
-      checkedRepoNames: (repos ?? [])
-        .map((r) => r.full_name)
-        .filter(
-          (name) =>
-            customRepositories.some((r) => r.fullName === name) ||
-            baseRepositories.some((r) => r.fullName === name),
-        ),
+      checkedRepoNames: displayPane.repositories.map((r) => r.fullName),
       secretNames: secretNames ?? [],
-      customVariables,
+      variables: displayPane.variables,
       builtInMcpServers: builtInServers,
-      customMcpServers,
+      mcpServers: displayPane.mcpServers,
     }),
-    [
-      environmentOptionRows.length,
-      repos,
-      secretNames,
-      customVariables,
-      customRepositories,
-      baseRepositories,
-      builtInServers,
-      customMcpServers,
-    ],
+    [connectedRepoNames, secretNames, displayPane, builtInServers],
   )
-  const environmentHoverCount = environmentPickerCount(environmentPicker)
-  // Whether a variable of this name is in the run: a checked secret and a typed
-  // entry are the same thing once committed.
+  const paneRowCount = environmentPaneCount(paneInput)
+  // Whether a variable of this name is in the run, and at which value.
   const variableFor = (name: string): CustomVariable | undefined =>
-    customVariables.find((v) => v.name === name)
-  // Enter (or →) on a row of the open Environment list: an option picks and
-  // closes; a repo or secret toggles; a typed variable re-opens for editing;
-  // the add button opens an empty editor.
-  const activateEnvironmentRow = (hover: number): void => {
-    const row = environmentPickerAt(environmentPicker, hover)
-    if (row.kind === 'option') {
-      activate('environment', row.at)
+    displayPane.variables.find((v) => v.name === name)
+  // Enter (or →) on a pane row: a repo, server or variable toggles; a variable
+  // already in the run re-opens for editing; the add buttons open a form; a
+  // script field opens its multi-line editor. The branch and compute rows are
+  // one-line inputs — enter there is a no-op, typing is what edits them.
+  const activatePaneRow = (hover: number): void => {
+    const row = environmentPaneAt(paneInput, hover)
+    if (row.kind === 'image' || row.kind === 'hook') {
+      const section = row.kind === 'image' ? 'image' : 'hooks'
+      const text = displayPane[section][row.field as never] as string
+      setScriptEditor({ section, field: row.field, text, cursor: text.length })
       return
     }
     if (row.kind === 'repo') {
-      // Unchecking drops the custom entry; a base repo (the picked
-      // environment's own) stays, since an additive list can't remove it.
-      setCustomRepositories((prev) =>
-        prev.some((r) => r.fullName === row.fullName)
-          ? prev.filter((r) => r.fullName !== row.fullName)
-          : [...prev, { fullName: row.fullName, ref: null }],
-      )
+      editPane((p) => ({
+        ...p,
+        repositories: p.repositories.some((r) => r.fullName === row.fullName)
+          ? p.repositories.filter((r) => r.fullName !== row.fullName)
+          : [...p.repositories, { fullName: row.fullName, ref: null }],
+      }))
       return
     }
-    // The branch, compute, image and hook rows are text inputs, not toggles:
-    // enter there is a no-op, typing is what edits them (see the handler).
-    if (
-      row.kind === 'repoRef' ||
-      row.kind === 'compute' ||
-      row.kind === 'image' ||
-      row.kind === 'hook'
-    )
-      return
     if (row.kind === 'mcpServer') {
-      // Toggling off a base server can't be expressed additively, so only
-      // servers added here uncheck (mirrors the repo rows).
-      setCustomMcpServers((prev) =>
-        prev.some((s) => s.name === row.name)
-          ? prev.filter((s) => s.name !== row.name)
-          : [...prev, { name: row.name, command: null, url: null }],
-      )
+      editPane((p) => ({
+        ...p,
+        mcpServers: p.mcpServers.some((s) => s.name === row.name)
+          ? p.mcpServers.filter((s) => s.name !== row.name)
+          : [...p.mcpServers, { name: row.name, command: null, url: null }],
+      }))
       return
     }
     if (row.kind === 'addMcpServer') {
       setServerEditor({ field: 'name', name: '', command: '', url: '', error: null })
       return
     }
-    if (row.kind === 'secret') {
-      // Values are write-only, so a checked secret is a variable with no value:
-      // the sandbox resolves the name from stored secrets at start.
-      setCustomVariables((prev) =>
-        prev.some((v) => v.name === row.name)
-          ? prev.filter((v) => v.name !== row.name)
-          : [...prev, { name: row.name, value: null }],
-      )
-      return
-    }
     if (row.kind === 'variable') {
-      setEditor({
-        field: 'value',
-        name: row.name,
-        value: variableFor(row.name)?.value ?? '',
-        error: null,
-      })
+      const held = variableFor(row.name)
+      // A valueless name is a plain checkbox — it ships the name alone and the
+      // sandbox resolves the value from stored secrets — so enter toggles it.
+      // One carrying a value opens for editing instead, since a value typed here
+      // is worth more than the keystroke it took and enter should not drop it.
+      if (held === undefined) {
+        editPane((p) => ({ ...p, variables: [...p.variables, { name: row.name, value: null }] }))
+        return
+      }
+      if (held.value === null) {
+        editPane((p) => ({ ...p, variables: p.variables.filter((v) => v.name !== row.name) }))
+        return
+      }
+      setEditor({ field: 'value', name: row.name, value: held.value, error: null })
       return
     }
-    setEditor({ field: 'name', name: '', value: '', error: null })
+    if (row.kind === 'addVariable') {
+      setEditor({ field: 'name', name: '', value: '', error: null })
+    }
   }
   // Enter commits from either field. A name that isn't a legal shell identifier
   // keeps the form open with the reason. An empty value means the sandbox
@@ -940,51 +966,46 @@ function Launcher({
     // "NAME=value" typed into the name field carries its own value, so it wins
     // over the (necessarily untouched) value field.
     const value = parsed.value !== null ? parsed.value : editor.value === '' ? null : editor.value
-    setCustomVariables((prev) => {
-      const next = [...prev]
+    editPane((p) => {
+      const next = [...p.variables]
       const entry = { name: parsed.name, value }
       // A repeat of a name already in the list replaces it in place, so the
       // second typing of a name reads as an edit and not a duplicate row.
       const existing = next.findIndex((v) => v.name === parsed.name)
       if (existing !== -1) next[existing] = entry
       else next.push(entry)
-      return next
+      return { ...p, variables: next }
     })
     setEditor(null)
   }
   // Typing on a checked repo's branch row edits its ref in place: backspace
-  // erases, an emptied ref returns to the default branch (null). A base repo
-  // whose ref was edited becomes a custom entry, which wins the merge.
+  // erases, an emptied ref returns to the default branch (null).
   const editRepositoryRef = (fullName: string, edit: (ref: string) => string): void => {
-    const current = repositoryFor(fullName)?.ref ?? ''
-    const next = edit(current)
-    const entry = { fullName, ref: next === '' ? null : next }
-    setCustomRepositories((prev) => {
-      const existing = prev.findIndex((r) => r.fullName === fullName)
-      if (existing === -1) return [...prev, entry]
-      const out = [...prev]
-      out[existing] = entry
-      return out
+    editPane((p) => {
+      const existing = p.repositories.findIndex((r) => r.fullName === fullName)
+      const ref = edit(p.repositories[existing]?.ref ?? '')
+      const entry = { fullName, ref: ref === '' ? null : ref }
+      const next = [...p.repositories]
+      if (existing === -1) next.push(entry)
+      else next[existing] = entry
+      return { ...p, repositories: next }
     })
   }
 
   // Enter with an empty prompt is a real start: the session comes up idle and
   // waits for the first message, so you can open a sandbox before you know
   // what to ask it.
+  //
+  // A checked environment ships by name and the pane stays home; once the pane
+  // has diverged (or [empty] is checked, which is the pane emptied) it ships
+  // instead, and an untouched "Default" row ships neither — the server's own
+  // ladder is what that row names.
   const submit = (): void => {
+    const named = !isCustom && pickedEnvironment?.id !== EMPTY_ENVIRONMENT_ID
     onSubmit(text.trim(), {
-      environment: emptyPicked ? null : (pickedEnvironment?.id ?? null),
+      environment: named ? (pickedEnvironment?.id ?? null) : null,
       model: modelOptions[modelIdx]?.id ?? null,
-      emptyEnvironment: emptyPicked,
-      baseVariables,
-      customVariables,
-      baseRepositories,
-      customRepositories,
-      customCompute,
-      customImage,
-      customHooks,
-      baseMcpServers,
-      customMcpServers,
+      pane: named && pickedEnvironment?.id === null ? null : shownPane,
     })
   }
 
@@ -1005,6 +1026,66 @@ function Launcher({
 
   useInput(
     (ch, key) => {
+      // An open script field owns every key: a Dockerfile is written in lines, so
+      // enter is a newline here rather than the commit it is everywhere else, and
+      // esc is what commits and collapses the row.
+      if (scriptEditor !== null) {
+        const { text: script, cursor: at } = scriptEditor
+        const set = (next: string, cursorAt: number): void =>
+          setScriptEditor({ ...scriptEditor, text: next, cursor: cursorAt })
+        // Every keystroke writes through to the pane, so the row under the editor
+        // is never out of date with what is being typed.
+        const write = (next: string, cursorAt: number): void => {
+          set(next, cursorAt)
+          editPane((p) => ({
+            ...p,
+            [scriptEditor.section]: {
+              ...p[scriptEditor.section],
+              [scriptEditor.field]: next,
+            },
+          }))
+        }
+        if (key.escape) {
+          setScriptEditor(null)
+          return
+        }
+        if (key.return) {
+          write(script.slice(0, at) + '\n' + script.slice(at), at + 1)
+          return
+        }
+        if (key.leftArrow) {
+          set(script, Math.max(0, at - 1))
+          return
+        }
+        if (key.rightArrow) {
+          set(script, Math.min(script.length, at + 1))
+          return
+        }
+        // ↑/↓ move a line at a time, keeping the column where it can.
+        if (key.upArrow || key.downArrow) {
+          const lineStart = script.lastIndexOf('\n', at - 1) + 1
+          const column = at - lineStart
+          if (key.upArrow) {
+            if (lineStart === 0) return
+            const prevStart = script.lastIndexOf('\n', lineStart - 2) + 1
+            set(script, Math.min(prevStart + column, lineStart - 1))
+            return
+          }
+          const lineEnd = script.indexOf('\n', at)
+          if (lineEnd === -1) return
+          const nextEnd = script.indexOf('\n', lineEnd + 1)
+          set(script, Math.min(lineEnd + 1 + column, nextEnd === -1 ? script.length : nextEnd))
+          return
+        }
+        if (key.backspace || key.delete) {
+          if (at > 0) write(script.slice(0, at - 1) + script.slice(at), at - 1)
+          return
+        }
+        if (ch && !key.ctrl && !key.meta) {
+          write(script.slice(0, at) + ch + script.slice(at), at + ch.length)
+        }
+        return
+      }
       // The "+ new server" form: like the variable form, it owns every key
       // while up. ↑/↓ walk the three fields, enter commits, esc backs out.
       if (serverEditor !== null) {
@@ -1023,11 +1104,11 @@ function Launcher({
             setServerEditor({ ...serverEditor, error })
             return
           }
-          setCustomMcpServers((prev) => [
+          editPane((p) => ({
+            ...p,
             // A repeat of a name is an edit of it, not a duplicate row.
-            ...prev.filter((s) => s.name !== entry.name),
-            entry,
-          ])
+            mcpServers: [...p.mcpServers.filter((s) => s.name !== entry.name), entry],
+          }))
           setServerEditor(null)
           return
         }
@@ -1085,30 +1166,59 @@ function Launcher({
         }
         return
       }
-      // An open dropdown is a modal subtree: ↑/↓ walk the rows,
-      // → (or enter/space) activates the highlighted one — an option picks and
-      // closes, a custom key opens its editor — ← (or esc) backs out.
+      // An open dropdown is a modal subtree: ↑/↓ walk its rows,
+      // → (or enter/space) activates the highlighted one, ← (or esc) backs out.
+      //
+      // The open Environment row is that plus the configuration pane under its
+      // options. ↑/↓ walk the options, and → (enter) on one CHECKS it and drops
+      // the cursor into the pane, which is that environment's configuration — so
+      // the same key that says "this one" is the one that takes you into it.
       if (openPicker !== null) {
-        const isEnv = openPicker.key === 'environment'
-        const rowCount = isEnv ? environmentHoverCount : optionsFor(openPicker.key).length
-        if (key.escape || key.leftArrow) {
+        const optionCount = optionsFor(openPicker.key).length
+        const paneWalk = openPicker.key === 'environment' ? paneRowCount : 0
+        if (key.escape) {
           setOpenPicker(null)
           return
         }
+        // ← backs out of the pane to the options, then out of the list entirely.
+        if (key.leftArrow) {
+          if (openPicker.paneHover !== null) setOpenPicker((p) => p && { ...p, paneHover: null })
+          else setOpenPicker(null)
+          return
+        }
         if (key.upArrow) {
-          setOpenPicker((p) => p && { ...p, hover: Math.max(0, p.hover - 1) })
+          setOpenPicker(
+            (p) =>
+              p &&
+              (p.paneHover === null
+                ? { ...p, hover: Math.max(0, p.hover - 1) }
+                : // ↑ off the pane's first row returns to the option it reads out.
+                  p.paneHover === 0
+                  ? { ...p, paneHover: null }
+                  : { ...p, paneHover: p.paneHover - 1 }),
+          )
           return
         }
         if (key.downArrow) {
-          setOpenPicker((p) => p && { ...p, hover: Math.min(rowCount - 1, p.hover + 1) })
+          setOpenPicker(
+            (p) =>
+              p &&
+              (p.paneHover !== null
+                ? { ...p, paneHover: Math.min(paneWalk - 1, p.paneHover + 1) }
+                : // ↓ off the last option walks into the pane under it.
+                  p.hover < optionCount - 1
+                  ? { ...p, hover: p.hover + 1 }
+                  : paneWalk > 0
+                    ? { ...p, paneHover: 0 }
+                    : p),
+          )
           return
         }
-        // The branch and compute rows are text inputs under the cursor: typing
-        // and backspace edit them in place, blank = whatever the server
-        // resolves. Space stays list navigation (no ref or size holds one).
-        if (isEnv) {
-          const hover = Math.min(openPicker.hover, rowCount - 1)
-          const target = environmentPickerAt(environmentPicker, hover)
+        // A pane row is under the cursor: the branch and compute rows are
+        // one-line inputs edited by typing, blank = whatever the server resolves.
+        if (openPicker.paneHover !== null) {
+          const hover = Math.min(openPicker.paneHover, paneWalk - 1)
+          const target = environmentPaneAt(paneInput, hover)
           const typing =
             ch && ch !== ' ' && !key.ctrl && !key.meta && !key.return && !key.rightArrow
           if (target.kind === 'repoRef') {
@@ -1123,44 +1233,26 @@ function Launcher({
           }
           if (target.kind === 'compute') {
             if (key.backspace || key.delete) {
-              setCustomCompute((c) => ({ ...c, [target.field]: c[target.field].slice(0, -1) }))
+              editPane((p) => ({
+                ...p,
+                compute: { ...p.compute, [target.field]: p.compute[target.field].slice(0, -1) },
+              }))
               return
             }
             // cpu is a number on the wire, so its field only admits digits.
             if (typing && (target.field !== 'cpu' || /^[0-9.]$/.test(ch))) {
-              setCustomCompute((c) => ({ ...c, [target.field]: c[target.field] + ch }))
+              editPane((p) => ({
+                ...p,
+                compute: { ...p.compute, [target.field]: p.compute[target.field] + ch },
+              }))
               return
             }
           }
-          // Image and hook fields are shell/Dockerfile lines, so space is
-          // typed text — but only once something has been typed, so space on
-          // the untouched row still activates like everywhere else.
-          if (target.kind === 'image' || target.kind === 'hook') {
-            const typed =
-              target.kind === 'image'
-                ? customImage[target.field]
-                : customHooks[target.field]
-            const set =
-              target.kind === 'image'
-                ? (edit: (s: string) => string) =>
-                    setCustomImage((c) => ({ ...c, [target.field]: edit(c[target.field]) }))
-                : (edit: (s: string) => string) =>
-                    setCustomHooks((c) => ({ ...c, [target.field]: edit(c[target.field]) }))
-            const spaceTyping = ch === ' ' && typed !== '' && !key.ctrl && !key.meta
-            if (key.backspace || key.delete) {
-              set((s) => s.slice(0, -1))
-              return
-            }
-            if (typing || spaceTyping) {
-              set((s) => s + ch)
-              return
-            }
-          }
+          if (key.return || key.rightArrow || ch === ' ') activatePaneRow(hover)
+          return
         }
         if (key.rightArrow || key.return || ch === ' ') {
-          const hover = Math.min(openPicker.hover, rowCount - 1)
-          if (isEnv) activateEnvironmentRow(hover)
-          else activate(openPicker.key, hover)
+          activate(openPicker.key, Math.min(openPicker.hover, optionCount - 1))
           return
         }
         return
@@ -1176,9 +1268,9 @@ function Launcher({
         return
       }
       if (cursor.kind === 'option') {
-        // The configuration rows above the prompt: ↑ walks up them and stops at
-        // the first, ↓ off the last returns to the prompt, →/enter opens the
-        // row's list, esc returns to the prompt, typing does too.
+        // The two picker rows: ↑ walks up them and stops at the first, ↓ off the
+        // last returns to the prompt, →/enter opens the row's list, esc returns
+        // to the prompt, typing does too.
         if (key.upArrow) {
           if (cursor.at > 0) setCursor({ kind: 'option', at: cursor.at - 1 })
           return
@@ -1189,7 +1281,10 @@ function Launcher({
           return
         }
         if (key.return || key.rightArrow) {
-          setOpenPicker({ key: PICKER_ROWS[cursor.at].key, hover: 0 })
+          // The list opens on the checked row, so the walk starts where the run
+          // currently stands rather than at the top.
+          const key_ = PICKER_ROWS[cursor.at].key
+          setOpenPicker({ key: key_, hover: pickedIdx(key_), paneHover: null })
           return
         }
         if (key.escape) {
@@ -1269,23 +1364,13 @@ function Launcher({
     { isActive: focused && rawMode },
   )
 
-  // The summary shown on a row: the pick's label, plus what the custom section
-  // adds on top of it. Never "loading…": every resting value is known locally,
-  // so a pending fetch has nothing to do with what this run would use.
+  // The value shown on a picker row: its pick's label, or "custom" once the pane
+  // has diverged from it. Never "loading…": every resting value is known
+  // locally, so a pending fetch has nothing to do with what this run would use.
   const rowValue = (key: PickerRow['key']): string => {
+    if (key === 'environment' && isCustom) return CUSTOM_ENVIRONMENT_LABEL
     const options = optionsFor(key)
-    const label = options[Math.min(pickedIdx(key), options.length - 1)]?.label ?? 'Default'
-    return key === 'environment'
-      ? environmentRowSummary(
-          label,
-          customVariables,
-          customRepositories,
-          customCompute,
-          customImage,
-          customHooks,
-          customMcpServers,
-        )
-      : label
+    return options[Math.min(pickedIdx(key), options.length - 1)]?.label ?? 'Default'
   }
 
   // Columns available inside the prompt box: the terminal minus its left accent
@@ -1295,15 +1380,11 @@ function Launcher({
   const contentWidth = Math.max(1, width - 1 - PROMPT_PAD_X * 2)
   const open = openPicker
   const openOptions = open ? optionsFor(open.key) : []
-  const openIsEnv = open?.key === 'environment'
-  const openRowCount = openIsEnv ? environmentHoverCount : openOptions.length
-  const openHover = open ? Math.min(open.hover, openRowCount - 1) : 0
+  const openHover = open ? Math.min(open.hover, openOptions.length - 1) : -1
   // Every option plus its group heading — an open dropdown prints the whole
   // list, so a long model list grows the block and the terminal scrolls rather
-  // than hiding rows behind a window. The Environment list adds the divider and
-  // its custom key rows below the options.
-  const visibleRows = open && !openIsEnv ? composerPickerRows(openOptions) : []
-  const environmentRows = openIsEnv ? environmentPickerRows(environmentPicker) : []
+  // than hiding rows behind a window.
+  const visibleRows = open ? composerPickerRows(openOptions) : []
   // The price table's column widths: the label column, then one numeric column
   // per lane, each as wide as its widest cell (its heading included) so the
   // dollars read down a right-aligned column. null when there is no price to
@@ -1327,6 +1408,304 @@ function Launcher({
         '  ' +
         (rate?.output ?? '').padStart(rateTable.output)
       : ''
+
+  // Which pane row the open Environment row's walk is on, or -1 while the cursor
+  // is still on the options above the pane.
+  const openPaneHover = open?.key === 'environment' ? (open.paneHover ?? -1) : -1
+
+  // The configuration pane: the checked environment read out, section by section,
+  // under the list that names it. Its rows continue the open row's single walk,
+  // so ↓ off the last option lands on the first pane row.
+  const renderPane = (): React.ReactNode =>
+    environmentPaneRows(paneInput).map((paneRow) => {
+      if (paneRow.kind === 'heading') {
+        return (
+          <Box key={`heading:${paneRow.label}`} width={contentWidth}>
+            <Text wrap="truncate" color={theme.muted}>
+              {'  '}
+              {paneRow.label.toUpperCase()}
+            </Text>
+          </Box>
+        )
+      }
+      // A form owns the caret while it is open, so the pane's own highlight goes
+      // dark rather than showing a second one.
+      const hovered =
+        focused &&
+        openPaneHover === paneRow.hover &&
+        editor === null &&
+        serverEditor === null &&
+        scriptEditor === null
+      const glyph = <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>
+      if (paneRow.kind === 'repo') {
+        const checked = repositoryFor(paneRow.fullName) !== undefined
+        return (
+          <Box key={`repo:${paneRow.fullName}`} width={contentWidth}>
+            <Text wrap="truncate">
+              {glyph}{' '}
+              <Text color={hovered || checked ? theme.foreground : theme.muted}>
+                {`  [${checked ? 'x' : ' '}] ${paneRow.fullName}`}
+              </Text>
+            </Text>
+          </Box>
+        )
+      }
+      // A checked repo's branch input: typing edits the ref in place; empty rests
+      // on the repo's default branch.
+      if (paneRow.kind === 'repoRef') {
+        const ref = repositoryFor(paneRow.fullName)?.ref ?? null
+        const resting = repositoryRefLabel(
+          ref,
+          (repos ?? []).find((r) => r.full_name === paneRow.fullName)?.default_branch ?? null,
+        )
+        return (
+          <Box key={`repoRef:${paneRow.fullName}`} width={contentWidth}>
+            <Text wrap="truncate">
+              {glyph}{' '}
+              {/* Aligned under the repo name, past its checkbox. */}
+              <Text color={theme.muted}>{'      branch: '}</Text>
+              {ref !== null ? (
+                <Text color={theme.foreground}>
+                  {ref}
+                  {hovered && <Text inverse> </Text>}
+                </Text>
+              ) : (
+                // The default branch as a placeholder: it is what an untouched
+                // row clones, and typing replaces it.
+                <Text color={theme.muted}>
+                  {hovered && resting ? (
+                    <Text>
+                      <Text inverse>{resting[0]}</Text>
+                      {resting.slice(1)}
+                    </Text>
+                  ) : (
+                    (resting ?? '')
+                  )}
+                </Text>
+              )}
+            </Text>
+          </Box>
+        )
+      }
+      // A compute field: a one-line input like a branch row, blank meaning
+      // whatever the server resolves.
+      if (paneRow.kind === 'compute') {
+        const held = displayPane.compute[paneRow.field]
+        return (
+          <Box key={`compute:${paneRow.field}`} width={contentWidth}>
+            <Text wrap="truncate">
+              {glyph} <Text color={theme.muted}>{`  ${paneRow.field}: `}</Text>
+              <Text color={theme.foreground}>
+                {held}
+                {hovered && <Text inverse> </Text>}
+              </Text>
+            </Text>
+          </Box>
+        )
+      }
+      // An image or hook field: a script, so it prints as a YAML block scalar
+      // over its own lines rather than crushed onto the label's line. Long ones
+      // are capped and say how many lines they are hiding, since a hidden line
+      // is a hidden instruction to the sandbox. Enter opens it (scriptEditor),
+      // which prints every line and puts a real caret in the text.
+      if (paneRow.kind === 'image' || paneRow.kind === 'hook') {
+        const section = paneRow.kind === 'image' ? 'image' : 'hooks'
+        const editing =
+          scriptEditor?.section === section && scriptEditor.field === paneRow.field
+        const held = editing
+          ? scriptEditor.text
+          : (displayPane[section][paneRow.field as never] as string)
+        const { lines, hidden } = scriptRowLines(held, editing)
+        return (
+          <Box key={`${paneRow.kind}:${paneRow.field}`} flexDirection="column" width={contentWidth}>
+            <Box width={contentWidth}>
+              <Text wrap="truncate">
+                {glyph}{' '}
+                <Text color={theme.muted}>{`  ${paneRow.field}:`}</Text>
+                {/* The block-scalar marker, so a multi-line value reads the way
+                    it would in the environment YAML. */}
+                <Text color={theme.muted}>{held === '' ? '' : ' |'}</Text>
+                {held === '' && (hovered || editing) && <Text inverse> </Text>}
+              </Text>
+            </Box>
+            {held !== '' &&
+              lines.map((line, at) => {
+                // The caret sits in the open editor's text, at the line and
+                // column it is actually on.
+                const before = lines.slice(0, at).reduce((n, l) => n + l.length + 1, 0)
+                const column = editing ? scriptEditor.cursor - before : -1
+                const here = editing && column >= 0 && column <= line.length
+                return (
+                  <Box key={at} width={contentWidth}>
+                    <Text wrap="truncate">
+                      {'    '}
+                      <Text color={theme.foreground}>
+                        {here ? (
+                          <Text>
+                            {line.slice(0, column)}
+                            <Text inverse>{line[column] ?? ' '}</Text>
+                            {line.slice(column + 1)}
+                          </Text>
+                        ) : (
+                          line
+                        )}
+                      </Text>
+                    </Text>
+                  </Box>
+                )
+              })}
+            {hidden > 0 && (
+              <Box width={contentWidth}>
+                <Text wrap="truncate" color={theme.muted}>
+                  {`    … ${hidden} more line${hidden === 1 ? '' : 's'}`}
+                </Text>
+              </Box>
+            )}
+          </Box>
+        )
+      }
+      if (paneRow.kind === 'mcpServer') {
+        const checked = displayPane.mcpServers.some((s) => s.name === paneRow.name)
+        return (
+          <Box key={`mcp:${paneRow.name}`} width={contentWidth}>
+            <Text wrap="truncate">
+              {glyph}{' '}
+              <Text color={hovered || checked ? theme.foreground : theme.muted}>
+                {`  [${checked ? 'x' : ' '}] ${paneRow.name}`}
+              </Text>
+            </Text>
+          </Box>
+        )
+      }
+      if (paneRow.kind === 'variable') {
+        const held = variableFor(paneRow.name)
+        return (
+          <Box key={`variable:${paneRow.name}`} width={contentWidth}>
+            <Text wrap="truncate">
+              {glyph}{' '}
+              <Text color={hovered || held !== undefined ? theme.foreground : theme.muted}>
+                {`  [${held !== undefined ? 'x' : ' '}] ${variableRowLabel(paneRow.name, held?.value)}`}
+              </Text>
+            </Text>
+          </Box>
+        )
+      }
+      if (paneRow.kind === 'addMcpServer') {
+        return (
+          <Box key="addMcpServer" flexDirection="column" width={contentWidth}>
+            <Box width={contentWidth}>
+              <Text wrap="truncate">
+                {glyph}{' '}
+                <Text color={hovered ? theme.foreground : theme.muted}>
+                  {'  '}
+                  {ADD_MCP_SERVER_LABEL}
+                </Text>
+              </Text>
+            </Box>
+            {serverEditor !== null && (
+              <Box flexDirection="column" width={contentWidth}>
+                {SERVER_EDITOR_FIELDS.map((field) => {
+                  const here = serverEditor.field === field
+                  const typed = serverEditor[field]
+                  // name is required; command/url pick the type, so their
+                  // placeholders say the either/or.
+                  const ghost =
+                    typed !== ''
+                      ? null
+                      : field === 'name'
+                        ? 'my-tools'
+                        : field === 'command'
+                          ? 'stdio: npx -y my-tools-mcp'
+                          : 'remote: https://mcp.example.com'
+                  return (
+                    <Box key={field} width={contentWidth}>
+                      <Text wrap="truncate">
+                        <Text color={theme.cursor}>{here ? SELECTION_GLYPH : ' '}</Text>{' '}
+                        {/* Aligned under the button text, past its "+ ". */}
+                        <Text color={theme.muted}>{`    ${field}: `}</Text>
+                        <Text color={theme.foreground}>{typed}</Text>
+                        {ghost ? (
+                          <Text>
+                            {here ? (
+                              <Text inverse>{ghost[0]}</Text>
+                            ) : (
+                              <Text color={theme.muted}>{ghost[0]}</Text>
+                            )}
+                            <Text color={theme.muted}>{ghost.slice(1)}</Text>
+                          </Text>
+                        ) : (
+                          here && <Text inverse> </Text>
+                        )}
+                      </Text>
+                    </Box>
+                  )
+                })}
+                {serverEditor.error !== null && (
+                  <Box width={contentWidth}>
+                    <Text wrap="truncate" color={theme.muted}>
+                      {'         '}
+                      {serverEditor.error}
+                    </Text>
+                  </Box>
+                )}
+              </Box>
+            )}
+          </Box>
+        )
+      }
+      return (
+        <Box key="addVariable" flexDirection="column" width={contentWidth}>
+          <Box width={contentWidth}>
+            <Text wrap="truncate">
+              {glyph}{' '}
+              <Text color={hovered ? theme.foreground : theme.muted}>
+                {'  '}
+                {ADD_VARIABLE_LABEL}
+              </Text>
+            </Text>
+          </Box>
+          {editor !== null && (
+            <Box flexDirection="column" width={contentWidth}>
+              {(['name', 'value'] as const).map((field) => {
+                const here = editor.field === field
+                const typed = editor[field]
+                const ghost =
+                  typed !== '' ? null : field === 'name' ? NAME_PLACEHOLDER : VALUE_PLACEHOLDER
+                return (
+                  <Box key={field} width={contentWidth}>
+                    <Text wrap="truncate">
+                      <Text color={theme.cursor}>{here ? SELECTION_GLYPH : ' '}</Text>{' '}
+                      <Text color={theme.muted}>{`    ${field}: `}</Text>
+                      <Text color={theme.foreground}>{typed}</Text>
+                      {ghost ? (
+                        <Text>
+                          {here ? (
+                            <Text inverse>{ghost[0]}</Text>
+                          ) : (
+                            <Text color={theme.muted}>{ghost[0]}</Text>
+                          )}
+                          <Text color={theme.muted}>{ghost.slice(1)}</Text>
+                        </Text>
+                      ) : (
+                        here && <Text inverse> </Text>
+                      )}
+                    </Text>
+                  </Box>
+                )
+              })}
+              {editor.error !== null && (
+                <Box width={contentWidth}>
+                  <Text wrap="truncate" color={theme.muted}>
+                    {'         '}
+                    {editor.error}
+                  </Text>
+                </Box>
+              )}
+            </Box>
+          )}
+        </Box>
+      )
+    })
 
   const caretVisible = focused && cursor.kind === 'prompt' && !starting && openPicker === null
   const listWin = navSlice(shown.length, LIST_ROWS, listIdx)
@@ -1356,11 +1735,16 @@ function Launcher({
         paddingY={1}
         paddingX={PROMPT_PAD_X}
       >
-        {/* What the next run will use, on top: two rows you walk with ↑ from
-            the input below, each opening its own list in place. */}
+        {/* What the next run will use: two rows you walk with ↑ from the input
+            below, each opening its own list in place. Under the Environment
+            list sits the configuration pane — the checked environment, read
+            out. */}
         {PICKER_ROWS.map((r, i) => {
-          const active = focused && cursor.kind === 'option' && cursor.at === i
           const isOpen = open?.key === r.key
+          // The row's own caret only while its list is CLOSED: once open, the
+          // caret belongs to whichever row of the list (or the pane under it) the
+          // cursor is on, and two carets would say the cursor is in two places.
+          const active = focused && cursor.kind === 'option' && cursor.at === i && !isOpen
           return (
             <Box key={r.key} flexDirection="column" width={contentWidth}>
               <Box width={contentWidth}>
@@ -1368,8 +1752,12 @@ function Launcher({
                   <Text color={theme.cursor}>{active ? SELECTION_GLYPH : ' '}</Text>
                 </Box>
                 <Text wrap="truncate">
-                  <Text color={theme.muted}>{r.label}: </Text>
-                  <Text color={active ? theme.foreground : theme.muted}>{rowValue(r.key)}</Text>
+                  {/* Upper-cased like the pane's section headings, so the whole
+                      configuration block reads with one kind of label. */}
+                  <Text color={theme.muted}>{r.label.toUpperCase()}: </Text>
+                  <Text color={active || isOpen ? theme.foreground : theme.muted}>
+                    {rowValue(r.key)}
+                  </Text>
                 </Text>
               </Box>
               {/* The price table's column heads, over the numeric columns they
@@ -1421,334 +1809,7 @@ function Launcher({
                     </Box>
                   )
                 })}
-              {/* The Environment list: its options, the divider, then the custom
-                  section — a checkbox per stored variable, whatever was typed
-                  here, and the add button. */}
-              {isOpen &&
-                environmentRows.map((envRow) => {
-                  if (envRow.kind === 'divider') {
-                    return (
-                      <Box key="divider" width={contentWidth}>
-                        <Text wrap="truncate" color={theme.muted}>
-                          {'    '}
-                          {`─── ${envRow.label} ───`}
-                        </Text>
-                      </Box>
-                    )
-                  }
-                  if (envRow.kind === 'heading') {
-                    return (
-                      <Box key={`heading:${envRow.label}`} width={contentWidth}>
-                        <Text wrap="truncate" color={theme.muted}>
-                          {'    '}
-                          {envRow.label.toUpperCase()}
-                        </Text>
-                      </Box>
-                    )
-                  }
-                  // A form owns the caret while it is open, so the list's own
-                  // highlight goes dark rather than showing a second one.
-                  const hovered =
-                    envRow.hover === openHover && editor === null && serverEditor === null
-                  if (envRow.kind === 'option') {
-                    const opt = openOptions[envRow.at]
-                    if (!opt) return null
-                    const picked = isPicked('environment', envRow.at)
-                    return (
-                      <Box key={opt.id ?? 'default'} width={contentWidth}>
-                        <Text wrap="truncate">
-                          {'   '}
-                          <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
-                          <Text color={hovered || picked ? theme.foreground : theme.muted}>
-                            {`[${picked ? 'x' : ' '}] ${opt.label}`}
-                          </Text>
-                        </Text>
-                      </Box>
-                    )
-                  }
-                  // A connected repository: enter/space toggles it into the
-                  // run. The ref stays off the row until it is checked — the
-                  // branch input under it is where that lives.
-                  if (envRow.kind === 'repo') {
-                    const checked = repositoryFor(envRow.fullName) !== undefined
-                    return (
-                      <Box key={`repo:${envRow.fullName}`} width={contentWidth}>
-                        <Text wrap="truncate">
-                          {'   '}
-                          <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
-                          <Text color={hovered || checked ? theme.foreground : theme.muted}>
-                            {`    [${checked ? 'x' : ' '}] ${envRow.fullName}`}
-                          </Text>
-                        </Text>
-                      </Box>
-                    )
-                  }
-                  // A checked repo's branch input: typing edits the ref in
-                  // place; empty rests on the repo's default branch.
-                  if (envRow.kind === 'repoRef') {
-                    const ref = repositoryFor(envRow.fullName)?.ref ?? null
-                    const resting = repositoryRefLabel(
-                      ref,
-                      (repos ?? []).find((r) => r.full_name === envRow.fullName)
-                        ?.default_branch ?? null,
-                    )
-                    return (
-                      <Box key={`repoRef:${envRow.fullName}`} width={contentWidth}>
-                        <Text wrap="truncate">
-                          {'   '}
-                          <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
-                          {/* Aligned under the repo name, past its checkbox. */}
-                          <Text color={theme.muted}>{'        branch: '}</Text>
-                          {ref !== null ? (
-                            <Text color={theme.foreground}>
-                              {ref}
-                              {hovered && <Text inverse> </Text>}
-                            </Text>
-                          ) : (
-                            // The default branch as a placeholder: it is what
-                            // an untouched row clones, and typing replaces it.
-                            <Text color={theme.muted}>
-                              {hovered && resting ? (
-                                <Text>
-                                  <Text inverse>{resting[0]}</Text>
-                                  {resting.slice(1)}
-                                </Text>
-                              ) : (
-                                (resting ?? '')
-                              )}
-                            </Text>
-                          )}
-                        </Text>
-                      </Box>
-                    )
-                  }
-                  // A compute, image or hook field: an inline input like a
-                  // branch row. Blank rests on the picked environment's own
-                  // value (muted), which is what an untouched field keeps —
-                  // object overrides merge key by key.
-                  if (
-                    envRow.kind === 'compute' ||
-                    envRow.kind === 'image' ||
-                    envRow.kind === 'hook'
-                  ) {
-                    const typed =
-                      envRow.kind === 'compute'
-                        ? customCompute[envRow.field]
-                        : envRow.kind === 'image'
-                          ? customImage[envRow.field]
-                          : customHooks[envRow.field]
-                    const resting =
-                      envRow.kind === 'compute'
-                        ? baseCompute[envRow.field]
-                        : envRow.kind === 'image'
-                          ? baseImage[envRow.field]
-                          : baseHooks[envRow.field]
-                    return (
-                      <Box key={`${envRow.kind}:${envRow.field}`} width={contentWidth}>
-                        <Text wrap="truncate">
-                          {'   '}
-                          <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
-                          <Text color={theme.muted}>{`    ${envRow.field}: `}</Text>
-                          {typed !== '' ? (
-                            <Text color={theme.foreground}>
-                              {typed}
-                              {hovered && <Text inverse> </Text>}
-                            </Text>
-                          ) : (
-                            <Text color={theme.muted}>
-                              {hovered && resting !== '' ? (
-                                <Text>
-                                  <Text inverse>{resting[0]}</Text>
-                                  {resting.slice(1)}
-                                </Text>
-                              ) : (
-                                resting
-                              )}
-                              {hovered && resting === '' && <Text inverse> </Text>}
-                            </Text>
-                          )}
-                        </Text>
-                      </Box>
-                    )
-                  }
-                  // An MCP server: a built-in (or typed) name, checked when the
-                  // picked environment carries it or it was checked here.
-                  if (envRow.kind === 'mcpServer') {
-                    const checked =
-                      customMcpServers.some((s) => s.name === envRow.name) ||
-                      baseMcpServerNames.includes(envRow.name)
-                    return (
-                      <Box key={`mcp:${envRow.name}`} width={contentWidth}>
-                        <Text wrap="truncate">
-                          {'   '}
-                          <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
-                          <Text color={hovered || checked ? theme.foreground : theme.muted}>
-                            {`    [${checked ? 'x' : ' '}] ${envRow.name}`}
-                          </Text>
-                        </Text>
-                      </Box>
-                    )
-                  }
-                  if (envRow.kind === 'addMcpServer') {
-                    return (
-                      <Box key="addMcpServer" flexDirection="column" width={contentWidth}>
-                        <Box width={contentWidth}>
-                          <Text wrap="truncate">
-                            {'   '}
-                            <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
-                            <Text color={hovered ? theme.foreground : theme.muted}>
-                              {'    '}
-                              {ADD_MCP_SERVER_LABEL}
-                            </Text>
-                          </Text>
-                        </Box>
-                        {serverEditor !== null && (
-                          <Box flexDirection="column" width={contentWidth}>
-                            {SERVER_EDITOR_FIELDS.map((field) => {
-                              const here = serverEditor.field === field
-                              const typed = serverEditor[field]
-                              // name is required; command/url pick the type,
-                              // so their placeholders say the either/or.
-                              const ghost =
-                                typed !== ''
-                                  ? null
-                                  : field === 'name'
-                                    ? 'my-tools'
-                                    : field === 'command'
-                                      ? 'stdio: npx -y my-tools-mcp'
-                                      : 'remote: https://mcp.example.com'
-                              return (
-                                <Box key={field} width={contentWidth}>
-                                  <Text wrap="truncate">
-                                    {'   '}
-                                    <Text color={theme.cursor}>
-                                      {here ? SELECTION_GLYPH : ' '}
-                                    </Text>{' '}
-                                    {/* Aligned under the button text, past
-                                        its "+ ". */}
-                                    <Text color={theme.muted}>{`      ${field}: `}</Text>
-                                    <Text color={theme.foreground}>{typed}</Text>
-                                    {ghost ? (
-                                      <Text>
-                                        {here ? (
-                                          <Text inverse>{ghost[0]}</Text>
-                                        ) : (
-                                          <Text color={theme.muted}>{ghost[0]}</Text>
-                                        )}
-                                        <Text color={theme.muted}>{ghost.slice(1)}</Text>
-                                      </Text>
-                                    ) : (
-                                      here && <Text inverse> </Text>
-                                    )}
-                                  </Text>
-                                </Box>
-                              )
-                            })}
-                            {serverEditor.error !== null && (
-                              <Box width={contentWidth}>
-                                <Text wrap="truncate" color={theme.muted}>
-                                  {'           '}
-                                  {serverEditor.error}
-                                </Text>
-                              </Box>
-                            )}
-                          </Box>
-                        )}
-                      </Box>
-                    )
-                  }
-                  if (envRow.kind === 'addVariable') {
-                    return (
-                      <Box key="addVariable" flexDirection="column" width={contentWidth}>
-                        <Box width={contentWidth}>
-                          <Text wrap="truncate">
-                            {'   '}
-                            <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
-                            <Text color={hovered ? theme.foreground : theme.muted}>
-                              {'    '}
-                              {ADD_VARIABLE_LABEL}
-                            </Text>
-                          </Text>
-                        </Box>
-                        {/* The form, one level in from the button that opened
-                            it: both fields at once, the ▶ on whichever ↑/↓ put
-                            the caret on. */}
-                        {editor !== null && (
-                          <Box flexDirection="column" width={contentWidth}>
-                            {(['name', 'value'] as const).map((field) => {
-                              const here = editor.field === field
-                              const typed = field === 'name' ? editor.name : editor.value
-                              // The value's placeholder says what an empty one
-                              // means, in the field it applies to.
-                              const ghost =
-                                field === 'value' && typed === ''
-                                  ? VALUE_PLACEHOLDER
-                                  : field === 'name' && typed === ''
-                                    ? NAME_PLACEHOLDER
-                                    : null
-                              return (
-                                <Box key={field} width={contentWidth}>
-                                  <Text wrap="truncate">
-                                    {'   '}
-                                    <Text color={theme.cursor}>
-                                      {here ? SELECTION_GLYPH : ' '}
-                                    </Text>{' '}
-                                    {/* Aligned under the button text, past
-                                        its "+ ". */}
-                                    <Text color={theme.muted}>{`      ${field}: `}</Text>
-                                    <Text color={theme.foreground}>{typed}</Text>
-                                    {/* The caret sits on the placeholder's first
-                                        character rather than pushing it right. */}
-                                    {ghost ? (
-                                      <Text>
-                                        {here ? (
-                                          <Text inverse>{ghost[0]}</Text>
-                                        ) : (
-                                          <Text color={theme.muted}>{ghost[0]}</Text>
-                                        )}
-                                        <Text color={theme.muted}>{ghost.slice(1)}</Text>
-                                      </Text>
-                                    ) : (
-                                      here && <Text inverse> </Text>
-                                    )}
-                                  </Text>
-                                </Box>
-                              )
-                            })}
-                            {editor.error !== null && (
-                              <Box width={contentWidth}>
-                                <Text wrap="truncate" color={theme.muted}>
-                                  {'           '}
-                                  {editor.error}
-                                </Text>
-                              </Box>
-                            )}
-                          </Box>
-                        )}
-                      </Box>
-                    )
-                  }
-                  // A stored variable (checkbox) or one typed here. Both read as
-                  // one row per name: checking a stored one and typing a value
-                  // for it are the same entry.
-                  const entry = variableFor(envRow.name)
-                  const checked = entry !== undefined
-                  const label =
-                    envRow.kind === 'secret'
-                      ? variableRowLabel(envRow.name, entry ? entry.value : undefined)
-                      : variableRowLabel(envRow.name, entry?.value ?? null)
-                  return (
-                    <Box key={`var:${envRow.name}`} width={contentWidth}>
-                      <Text wrap="truncate">
-                        {'   '}
-                        <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
-                        <Text color={hovered || checked ? theme.foreground : theme.muted}>
-                          {`    [${checked ? 'x' : ' '}] ${label}`}
-                        </Text>
-                      </Text>
-                    </Box>
-                  )
-                })}
+              {isOpen && r.key === 'environment' && renderPane()}
             </Box>
           )
         })}

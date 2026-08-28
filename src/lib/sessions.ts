@@ -406,7 +406,6 @@ export function composerPickerRows(
   return rows
 }
 
-export const CUSTOM_ENVIRONMENT_DIVIDER = 'custom environment'
 export const REPOSITORIES_HEADING = 'repositories'
 export const VARIABLES_HEADING = 'variables'
 export const ADD_VARIABLE_LABEL = '+ new'
@@ -470,12 +469,17 @@ export interface CustomMcpServer {
   name: string
   command: string | null
   url: string | null
+  // The entry a seeded server came from, kept verbatim so a definition the
+  // launcher's three fields can't hold (args, env, headers) survives being
+  // carried through a custom run rather than being quietly flattened away.
+  raw?: unknown
 }
 
 // A custom server in the shape the mcp_servers override takes: `{name}` opts
 // into a built-in; a command line splits into command + args (the schema's
 // stdio shape); a url is the remote shape.
-export function mcpServerEntry(s: CustomMcpServer): Record<string, unknown> {
+export function mcpServerEntry(s: CustomMcpServer): unknown {
+  if (s.raw !== undefined) return s.raw
   if (s.command) {
     const [command, ...args] = s.command.split(/\s+/)
     return args.length > 0 ? { name: s.name, command, args } : { name: s.name, command }
@@ -522,20 +526,28 @@ export function computeOverride(compute: CustomCompute): Record<string, unknown>
 export const EMPTY_ENVIRONMENT_ID = 'empty:builtin'
 export const EMPTY_ENVIRONMENT_LABEL = '[empty]'
 
-// The open Environment list, top to bottom: the saved environments and
-// "[empty]" as options, a divider, then the custom section — one checkbox per
-// connected repository, one per stored secret, then the variables typed here,
-// then the add button.
+// The row that appears at the bottom of the list, checked, once the pane no
+// longer matches any saved environment. Also a sentinel: it names no
+// environment on the wire — the pane's own lists are the whole message.
+export const CUSTOM_ENVIRONMENT_ID = 'custom:builtin'
+export const CUSTOM_ENVIRONMENT_LABEL = 'custom'
+
+// The configuration pane above the Environment row: what THIS run's sandbox
+// will be, section by section — the connected repositories, the MCP servers,
+// the variables, then the image, hook and compute fields.
+//
+// The pane is the whole truth. Picking an environment seeds it (see
+// environmentPaneState); editing any row of it is what makes the run "custom",
+// and what the pane holds is what ships. So unchecking a repository the picked
+// environment brought in actually drops that repository from the run, which the
+// old additive section could not express.
 //
 // `hover` is the index ↑/↓ walks; rows without one are DECORATION the highlight
 // skips, which is what keeps this a plain list rather than a nested tree.
-export type EnvironmentPickerRow =
-  | { kind: 'option'; at: number; hover: number }
-  | { kind: 'divider'; label: string }
+export type EnvironmentPaneRow =
   | { kind: 'heading'; label: string }
   | { kind: 'repo'; fullName: string; hover: number }
   | { kind: 'repoRef'; fullName: string; hover: number }
-  | { kind: 'secret'; name: string; hover: number }
   | { kind: 'variable'; name: string; hover: number }
   | { kind: 'addVariable'; hover: number }
   | { kind: 'compute'; field: ComputeField; hover: number }
@@ -545,43 +557,42 @@ export type EnvironmentPickerRow =
   | { kind: 'addMcpServer'; hover: number }
 
 // What activating a hovered row does, without the renderer having to know the
-// list's shape.
-export type EnvironmentTarget =
-  | { kind: 'option'; at: number }
-  | { kind: 'repo'; fullName: string }
-  | { kind: 'repoRef'; fullName: string }
-  | { kind: 'secret'; name: string }
-  | { kind: 'variable'; name: string }
-  | { kind: 'addVariable' }
-  | { kind: 'compute'; field: ComputeField }
-  | { kind: 'image'; field: ImageField }
-  | { kind: 'hook'; field: HookField }
-  | { kind: 'mcpServer'; name: string }
-  | { kind: 'addMcpServer' }
+// pane's shape.
+export type EnvironmentPaneTarget = Exclude<EnvironmentPaneRow, { kind: 'heading' }> extends infer R
+  ? R extends { hover: number }
+    ? Omit<R, 'hover'>
+    : never
+  : never
 
-export interface EnvironmentPickerInput {
-  optionCount: number
-  // The account's connected repositories ("owner/name"), checkable in the
-  // custom section; each clones at its default branch unless a ref is typed.
+export interface EnvironmentPaneInput {
+  // The account's connected repositories ("owner/name"), one checkbox each;
+  // a checked one clones at its default branch unless a ref is typed.
   repoNames: readonly string[]
   // Which of those are in the run. A checked repo grows a `branch:` input row
   // under it, where ↓ lands and typing sets the ref (blank = default branch).
   checkedRepoNames: readonly string[]
   // The account's stored secret names (values are write-only, so checking one
-  // adds a variable with no value and the sandbox resolves it at start).
+  // ships a variable with no value and the sandbox resolves it at start), plus
+  // whatever the pane holds — a name from either side gets exactly one row.
   secretNames: readonly string[]
-  customVariables: readonly CustomVariable[]
-  // The built-in MCP servers connected on this account (checkboxes), and the
-  // servers defined here whose names aren't among them.
+  variables: readonly CustomVariable[]
+  // The built-in MCP servers connected on this account, plus the pane's own
+  // servers whose names aren't among them.
   builtInMcpServers: readonly string[]
-  customMcpServers: readonly CustomMcpServer[]
+  mcpServers: readonly CustomMcpServer[]
 }
 
-export function environmentPickerRows(input: EnvironmentPickerInput): EnvironmentPickerRow[] {
-  const rows: EnvironmentPickerRow[] = []
+// One row per name, in the order the two lists give them: a stored secret the
+// pane also carries is one row, not two.
+function unionNames(first: readonly string[], second: readonly string[]): string[] {
+  const out = [...first]
+  for (const name of second) if (!out.includes(name)) out.push(name)
+  return out
+}
+
+export function environmentPaneRows(input: EnvironmentPaneInput): EnvironmentPaneRow[] {
+  const rows: EnvironmentPaneRow[] = []
   let hover = 0
-  for (let at = 0; at < input.optionCount; at++) rows.push({ kind: 'option', at, hover: hover++ })
-  rows.push({ kind: 'divider', label: CUSTOM_ENVIRONMENT_DIVIDER })
   // No REPOSITORIES heading while there are no rows to sit under it — the repo
   // list is empty until the fetch lands (or when the account has none).
   if (input.repoNames.length > 0) {
@@ -594,21 +605,19 @@ export function environmentPickerRows(input: EnvironmentPickerInput): Environmen
     }
   }
   rows.push({ kind: 'heading', label: MCP_SERVERS_HEADING })
-  for (const name of input.builtInMcpServers)
+  for (const name of unionNames(
+    input.builtInMcpServers,
+    input.mcpServers.map((s) => s.name),
+  )) {
     rows.push({ kind: 'mcpServer', name, hover: hover++ })
-  // Like variables: a typed name that is also a built-in rides that row.
-  for (const s of input.customMcpServers) {
-    if (input.builtInMcpServers.includes(s.name)) continue
-    rows.push({ kind: 'mcpServer', name: s.name, hover: hover++ })
   }
   rows.push({ kind: 'addMcpServer', hover: hover++ })
   rows.push({ kind: 'heading', label: VARIABLES_HEADING })
-  for (const name of input.secretNames) rows.push({ kind: 'secret', name, hover: hover++ })
-  // A variable typed here whose name is also a secret rides that secret's row
-  // instead of getting a second one: one name, one row, whichever way it got in.
-  for (const v of input.customVariables) {
-    if (input.secretNames.includes(v.name)) continue
-    rows.push({ kind: 'variable', name: v.name, hover: hover++ })
+  for (const name of unionNames(
+    input.secretNames,
+    input.variables.map((v) => v.name),
+  )) {
+    rows.push({ kind: 'variable', name, hover: hover++ })
   }
   rows.push({ kind: 'addVariable', hover: hover++ })
   rows.push({ kind: 'heading', label: IMAGE_HEADING })
@@ -620,55 +629,165 @@ export function environmentPickerRows(input: EnvironmentPickerInput): Environmen
   return rows
 }
 
-// Where a hover index lands, clamped to the list.
-export function environmentPickerAt(
-  input: EnvironmentPickerInput,
+// Where a hover index lands, clamped to the pane.
+export function environmentPaneAt(
+  input: EnvironmentPaneInput,
   hover: number,
-): EnvironmentTarget {
-  const rows = environmentPickerRows(input)
-  const landable = rows.filter(
-    (r): r is Extract<EnvironmentPickerRow, { hover: number }> => 'hover' in r,
+): EnvironmentPaneTarget {
+  const landable = environmentPaneRows(input).filter(
+    (r): r is Extract<EnvironmentPaneRow, { hover: number }> => 'hover' in r,
   )
   const row = landable[Math.min(Math.max(0, hover), landable.length - 1)]
-  if (row.kind === 'option') return { kind: 'option', at: row.at }
-  if (row.kind === 'repo') return { kind: 'repo', fullName: row.fullName }
-  if (row.kind === 'repoRef') return { kind: 'repoRef', fullName: row.fullName }
-  if (row.kind === 'secret') return { kind: 'secret', name: row.name }
-  if (row.kind === 'variable') return { kind: 'variable', name: row.name }
-  if (row.kind === 'compute') return { kind: 'compute', field: row.field }
-  if (row.kind === 'image') return { kind: 'image', field: row.field }
-  if (row.kind === 'hook') return { kind: 'hook', field: row.field }
-  if (row.kind === 'mcpServer') return { kind: 'mcpServer', name: row.name }
-  if (row.kind === 'addMcpServer') return { kind: 'addMcpServer' }
-  return { kind: 'addVariable' }
+  const { hover: _at, ...target } = row
+  return target as EnvironmentPaneTarget
 }
 
-export function environmentPickerCount(input: EnvironmentPickerInput): number {
-  return environmentPickerRows(input).filter((r) => 'hover' in r).length
+export function environmentPaneCount(input: EnvironmentPaneInput): number {
+  return environmentPaneRows(input).filter((r) => 'hover' in r).length
 }
 
-// What the resting Environment row says: the picked environment, plus a count
-// of whatever the custom section adds on top of it.
-export function environmentRowSummary(
-  label: string,
-  customVariables: readonly CustomVariable[],
-  customRepositories: readonly CustomRepository[] = [],
-  customCompute: CustomCompute = EMPTY_COMPUTE,
-  customImage: CustomImage = EMPTY_IMAGE,
-  customHooks: CustomHooks = EMPTY_HOOKS,
-  customMcpServers: readonly CustomMcpServer[] = [],
+// What the pane holds: the next run's sandbox, whole. Seeded from the picked
+// environment (environmentPane), then edited in place — and once edited it is
+// what ships, so what you read here is what you get.
+export interface EnvironmentPaneState {
+  repositories: readonly CustomRepository[]
+  variables: readonly CustomVariable[]
+  mcpServers: readonly CustomMcpServer[]
+  compute: CustomCompute
+  // Scripts keep their newlines here even though their rows are one line — the
+  // pane ships what it holds, so flattening for display must not reach the wire.
+  image: CustomImage
+  hooks: CustomHooks
+}
+
+export const EMPTY_PANE: EnvironmentPaneState = {
+  repositories: [],
+  variables: [],
+  mcpServers: [],
+  compute: EMPTY_COMPUTE,
+  image: EMPTY_IMAGE,
+  hooks: EMPTY_HOOKS,
+}
+
+// How an MCP server entry names itself, across the shapes the config admits: a
+// bare string opts into a built-in, an object carries its name.
+export function mcpServerName(server: unknown): string {
+  if (typeof server === 'string') return server
+  const name = (server as { name?: unknown })?.name
+  return typeof name === 'string' ? name : ''
+}
+
+// An environment entry's repository as the connected list names it. A YAML entry
+// may omit `owner` ("name: ellipsis"), and the same repository is then one row,
+// not two — so a bare name resolves against the connected repositories. Only an
+// unambiguous match counts: two owners with the same repo name would be a guess.
+export function resolveRepoFullName(
+  fullName: string,
+  repoNames: readonly string[],
 ): string {
-  const extras: string[] = []
-  const r = customRepositories.length
-  if (r > 0) extras.push(`+${r} repo${r === 1 ? '' : 's'}`)
-  const v = customVariables.length
-  if (v > 0) extras.push(`+${v} variable${v === 1 ? '' : 's'}`)
-  const m = customMcpServers.length
-  if (m > 0) extras.push(`+${m} mcp`)
-  if (Object.keys(computeOverride(customCompute)).length > 0) extras.push('+compute')
-  if (Object.keys(fieldsOverride(customImage)).length > 0) extras.push('+image')
-  if (Object.keys(fieldsOverride(customHooks)).length > 0) extras.push('+hooks')
-  return extras.length === 0 ? label : `${label} ${extras.join(' ')}`
+  if (fullName.includes('/') || repoNames.includes(fullName)) return fullName
+  const matches = repoNames.filter((name) => name.slice(name.indexOf('/') + 1) === fullName)
+  return matches.length === 1 ? matches[0] : fullName
+}
+
+// A saved environment's config as the pane's starting state. Every field the
+// pane can show, resolved to the strings its rows edit; anything the config
+// leaves unset stays blank, which reads as "whatever the server resolves".
+export function environmentPane(
+  config:
+    | {
+        repositories?: readonly { owner?: string | null; name: string; ref?: string | null }[]
+        variables?: readonly { name: string; value?: string | null }[]
+        mcp_servers?: readonly unknown[]
+        compute?: { cpu?: number | null; memory?: unknown; timeout?: unknown } | null
+        image?: { dockerfile_append?: string | null; setup?: string | null } | null
+        hooks?: { post_start?: string | null; post_clone?: string | null } | null
+      }
+    | null
+    | undefined,
+  // The connected repositories, so an entry that omitted its owner lands on the
+  // row it belongs to instead of growing one of its own.
+  repoNames: readonly string[] = [],
+): EnvironmentPaneState {
+  if (!config) return EMPTY_PANE
+  const compute = config.compute
+  return {
+    repositories: (config.repositories ?? []).map((r) => ({
+      fullName: resolveRepoFullName(r.owner ? `${r.owner}/${r.name}` : r.name, repoNames),
+      ref: r.ref ?? null,
+    })),
+    variables: (config.variables ?? []).map((v) => ({ name: v.name, value: v.value ?? null })),
+    mcpServers: (config.mcp_servers ?? [])
+      .map((s) => ({
+        name: mcpServerName(s),
+        command: typeof s === 'string' ? null : ((s as { command?: string }).command ?? null),
+        url: typeof s === 'string' ? null : ((s as { url?: string }).url ?? null),
+        raw: s,
+      }))
+      .filter((s) => s.name !== ''),
+    compute: {
+      cpu: compute?.cpu != null ? String(compute.cpu) : '',
+      memory: typeof compute?.memory === 'string' ? compute.memory : '',
+      timeout: typeof compute?.timeout === 'string' ? compute.timeout : '',
+    },
+    image: {
+      dockerfile_append: config.image?.dockerfile_append ?? '',
+      setup: config.image?.setup ?? '',
+    },
+    hooks: {
+      post_start: config.hooks?.post_start ?? '',
+      post_clone: config.hooks?.post_clone ?? '',
+    },
+  }
+}
+
+// Whether the pane still says what the environment it was seeded from says. The
+// moment it doesn't, the run is "custom": no saved environment is checked and
+// the pane ships in full.
+export function paneEquals(a: EnvironmentPaneState, b: EnvironmentPaneState): boolean {
+  return JSON.stringify(paneKey(a)) === JSON.stringify(paneKey(b))
+}
+
+// The pane compared field by field, with the list orders normalized — a repo
+// checked and unchecked again is the same sandbox even if it moved in the list.
+function paneKey(p: EnvironmentPaneState): unknown {
+  return {
+    repositories: [...p.repositories]
+      .map((r) => `${r.fullName}@${r.ref ?? ''}`)
+      .sort(),
+    variables: [...p.variables].map((v) => `${v.name}=${v.value ?? ''}`).sort(),
+    mcpServers: [...p.mcpServers]
+      .map((s) => `${s.name}|${s.command ?? ''}|${s.url ?? ''}`)
+      .sort(),
+    compute: p.compute,
+    image: p.image,
+    hooks: p.hooks,
+  }
+}
+
+// A script flattened to the one line its row is: newlines and runs of space
+// collapse. Display only — paneEquals and the wire see the raw value.
+export function oneLine(s: string): string {
+  return s.replace(/\s+/g, ' ').trim()
+}
+
+// How many lines of a script row print before the rest is elided. A Dockerfile
+// or setup script is often long, and the pane sits above everything else in the
+// launcher, so the row states its shape rather than its whole contents.
+export const SCRIPT_ROW_LINES = 5
+
+// A script as its row prints it: the lines, capped at SCRIPT_ROW_LINES with a
+// count of what was left off, unless the row is open (then all of them).
+//
+// `truncated` is what the row appends — never silently dropped, since a hidden
+// line is a hidden instruction to the sandbox.
+export function scriptRowLines(
+  value: string,
+  expanded: boolean,
+): { lines: string[]; hidden: number } {
+  const lines = value.split('\n')
+  if (expanded || lines.length <= SCRIPT_ROW_LINES) return { lines, hidden: 0 }
+  return { lines: lines.slice(0, SCRIPT_ROW_LINES), hidden: lines.length - SCRIPT_ROW_LINES }
 }
 
 // How a variable reads in the custom section: the name alone when the sandbox
@@ -705,48 +824,22 @@ export function repositoryRefLabel(
   return ref ?? defaultBranch ?? null
 }
 
-// The composer's picks, as the new-session pane reports them. environment and
-// model null = that row was never touched, so the server resolves it (the
-// environment ladder, the account's default model). `emptyEnvironment` is the
-// built-in "[empty]" pick: no saved environment, and the resolved lists cleared.
+// The composer's picks, as the launcher reports them. `model` null = that row
+// was never touched, so the server resolves it (the account's default model).
+//
+// `environment` is the saved environment the pane still matches. When it is
+// null the pane is what says the sandbox, and it ships in full — every list in
+// an override replaces the resolved one, so nothing the pane doesn't show can
+// reach the run.
+//
+// `pane` null is the third case: nothing about the environment is stated at all,
+// so the server's own ladder resolves it. That is what an untouched "Default"
+// row means, and the honest thing to send when the environment list never
+// loaded — an explicit empty pane there would wipe a default we never saw.
 export interface ComposerChoices {
   environment: string | null
   model: string | null
-  emptyEnvironment: boolean
-  // The picked environment's own lists, needed because an override array
-  // REPLACES the resolved list rather than appending to it.
-  baseVariables: readonly CustomVariable[]
-  customVariables: readonly CustomVariable[]
-  baseRepositories: readonly CustomRepository[]
-  customRepositories: readonly CustomRepository[]
-  // The picked environment's own servers ride the override verbatim (they can
-  // be shapes the launcher can't build, e.g. stdio with env).
-  baseMcpServers: readonly unknown[]
-  customMcpServers: readonly CustomMcpServer[]
-  // No base counterparts: these are scalars in merging object overrides, so
-  // unset fields keep the resolved values.
-  customCompute: CustomCompute
-  customImage: CustomImage
-  customHooks: CustomHooks
-}
-
-// One variable list from the two that have to end up in the override, with a
-// later name winning: a custom entry that repeats a base name is an edit of it,
-// in place, not a duplicate the server would have to break the tie on.
-export function mergeVariables(
-  base: readonly CustomVariable[],
-  custom: readonly CustomVariable[],
-): CustomVariable[] {
-  const merged: CustomVariable[] = []
-  const at = new Map<string, number>()
-  for (const v of [...base, ...custom]) {
-    const seen = at.get(v.name)
-    if (seen === undefined) {
-      at.set(v.name, merged.length)
-      merged.push(v)
-    } else merged[seen] = v
-  }
-  return merged
+  pane: EnvironmentPaneState | null
 }
 
 // A variable in the shape an environment override takes: `value` omitted (not
@@ -754,24 +847,6 @@ export function mergeVariables(
 // treats an absent value as the secret lookup.
 function variableEntry(v: CustomVariable): { name: string; value?: string } {
   return v.value === null ? { name: v.name } : { name: v.name, value: v.value }
-}
-
-// One repository list from the two that have to end up in the override, with a
-// later full name winning — same reading as mergeVariables.
-export function mergeRepositories(
-  base: readonly CustomRepository[],
-  custom: readonly CustomRepository[],
-): CustomRepository[] {
-  const merged: CustomRepository[] = []
-  const at = new Map<string, number>()
-  for (const r of [...base, ...custom]) {
-    const seen = at.get(r.fullName)
-    if (seen === undefined) {
-      at.set(r.fullName, merged.length)
-      merged.push(r)
-    } else merged[seen] = r
-  }
-  return merged
 }
 
 // A repository in the shape an environment override takes: owner and name
@@ -787,67 +862,40 @@ function repositoryEntry(r: CustomRepository): { owner?: string; name: string; r
   return entry
 }
 
-// The entry point's base request with the composer's picks layered on: the
-// environment as the session's own choice, the model and any custom
-// environment edits as a per-run override (the dashboard composer's shape).
+// The entry point's base request with the launcher's picks layered on.
 //
-// Every list in an override REPLACES the resolved one, so a custom variable
-// ships alongside the picked environment's own — that is what makes the custom
-// section additive rather than a silent wipe of the environment it sits under.
+// A named environment is the session's own choice and ships alone: the pane
+// still matches it, so re-stating its lists would only risk saying it worse.
+// Without a name the run is custom, and every list in the override REPLACES the
+// resolved one — which is exactly what the pane means. Its lists therefore ship
+// unconditionally, empty included: an empty repositories array is how "no repos"
+// is said, and omitting it would let the ladder resolve some.
 export function applyComposerChoices(
   base: StartAgentSessionRequest,
   choices: ComposerChoices,
 ): StartAgentSessionRequest {
   const req: StartAgentSessionRequest = { ...base }
-  // Never combined with a config source: the launcher sends no config_id, so
-  // the environment is always the session's to name (the server 400s both).
-  if (choices.environment) req.environment = choices.environment
   const override: Record<string, unknown> = {}
   if (choices.model) override.claude = { model: choices.model }
-  const environment: Record<string, unknown> = {}
-  // "[empty]" names no environment, so the ladder would still resolve one:
-  // clearing the lists is what actually empties the sandbox.
-  if (choices.emptyEnvironment) {
-    environment.repositories = []
-    environment.mcp_servers = []
+  // Never combined with a config source: the launcher sends no config_id, so
+  // the environment is always the session's to name (the server 400s both).
+  if (choices.environment) {
+    req.environment = choices.environment
+  } else if (choices.pane) {
+    const pane = choices.pane
+    const environment: Record<string, unknown> = {
+      repositories: pane.repositories.map(repositoryEntry),
+      variables: pane.variables.map(variableEntry),
+      mcp_servers: pane.mcpServers.map(mcpServerEntry),
+    }
+    const compute = computeOverride(pane.compute)
+    if (Object.keys(compute).length > 0) environment.compute = compute
+    const image = fieldsOverride(pane.image)
+    if (Object.keys(image).length > 0) environment.image = image
+    const hooks = fieldsOverride(pane.hooks)
+    if (Object.keys(hooks).length > 0) environment.hooks = hooks
+    override.environment = environment
   }
-  const variables = mergeVariables(
-    choices.emptyEnvironment ? [] : choices.baseVariables,
-    choices.customVariables,
-  )
-  if (choices.emptyEnvironment || choices.customVariables.length > 0) {
-    environment.variables = variables.map(variableEntry)
-  }
-  const repositories = mergeRepositories(
-    choices.emptyEnvironment ? [] : choices.baseRepositories,
-    choices.customRepositories,
-  )
-  if (choices.emptyEnvironment || choices.customRepositories.length > 0) {
-    environment.repositories = repositories.map(repositoryEntry)
-  }
-  // MCP servers merge like the other lists: the base definitions verbatim,
-  // then the servers added here whose names the base doesn't already carry.
-  if (!choices.emptyEnvironment && choices.customMcpServers.length > 0) {
-    const baseNames = new Set(
-      choices.baseMcpServers.map((s) =>
-        typeof s === 'string' ? s : ((s as { name?: string }).name ?? ''),
-      ),
-    )
-    environment.mcp_servers = [
-      ...choices.baseMcpServers,
-      ...choices.customMcpServers.filter((s) => !baseNames.has(s.name)).map(mcpServerEntry),
-    ]
-  }
-  if (choices.emptyEnvironment && choices.customMcpServers.length > 0) {
-    environment.mcp_servers = choices.customMcpServers.map(mcpServerEntry)
-  }
-  const compute = computeOverride(choices.customCompute)
-  if (Object.keys(compute).length > 0) environment.compute = compute
-  const image = fieldsOverride(choices.customImage)
-  if (Object.keys(image).length > 0) environment.image = image
-  const hooks = fieldsOverride(choices.customHooks)
-  if (Object.keys(hooks).length > 0) environment.hooks = hooks
-  if (Object.keys(environment).length > 0) override.environment = environment
   if (Object.keys(override).length > 0) req.override = override
   return req
 }
