@@ -532,20 +532,37 @@ export const EMPTY_ENVIRONMENT_LABEL = '[empty]'
 export const CUSTOM_ENVIRONMENT_ID = 'custom:builtin'
 export const CUSTOM_ENVIRONMENT_LABEL = 'custom'
 
-// The configuration pane above the Environment row: what THIS run's sandbox
-// will be, section by section — the connected repositories, the MCP servers,
-// the variables, then the image, hook and compute fields.
+// The launcher's configuration sections, each a top-level row of its own:
+// the connected repositories, the MCP servers, the variables, then the image,
+// hook and compute fields. Enter on a section row opens its rows in place.
 //
-// The pane is the whole truth. Picking an environment seeds it (see
-// environmentPaneState); editing any row of it is what makes the run "custom",
-// and what the pane holds is what ships. So unchecking a repository the picked
-// environment brought in actually drops that repository from the run, which the
-// old additive section could not express.
-//
-// `hover` is the index ↑/↓ walks; rows without one are DECORATION the highlight
-// skips, which is what keeps this a plain list rather than a nested tree.
+// Together the sections are the whole truth about the sandbox. Picking an
+// environment seeds them (see environmentPane); editing any row is what makes
+// the run "custom", and what the sections hold is what ships. So unchecking a
+// repository the picked environment brought in actually drops that repository
+// from the run, which the old additive section could not express.
+export const PANE_SECTIONS = [
+  'repositories',
+  'mcpServers',
+  'variables',
+  'image',
+  'hooks',
+  'compute',
+] as const
+export type PaneSection = (typeof PANE_SECTIONS)[number]
+
+export const PANE_SECTION_LABELS: Record<PaneSection, string> = {
+  repositories: REPOSITORIES_HEADING,
+  mcpServers: MCP_SERVERS_HEADING,
+  variables: VARIABLES_HEADING,
+  image: IMAGE_HEADING,
+  hooks: HOOKS_HEADING,
+  compute: COMPUTE_HEADING,
+}
+
+// One row of an open section. `hover` is the index ↑/↓ walks, local to the
+// section — each section is its own flat walk.
 export type EnvironmentPaneRow =
-  | { kind: 'heading'; label: string }
   | { kind: 'repo'; fullName: string; hover: number }
   | { kind: 'repoRef'; fullName: string; hover: number }
   | { kind: 'variable'; name: string; hover: number }
@@ -557,8 +574,8 @@ export type EnvironmentPaneRow =
   | { kind: 'addMcpServer'; hover: number }
 
 // What activating a hovered row does, without the renderer having to know the
-// pane's shape.
-export type EnvironmentPaneTarget = Exclude<EnvironmentPaneRow, { kind: 'heading' }> extends infer R
+// section's shape.
+export type EnvironmentPaneTarget = EnvironmentPaneRow extends infer R
   ? R extends { hover: number }
     ? Omit<R, 'hover'>
     : never
@@ -590,60 +607,89 @@ function unionNames(first: readonly string[], second: readonly string[]): string
   return out
 }
 
-export function environmentPaneRows(input: EnvironmentPaneInput): EnvironmentPaneRow[] {
+export function environmentSectionRows(
+  input: EnvironmentPaneInput,
+  section: PaneSection,
+): EnvironmentPaneRow[] {
   const rows: EnvironmentPaneRow[] = []
   let hover = 0
-  // No REPOSITORIES heading while there are no rows to sit under it — the repo
-  // list is empty until the fetch lands (or when the account has none).
-  if (input.repoNames.length > 0) {
-    rows.push({ kind: 'heading', label: REPOSITORIES_HEADING })
+  if (section === 'repositories') {
+    // Empty until the repo fetch lands (or when the account has none) — the
+    // section then opens onto nothing.
     for (const fullName of input.repoNames) {
       rows.push({ kind: 'repo', fullName, hover: hover++ })
       if (input.checkedRepoNames.includes(fullName)) {
         rows.push({ kind: 'repoRef', fullName, hover: hover++ })
       }
     }
+    return rows
   }
-  rows.push({ kind: 'heading', label: MCP_SERVERS_HEADING })
-  for (const name of unionNames(
-    input.builtInMcpServers,
-    input.mcpServers.map((s) => s.name),
-  )) {
-    rows.push({ kind: 'mcpServer', name, hover: hover++ })
+  if (section === 'mcpServers') {
+    for (const name of unionNames(
+      input.builtInMcpServers,
+      input.mcpServers.map((s) => s.name),
+    )) {
+      rows.push({ kind: 'mcpServer', name, hover: hover++ })
+    }
+    rows.push({ kind: 'addMcpServer', hover: hover++ })
+    return rows
   }
-  rows.push({ kind: 'addMcpServer', hover: hover++ })
-  rows.push({ kind: 'heading', label: VARIABLES_HEADING })
-  for (const name of unionNames(
-    input.secretNames,
-    input.variables.map((v) => v.name),
-  )) {
-    rows.push({ kind: 'variable', name, hover: hover++ })
+  if (section === 'variables') {
+    for (const name of unionNames(
+      input.secretNames,
+      input.variables.map((v) => v.name),
+    )) {
+      rows.push({ kind: 'variable', name, hover: hover++ })
+    }
+    rows.push({ kind: 'addVariable', hover: hover++ })
+    return rows
   }
-  rows.push({ kind: 'addVariable', hover: hover++ })
-  rows.push({ kind: 'heading', label: IMAGE_HEADING })
-  for (const field of IMAGE_FIELDS) rows.push({ kind: 'image', field, hover: hover++ })
-  rows.push({ kind: 'heading', label: HOOKS_HEADING })
-  for (const field of HOOK_FIELDS) rows.push({ kind: 'hook', field, hover: hover++ })
-  rows.push({ kind: 'heading', label: COMPUTE_HEADING })
+  if (section === 'image') {
+    for (const field of IMAGE_FIELDS) rows.push({ kind: 'image', field, hover: hover++ })
+    return rows
+  }
+  if (section === 'hooks') {
+    for (const field of HOOK_FIELDS) rows.push({ kind: 'hook', field, hover: hover++ })
+    return rows
+  }
   for (const field of COMPUTE_FIELDS) rows.push({ kind: 'compute', field, hover: hover++ })
   return rows
 }
 
-// Where a hover index lands, clamped to the pane.
-export function environmentPaneAt(
+// Where a hover index lands, clamped to the section.
+export function environmentSectionAt(
   input: EnvironmentPaneInput,
+  section: PaneSection,
   hover: number,
 ): EnvironmentPaneTarget {
-  const landable = environmentPaneRows(input).filter(
-    (r): r is Extract<EnvironmentPaneRow, { hover: number }> => 'hover' in r,
-  )
-  const row = landable[Math.min(Math.max(0, hover), landable.length - 1)]
+  const rows = environmentSectionRows(input, section)
+  const row = rows[Math.min(Math.max(0, hover), rows.length - 1)]
   const { hover: _at, ...target } = row
   return target as EnvironmentPaneTarget
 }
 
-export function environmentPaneCount(input: EnvironmentPaneInput): number {
-  return environmentPaneRows(input).filter((r) => 'hover' in r).length
+export function environmentSectionCount(input: EnvironmentPaneInput, section: PaneSection): number {
+  return environmentSectionRows(input, section).length
+}
+
+// A closed section row's value: what of the section is in the run, on one
+// line — the checked names, or the fields holding a value. Empty when nothing
+// is, so the row reads "REPOSITORIES:" the way an unset field does.
+export function environmentSectionSummary(
+  pane: EnvironmentPaneState,
+  section: PaneSection,
+): string {
+  if (section === 'repositories')
+    return pane.repositories
+      .map((r) => (r.ref === null ? r.fullName : `${r.fullName}@${r.ref}`))
+      .join(', ')
+  if (section === 'mcpServers') return pane.mcpServers.map((s) => s.name).join(', ')
+  if (section === 'variables') return pane.variables.map((v) => v.name).join(', ')
+  if (section === 'image') return IMAGE_FIELDS.filter((f) => pane.image[f] !== '').join(', ')
+  if (section === 'hooks') return HOOK_FIELDS.filter((f) => pane.hooks[f] !== '').join(', ')
+  return COMPUTE_FIELDS.filter((f) => pane.compute[f] !== '')
+    .map((f) => `${f} ${pane.compute[f]}`)
+    .join(', ')
 }
 
 // What the pane holds: the next run's sandbox, whole. Seeded from the picked

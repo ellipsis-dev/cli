@@ -12,8 +12,9 @@ import {
   effectiveEnvironmentDefault,
   environmentOptions,
   environmentPane,
-  environmentPaneAt,
-  environmentPaneRows,
+  environmentSectionAt,
+  environmentSectionRows,
+  environmentSectionSummary,
   environmentSourceLabel,
   EMPTY_COMPUTE,
   EMPTY_HOOKS,
@@ -925,7 +926,7 @@ describe('parseVariableEntry', () => {
   })
 })
 
-describe('environmentPaneRows', () => {
+describe('environmentSectionRows', () => {
   const input = {
     repoNames: ['acme/api'],
     checkedRepoNames: [] as string[],
@@ -935,43 +936,49 @@ describe('environmentPaneRows', () => {
     mcpServers: [] as { name: string; command: string | null; url: string | null }[],
   }
 
-  // The repositories, the servers, the variables, then the field sections. Only
-  // the landable rows carry a hover index; headings are decoration.
-  it('lays the pane out and numbers only the landable rows', () => {
-    expect(environmentPaneRows(input)).toEqual([
-      { kind: 'heading', label: 'repositories' },
+  // Each section is its own flat walk: hover indexes start at 0 per section.
+  it('lays each section out with its own hover indexes', () => {
+    expect(environmentSectionRows(input, 'repositories')).toEqual([
       { kind: 'repo', fullName: 'acme/api', hover: 0 },
-      { kind: 'heading', label: 'mcp servers' },
-      { kind: 'mcpServer', name: 'linear', hover: 1 },
-      { kind: 'addMcpServer', hover: 2 },
-      { kind: 'heading', label: 'variables' },
-      { kind: 'variable', name: 'API_TOKEN', hover: 3 },
-      { kind: 'variable', name: 'NPM_TOKEN', hover: 4 },
-      { kind: 'variable', name: 'PORT', hover: 5 },
-      { kind: 'addVariable', hover: 6 },
-      { kind: 'heading', label: 'image' },
-      { kind: 'image', field: 'dockerfile_append', hover: 7 },
-      { kind: 'image', field: 'setup', hover: 8 },
-      { kind: 'heading', label: 'hooks' },
-      { kind: 'hook', field: 'post_start', hover: 9 },
-      { kind: 'hook', field: 'post_clone', hover: 10 },
-      { kind: 'heading', label: 'compute' },
-      { kind: 'compute', field: 'cpu', hover: 11 },
-      { kind: 'compute', field: 'memory', hover: 12 },
-      { kind: 'compute', field: 'timeout', hover: 13 },
+    ])
+    expect(environmentSectionRows(input, 'mcpServers')).toEqual([
+      { kind: 'mcpServer', name: 'linear', hover: 0 },
+      { kind: 'addMcpServer', hover: 1 },
+    ])
+    expect(environmentSectionRows(input, 'variables')).toEqual([
+      { kind: 'variable', name: 'API_TOKEN', hover: 0 },
+      { kind: 'variable', name: 'NPM_TOKEN', hover: 1 },
+      { kind: 'variable', name: 'PORT', hover: 2 },
+      { kind: 'addVariable', hover: 3 },
+    ])
+    expect(environmentSectionRows(input, 'image')).toEqual([
+      { kind: 'image', field: 'dockerfile_append', hover: 0 },
+      { kind: 'image', field: 'setup', hover: 1 },
+    ])
+    expect(environmentSectionRows(input, 'hooks')).toEqual([
+      { kind: 'hook', field: 'post_start', hover: 0 },
+      { kind: 'hook', field: 'post_clone', hover: 1 },
+    ])
+    expect(environmentSectionRows(input, 'compute')).toEqual([
+      { kind: 'compute', field: 'cpu', hover: 0 },
+      { kind: 'compute', field: 'memory', hover: 1 },
+      { kind: 'compute', field: 'timeout', hover: 2 },
     ])
   })
 
   // A server the pane carries whose name is also a built-in rides that row, like
   // the variables: one name, one row, whichever way it got in.
   it('gives a built-in server one row even once it is checked', () => {
-    const rows = environmentPaneRows({
-      ...input,
-      mcpServers: [
-        { name: 'linear', command: null, url: null },
-        { name: 'my-server', command: 'npx my-server', url: null },
-      ],
-    })
+    const rows = environmentSectionRows(
+      {
+        ...input,
+        mcpServers: [
+          { name: 'linear', command: null, url: null },
+          { name: 'my-server', command: 'npx my-server', url: null },
+        ],
+      },
+      'mcpServers',
+    )
     expect(
       rows.filter((r) => r.kind === 'mcpServer').map((r) => (r as { name: string }).name),
     ).toEqual(['linear', 'my-server'])
@@ -980,54 +987,47 @@ describe('environmentPaneRows', () => {
   // Same for a variable: checking a stored one adds it to the pane, so without
   // the union it would appear twice.
   it('gives a stored variable one row even once it is checked', () => {
-    const rows = environmentPaneRows({ ...input, variables: [{ name: 'API_TOKEN', value: null }] })
+    const rows = environmentSectionRows(
+      { ...input, variables: [{ name: 'API_TOKEN', value: null }] },
+      'variables',
+    )
     expect(rows.filter((r) => 'name' in r && r.name === 'API_TOKEN')).toHaveLength(1)
   })
 
   // A variable an environment brought in that the account has no secret for
-  // still gets a row: the pane shows the whole sandbox, not just what is stored.
+  // still gets a row: the section shows the whole sandbox, not just what is
+  // stored.
   it('lists a variable the account holds no secret for', () => {
-    const rows = environmentPaneRows({
-      ...input,
-      secretNames: [],
-      variables: [{ name: 'NODE_ENV', value: 'production' }],
-    })
+    const rows = environmentSectionRows(
+      { ...input, secretNames: [], variables: [{ name: 'NODE_ENV', value: 'production' }] },
+      'variables',
+    )
     expect(rows.filter((r) => r.kind === 'variable')).toEqual([
-      { kind: 'variable', name: 'NODE_ENV', hover: 3 },
+      { kind: 'variable', name: 'NODE_ENV', hover: 0 },
     ])
   })
 
   // A checked repo grows a branch input row directly under it, so ↓ can land
   // there and type a ref.
   it('adds a branch row under a checked repo only', () => {
-    const rows = environmentPaneRows({
-      ...input,
-      repoNames: ['acme/api', 'acme/web'],
-      checkedRepoNames: ['acme/api'],
-    })
-    expect(rows.slice(0, 4)).toEqual([
-      { kind: 'heading', label: 'repositories' },
+    const rows = environmentSectionRows(
+      { ...input, repoNames: ['acme/api', 'acme/web'], checkedRepoNames: ['acme/api'] },
+      'repositories',
+    )
+    expect(rows).toEqual([
       { kind: 'repo', fullName: 'acme/api', hover: 0 },
       { kind: 'repoRef', fullName: 'acme/api', hover: 1 },
       { kind: 'repo', fullName: 'acme/web', hover: 2 },
     ])
   })
 
-  // An empty repo list (not landed yet, or none connected) prints no heading
-  // with nothing under it.
-  it('drops the repositories heading while there are no repos', () => {
-    const rows = environmentPaneRows({ ...input, repoNames: [] })
-    expect(rows.filter((r) => r.kind === 'heading')).toEqual([
-      { kind: 'heading', label: 'mcp servers' },
-      { kind: 'heading', label: 'variables' },
-      { kind: 'heading', label: 'image' },
-      { kind: 'heading', label: 'hooks' },
-      { kind: 'heading', label: 'compute' },
-    ])
+  // An empty repo list (not landed yet, or none connected) opens onto nothing.
+  it('has no rows while there are no repos', () => {
+    expect(environmentSectionRows({ ...input, repoNames: [] }, 'repositories')).toEqual([])
   })
 })
 
-describe('environmentPaneAt', () => {
+describe('environmentSectionAt', () => {
   const input = {
     repoNames: ['acme/api'],
     checkedRepoNames: ['acme/api'],
@@ -1037,17 +1037,61 @@ describe('environmentPaneAt', () => {
     mcpServers: [] as { name: string; command: string | null; url: string | null }[],
   }
 
-  it('walks repos and branch rows, servers, variables, then the fields', () => {
-    expect(environmentPaneAt(input, 0)).toEqual({ kind: 'repo', fullName: 'acme/api' })
-    expect(environmentPaneAt(input, 1)).toEqual({ kind: 'repoRef', fullName: 'acme/api' })
-    expect(environmentPaneAt(input, 2)).toEqual({ kind: 'addMcpServer' })
-    expect(environmentPaneAt(input, 3)).toEqual({ kind: 'variable', name: 'API_TOKEN' })
-    expect(environmentPaneAt(input, 4)).toEqual({ kind: 'addVariable' })
-    expect(environmentPaneAt(input, 5)).toEqual({ kind: 'image', field: 'dockerfile_append' })
+  it('walks a section by its own hover index', () => {
+    expect(environmentSectionAt(input, 'repositories', 0)).toEqual({
+      kind: 'repo',
+      fullName: 'acme/api',
+    })
+    expect(environmentSectionAt(input, 'repositories', 1)).toEqual({
+      kind: 'repoRef',
+      fullName: 'acme/api',
+    })
+    expect(environmentSectionAt(input, 'mcpServers', 0)).toEqual({ kind: 'addMcpServer' })
+    expect(environmentSectionAt(input, 'variables', 0)).toEqual({
+      kind: 'variable',
+      name: 'API_TOKEN',
+    })
+    expect(environmentSectionAt(input, 'variables', 1)).toEqual({ kind: 'addVariable' })
+    expect(environmentSectionAt(input, 'image', 0)).toEqual({
+      kind: 'image',
+      field: 'dockerfile_append',
+    })
   })
 
-  it('clamps a hover past the last row', () => {
-    expect(environmentPaneAt(input, 99)).toEqual({ kind: 'compute', field: 'timeout' })
+  it("clamps a hover past the section's last row", () => {
+    expect(environmentSectionAt(input, 'compute', 99)).toEqual({
+      kind: 'compute',
+      field: 'timeout',
+    })
+  })
+})
+
+describe('environmentSectionSummary', () => {
+  const pane = {
+    ...EMPTY_PANE,
+    repositories: [
+      { fullName: 'acme/api', ref: null },
+      { fullName: 'acme/web', ref: 'dev' },
+    ],
+    variables: [{ name: 'API_TOKEN', value: null }],
+    mcpServers: [{ name: 'linear', command: null, url: null }],
+    compute: { cpu: '4', memory: '', timeout: '' },
+    image: { dockerfile_append: 'RUN true', setup: '' },
+  }
+
+  // What of the section is in the run, on one line — a pinned ref rides its
+  // repo's name.
+  it('reads out the checked names and the fields holding a value', () => {
+    expect(environmentSectionSummary(pane, 'repositories')).toBe('acme/api, acme/web@dev')
+    expect(environmentSectionSummary(pane, 'mcpServers')).toBe('linear')
+    expect(environmentSectionSummary(pane, 'variables')).toBe('API_TOKEN')
+    expect(environmentSectionSummary(pane, 'image')).toBe('dockerfile_append')
+    expect(environmentSectionSummary(pane, 'compute')).toBe('cpu 4')
+  })
+
+  it('is empty when the section holds nothing', () => {
+    expect(environmentSectionSummary(EMPTY_PANE, 'repositories')).toBe('')
+    expect(environmentSectionSummary(pane, 'hooks')).toBe('')
   })
 })
 

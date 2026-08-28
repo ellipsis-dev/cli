@@ -30,10 +30,13 @@ import {
   EMPTY_PANE,
   environmentOptions,
   environmentPane,
-  environmentPaneAt,
-  environmentPaneCount,
-  environmentPaneRows,
+  environmentSectionAt,
+  environmentSectionCount,
+  environmentSectionRows,
+  environmentSectionSummary,
   environmentSourceLabel,
+  PANE_SECTION_LABELS,
+  PANE_SECTIONS,
   paneEquals,
   parseVariableEntry,
   repositoryRefLabel,
@@ -44,6 +47,7 @@ import {
   type CustomMcpServer,
   type CustomVariable,
   type EnvironmentPaneState,
+  type PaneSection,
   validateMcpServer,
   rowDescription,
   rowGlyph,
@@ -510,17 +514,25 @@ function EscOnlyInput({
   return null
 }
 
-// One row of the launcher's configuration block: a label + the picked value,
-// opened into its option list with →/enter (the dashboard composer's selects,
-// terminal-shaped). Both pick one.
-type PickerRow = { key: 'environment' | 'model'; label: string }
-const PICKER_ROWS: readonly PickerRow[] = [
-  { key: 'environment', label: 'Environment' },
-  { key: 'model', label: 'Model' },
+// One row of the launcher's configuration block: a label + its value, opened
+// in place with →/enter. The two picker rows open an option list and pick one;
+// a section row opens its slice of the run's sandbox for editing.
+type PickerKey = 'environment' | 'model'
+type LauncherRow =
+  | { kind: 'picker'; key: PickerKey; label: string }
+  | { kind: 'section'; key: PaneSection; label: string }
+const LAUNCHER_ROWS: readonly LauncherRow[] = [
+  { kind: 'picker', key: 'environment', label: 'Environment' },
+  ...PANE_SECTIONS.map(
+    (key): LauncherRow => ({ kind: 'section', key, label: PANE_SECTION_LABELS[key] }),
+  ),
+  { kind: 'picker', key: 'model', label: 'Model' },
 ]
 
-// What the empty prompt box says: what this box is for, nothing else.
-const PROMPT_HINT = 'Start a cloud session...'
+// The prompt row's persistent label, upper-cased in render like every other
+// row's, and what its empty input says: enter is a real start.
+const PROMPT_LABEL = 'Prompt'
+const PROMPT_HINT = 'Enter to start a cloud session...'
 
 // The variable form's placeholders, each stating what leaving that field empty
 // means, in the field it applies to.
@@ -530,9 +542,9 @@ const VALUE_PLACEHOLDER = 'leave empty to pull from secrets'
 // The prompt box's interior padding, matching the chat composer's.
 const PROMPT_PAD_X = 2
 
-// Where the launcher's cursor is: the prompt box, one of the configuration rows
-// (by PICKER_ROWS index), or a session row (by id, so the poll re-sorting under
-// the cursor doesn't move the highlight).
+// Where the launcher's cursor is: the prompt row, one of the configuration rows
+// (by LAUNCHER_ROWS index), or a session row (by id, so the poll re-sorting
+// under the cursor doesn't move the highlight).
 type LauncherCursor =
   | { kind: 'prompt' }
   | { kind: 'option'; at: number }
@@ -573,73 +585,57 @@ type ScriptEditor = {
 
 
 // The launcher: one painted box holding everything about the next session —
-// the configuration rows on top, the prompt under them — with history below —
+// the configuration rows on top, the prompt row last — with history below —
 //
 //    | ▶ ENVIRONMENT: backend-sandbox (account default)
+//    |   REPOSITORIES: acme/api
+//    |   MCP SERVERS: linear
+//    |   VARIABLES: API_TOKEN
+//    |   IMAGE:
+//    |   HOOKS:
+//    |   COMPUTE: cpu 4
 //    |   MODEL: claude-opus-5
-//    |
-//    |   Start a cloud session...
+//    |   PROMPT: Enter to start a cloud session...
 //
 //    Recent sessions:                                    @me in account
 //    ● latest session                               $0.20, 2m ago
 //    ● …                                   (LIST_ROWS rows; scrolls)
 //
-// ONE input, two readings: what you type is the next session's prompt AND a
-// live filter over the list below, so finding old work and starting new work
-// are the same gesture. Enter starts a session with the text (empty text
-// starts it idle). ↑ walks up into the configuration rows, where enter (or →)
-// opens that row's dropdown in place — inside the box, growing it downward, so
-// nothing swaps out and the session list stays. ↓ walks down into the list,
-// where enter opens a session.
+// ONE input, two readings: what you type into the prompt row is the next
+// session's prompt AND a live filter over the list below, so finding old work
+// and starting new work are the same gesture. Enter starts a session with the
+// text (empty text starts it idle). ↑ walks up into the configuration rows,
+// where enter (or →) opens that row in place — inside the box, growing it
+// downward, so nothing swaps out and the session list stays. ↓ walks down into
+// the list, where enter opens a session.
 //
-// Opening the Environment row shows the list AND, under it, the configuration
-// pane — the environment the cursor is on, read out rather than trusted —
+// The Environment and Model rows open an option list and pick one —
 //
 //    |   ENVIRONMENT: backend-sandbox (account default)
 //    |     ▶ [x] backend-sandbox (default for acme/api)
 //    |       [ ] web-e2e (account default)
 //    |       [ ] [empty]
-//    |     REPOSITORIES
-//    |       [x] acme/api
+//
+// A section row opens its slice of the sandbox for editing —
+//
+//    |   REPOSITORIES: acme/api
+//    |     ▶ [x] acme/api
 //    |            branch: main
 //    |       [ ] acme/web
-//    |     MCP SERVERS
-//    |       [x] linear
-//    |       + new
-//    |     VARIABLES
-//    |       [x] API_TOKEN
-//    |       + new
-//    |     IMAGE
-//    |       dockerfile_append: |
-//    |         RUN apt-get update && apt-get install -y gpgv
-//    |         … 4 more lines
-//    |       setup:
-//    |     HOOKS
-//    |       post_start:
-//    |       post_clone:
-//    |     COMPUTE
-//    |       cpu: 4
-//    |       memory:
-//    |       timeout:
-//    |   MODEL: claude-opus-5
 //
-// The row's own ▶ goes away while its list is open — the caret is on whichever
-// list or pane row the cursor is on, and two carets would say the cursor is in
-// two places. ↑/↓ run down the options and on into the pane, one walk; esc
-// closes both.
+// The row's own ▶ goes away while it is open — the caret is on whichever row
+// under it the cursor is on, and two carets would say the cursor is in two
+// places. ↑/↓ walk the opened rows (↑ off the first closes back to the row);
+// esc or ← closes.
 //
-// Walking the options MOVES THE PANE: it always reads out the row the cursor is
-// on, so the list is how you compare environments rather than a list of names
-// you have to already know. Nothing is checked by looking — enter picks.
-//
-// The pane is the whole truth about the sandbox. Picking an environment seeds
-// every one of its rows. Editing any row is what makes the run custom: every
-// saved environment unchecks, a `custom` row appears at the bottom of the list
-// and takes the check, and from then on the pane's own lists are what ship.
-// Checking a saved environment again reseeds the pane and the `custom` row goes
-// away. That is why unchecking a repository the environment brought in actually
-// drops it: the pane replaces the resolved lists rather than adding to them (see
-// applyComposerChoices).
+// Together the section rows are the whole truth about the sandbox. Picking an
+// environment seeds every one of them. Editing any row is what makes the run
+// custom: every saved environment unchecks, a `custom` row appears at the
+// bottom of the Environment list and takes the check, and from then on the
+// sections' own lists are what ship. Checking a saved environment again reseeds
+// them and the `custom` row goes away. That is why unchecking a repository the
+// environment brought in actually drops it: the sections replace the resolved
+// lists rather than adding to them (see applyComposerChoices).
 //
 // A script field (image, hooks) prints as a YAML block scalar over its own lines,
 // capped at SCRIPT_ROW_LINES with a count of what is hidden. Enter opens it into
@@ -713,22 +709,22 @@ function Launcher({
   // server-resolved pick (see modelIdx). The list arrives async, so there is no
   // index to seed this with at mount.
   const [modelPick, setModelPick] = useState<number | null>(null)
-  // The open row's dropdown state: which picker is open and where its highlight
-  // sits. null = no subtree open.
-  //
-  // `hover` is always an option index. `paneHover` is where the cursor sits in
-  // the configuration pane below the open Environment list, or null while the
-  // cursor is on the options — kept apart from `hover` so walking down into the
-  // pane and back up returns to the option you left, and so the pane always
-  // knows which environment it is showing.
+  // The open picker row's dropdown state: which one is open and where its
+  // highlight sits (an option index). null = no dropdown open.
   const [openPicker, setOpenPicker] = useState<{
-    key: PickerRow['key']
+    key: PickerKey
     hover: number
-    paneHover: number | null
   } | null>(null)
-  // The configuration pane: this run's sandbox, whole. null = untouched, so it
-  // shows (and sends) whatever the picked environment resolves to; the first
-  // edit seeds it and from then on the pane is the truth.
+  // The open section row, and which of its rows the cursor is on. null = every
+  // section is closed. At most one of openPicker/openSection is non-null: each
+  // is opened from the row cursor, which neither reaches while the other is up.
+  const [openSection, setOpenSection] = useState<{
+    key: PaneSection
+    hover: number
+  } | null>(null)
+  // The section rows' backing state: this run's sandbox, whole. null =
+  // untouched, so the sections show (and send) whatever the picked environment
+  // resolves to; the first edit seeds it and from then on it is the truth.
   const [pane, setPane] = useState<EnvironmentPaneState | null>(null)
   // The "+ new server" form's state, or null while closed.
   const [serverEditor, setServerEditor] = useState<ServerEditor | null>(null)
@@ -792,14 +788,6 @@ function Launcher({
   // Once the pane no longer says what the environment it was seeded from says,
   // no environment is checked and the pane is what ships.
   const isCustom = pane !== null && !paneEquals(pane, seededPane)
-  // Any environment read out as pane rows.
-  const paneOf = (id: string | null | undefined): EnvironmentPaneState =>
-    !id || id === EMPTY_ENVIRONMENT_ID
-      ? EMPTY_PANE
-      : environmentPane(
-          (environments ?? []).find((e) => e.id === id)?.environment,
-          connectedRepoNames,
-        )
   // The server's selectable set (GET /models); before it lands — and on an
   // older server that has no such route — the built-in fallback list.
   const modelOptions = useMemo(() => composerModelOptions(models ?? []), [models])
@@ -821,11 +809,11 @@ function Launcher({
         : environmentOptionRows,
     [environmentOptionRows, isCustom],
   )
-  const optionsFor = (key: PickerRow['key']) =>
+  const optionsFor = (key: PickerKey) =>
     key === 'environment' ? environmentRowsWithCustom : modelOptions
-  const pickedIdx = (key: PickerRow['key']): number =>
+  const pickedIdx = (key: PickerKey): number =>
     key === 'environment' ? (isCustom ? environmentOptionRows.length : environmentIdx) : modelIdx
-  const isPicked = (key: PickerRow['key'], at: number): boolean =>
+  const isPicked = (key: PickerKey, at: number): boolean =>
     at === Math.min(pickedIdx(key), optionsFor(key).length - 1)
   // Checking an environment drops the pane's edits, since the pane is a reading of
   // whatever environment is checked. The `custom` row names no environment, so
@@ -835,43 +823,20 @@ function Launcher({
     setEnvironmentPick(at)
     setPane(null)
   }
-  // Both rows single-pick, so activating an option closes the dropdown.
-  const activate = (key: PickerRow['key'], at: number): void => {
+  // Both picker rows single-pick, so activating an option closes the dropdown.
+  const activate = (key: PickerKey, at: number): void => {
     if (key === 'environment') pickEnvironment(at)
     else setModelPick(at)
     setOpenPicker(null)
   }
-  // What the pane shows. While the Environment list is open it reads out the
-  // option the list's cursor is on — walking the list is how you see what each
-  // environment holds, and nothing is checked by looking. Closed, it is the run's
-  // own configuration. The `custom` row stands for the edits themselves, so it
-  // reads them rather than an environment.
-  //
-  // The list's own cursor doesn't move while you walk the pane below it, so the
-  // pane never switches out from under you mid-edit.
-  const previewed = (() => {
-    if (openPicker?.key !== 'environment') return undefined
-    const opt = environmentRowsWithCustom[Math.min(openPicker.hover, environmentRowsWithCustom.length - 1)]
-    return opt === undefined || opt.id === CUSTOM_ENVIRONMENT_ID || isPicked('environment', openPicker.hover)
-      ? undefined
-      : opt
-  })()
-  const displayPane = previewed ? paneOf(previewed.id) : shownPane
-  // Editing any row seeds the pane from what is on screen, so the first keystroke
-  // doesn't silently drop the rest of the environment. Editing an environment you
-  // had only been LOOKING at checks it first: the edit is of what you can see, and
-  // leaving the previous pick checked would apply your change to something else.
+  // Editing any row seeds the pane from what is on screen, so the first
+  // keystroke doesn't silently drop the rest of the environment.
   const editPane = (edit: (p: EnvironmentPaneState) => EnvironmentPaneState): void => {
-    if (previewed) {
-      setEnvironmentPick(environmentOptionRows.findIndex((o) => o.id === previewed.id))
-      setPane(edit(displayPane))
-      return
-    }
     setPane((prev) => edit(prev ?? seededPane))
   }
   // Whether a repository is in the run, and at which ref.
   const repositoryFor = (fullName: string) =>
-    displayPane.repositories.find((r) => r.fullName === fullName)
+    shownPane.repositories.find((r) => r.fullName === fullName)
   // The pane's shape, shared by its navigation and its renderer.
   const paneInput = useMemo(
     () => ({
@@ -881,33 +846,33 @@ function Launcher({
       // connected.
       repoNames: [
         ...connectedRepoNames,
-        ...displayPane.repositories
+        ...shownPane.repositories
           .map((r) => r.fullName)
           .filter((name) => !connectedRepoNames.includes(name)),
       ],
       // A checked repo grows its branch input row, so ↓ can land on it.
-      checkedRepoNames: displayPane.repositories.map((r) => r.fullName),
+      checkedRepoNames: shownPane.repositories.map((r) => r.fullName),
       secretNames: secretNames ?? [],
-      variables: displayPane.variables,
+      variables: shownPane.variables,
       builtInMcpServers: builtInServers,
-      mcpServers: displayPane.mcpServers,
+      mcpServers: shownPane.mcpServers,
     }),
-    [connectedRepoNames, secretNames, displayPane, builtInServers],
+    [connectedRepoNames, secretNames, shownPane, builtInServers],
   )
-  const paneRowCount = environmentPaneCount(paneInput)
   // Whether a variable of this name is in the run, and at which value.
   const variableFor = (name: string): CustomVariable | undefined =>
-    displayPane.variables.find((v) => v.name === name)
-  // Enter (or →) on a pane row: a repo, server or variable toggles; a variable
-  // already in the run re-opens for editing; the add buttons open a form; a
-  // script field opens its multi-line editor. The branch and compute rows are
-  // one-line inputs — enter there is a no-op, typing is what edits them.
-  const activatePaneRow = (hover: number): void => {
-    const row = environmentPaneAt(paneInput, hover)
+    shownPane.variables.find((v) => v.name === name)
+  // Enter (or →) on an open section's row: a repo, server or variable toggles;
+  // a variable already in the run re-opens for editing; the add buttons open a
+  // form; a script field opens its multi-line editor. The branch and compute
+  // rows are one-line inputs — enter there is a no-op, typing is what edits
+  // them.
+  const activateSectionRow = (section: PaneSection, hover: number): void => {
+    const row = environmentSectionAt(paneInput, section, hover)
     if (row.kind === 'image' || row.kind === 'hook') {
-      const section = row.kind === 'image' ? 'image' : 'hooks'
-      const text = displayPane[section][row.field as never] as string
-      setScriptEditor({ section, field: row.field, text, cursor: text.length })
+      const scripts = row.kind === 'image' ? 'image' : 'hooks'
+      const text = shownPane[scripts][row.field as never] as string
+      setScriptEditor({ section: scripts, field: row.field, text, cursor: text.length })
       return
     }
     if (row.kind === 'repo') {
@@ -1166,95 +1131,82 @@ function Launcher({
         }
         return
       }
-      // An open dropdown is a modal subtree: ↑/↓ walk its rows,
+      // An open dropdown is a modal subtree: ↑/↓ walk its options,
       // → (or enter/space) activates the highlighted one, ← (or esc) backs out.
-      //
-      // The open Environment row is that plus the configuration pane under its
-      // options. ↑/↓ walk the options, and → (enter) on one CHECKS it and drops
-      // the cursor into the pane, which is that environment's configuration — so
-      // the same key that says "this one" is the one that takes you into it.
       if (openPicker !== null) {
         const optionCount = optionsFor(openPicker.key).length
-        const paneWalk = openPicker.key === 'environment' ? paneRowCount : 0
-        if (key.escape) {
+        if (key.escape || key.leftArrow) {
           setOpenPicker(null)
           return
         }
-        // ← backs out of the pane to the options, then out of the list entirely.
-        if (key.leftArrow) {
-          if (openPicker.paneHover !== null) setOpenPicker((p) => p && { ...p, paneHover: null })
-          else setOpenPicker(null)
-          return
-        }
         if (key.upArrow) {
-          setOpenPicker(
-            (p) =>
-              p &&
-              (p.paneHover === null
-                ? { ...p, hover: Math.max(0, p.hover - 1) }
-                : // ↑ off the pane's first row returns to the option it reads out.
-                  p.paneHover === 0
-                  ? { ...p, paneHover: null }
-                  : { ...p, paneHover: p.paneHover - 1 }),
-          )
+          setOpenPicker((p) => p && { ...p, hover: Math.max(0, p.hover - 1) })
           return
         }
         if (key.downArrow) {
-          setOpenPicker(
-            (p) =>
-              p &&
-              (p.paneHover !== null
-                ? { ...p, paneHover: Math.min(paneWalk - 1, p.paneHover + 1) }
-                : // ↓ off the last option walks into the pane under it.
-                  p.hover < optionCount - 1
-                  ? { ...p, hover: p.hover + 1 }
-                  : paneWalk > 0
-                    ? { ...p, paneHover: 0 }
-                    : p),
-          )
-          return
-        }
-        // A pane row is under the cursor: the branch and compute rows are
-        // one-line inputs edited by typing, blank = whatever the server resolves.
-        if (openPicker.paneHover !== null) {
-          const hover = Math.min(openPicker.paneHover, paneWalk - 1)
-          const target = environmentPaneAt(paneInput, hover)
-          const typing =
-            ch && ch !== ' ' && !key.ctrl && !key.meta && !key.return && !key.rightArrow
-          if (target.kind === 'repoRef') {
-            if (key.backspace || key.delete) {
-              editRepositoryRef(target.fullName, (ref) => ref.slice(0, -1))
-              return
-            }
-            if (typing) {
-              editRepositoryRef(target.fullName, (ref) => ref + ch)
-              return
-            }
-          }
-          if (target.kind === 'compute') {
-            if (key.backspace || key.delete) {
-              editPane((p) => ({
-                ...p,
-                compute: { ...p.compute, [target.field]: p.compute[target.field].slice(0, -1) },
-              }))
-              return
-            }
-            // cpu is a number on the wire, so its field only admits digits.
-            if (typing && (target.field !== 'cpu' || /^[0-9.]$/.test(ch))) {
-              editPane((p) => ({
-                ...p,
-                compute: { ...p.compute, [target.field]: p.compute[target.field] + ch },
-              }))
-              return
-            }
-          }
-          if (key.return || key.rightArrow || ch === ' ') activatePaneRow(hover)
+          setOpenPicker((p) => p && { ...p, hover: Math.min(optionCount - 1, p.hover + 1) })
           return
         }
         if (key.rightArrow || key.return || ch === ' ') {
           activate(openPicker.key, Math.min(openPicker.hover, optionCount - 1))
           return
         }
+        return
+      }
+      // An open section is the same kind of subtree over its own rows. The
+      // branch and compute rows are one-line inputs edited by typing, blank =
+      // whatever the server resolves.
+      if (openSection !== null) {
+        const rowCount = environmentSectionCount(paneInput, openSection.key)
+        // A section emptied under the cursor (the repo list, refetched) has
+        // nothing to walk.
+        if (rowCount === 0 || key.escape || key.leftArrow) {
+          setOpenSection(null)
+          return
+        }
+        if (key.upArrow) {
+          // ↑ off the first row closes the section, back onto its own row.
+          if (openSection.hover === 0) setOpenSection(null)
+          else setOpenSection({ ...openSection, hover: openSection.hover - 1 })
+          return
+        }
+        if (key.downArrow) {
+          setOpenSection({ ...openSection, hover: Math.min(rowCount - 1, openSection.hover + 1) })
+          return
+        }
+        const hover = Math.min(openSection.hover, rowCount - 1)
+        const target = environmentSectionAt(paneInput, openSection.key, hover)
+        const typing =
+          ch && ch !== ' ' && !key.ctrl && !key.meta && !key.return && !key.rightArrow
+        if (target.kind === 'repoRef') {
+          if (key.backspace || key.delete) {
+            editRepositoryRef(target.fullName, (ref) => ref.slice(0, -1))
+            return
+          }
+          if (typing) {
+            editRepositoryRef(target.fullName, (ref) => ref + ch)
+            return
+          }
+        }
+        if (target.kind === 'compute') {
+          if (key.backspace || key.delete) {
+            editPane((p) => ({
+              ...p,
+              compute: { ...p.compute, [target.field]: p.compute[target.field].slice(0, -1) },
+            }))
+            return
+          }
+          // cpu is a number on the wire, so its field only admits digits.
+          if (typing && (target.field !== 'cpu' || /^[0-9.]$/.test(ch))) {
+            editPane((p) => ({
+              ...p,
+              compute: { ...p.compute, [target.field]: p.compute[target.field] + ch },
+            }))
+            return
+          }
+        }
+        if (key.return || key.rightArrow || ch === ' ')
+          activateSectionRow(openSection.key, hover)
         return
       }
       if (starting) return
@@ -1268,23 +1220,27 @@ function Launcher({
         return
       }
       if (cursor.kind === 'option') {
-        // The two picker rows: ↑ walks up them and stops at the first, ↓ off the
-        // last returns to the prompt, →/enter opens the row's list, esc returns
-        // to the prompt, typing does too.
+        // The configuration rows: ↑ walks up them and stops at the first, ↓ off
+        // the last returns to the prompt, →/enter opens the row in place, esc
+        // returns to the prompt, typing does too.
         if (key.upArrow) {
           if (cursor.at > 0) setCursor({ kind: 'option', at: cursor.at - 1 })
           return
         }
         if (key.downArrow) {
-          if (cursor.at < PICKER_ROWS.length - 1) setCursor({ kind: 'option', at: cursor.at + 1 })
+          if (cursor.at < LAUNCHER_ROWS.length - 1) setCursor({ kind: 'option', at: cursor.at + 1 })
           else setCursor({ kind: 'prompt' })
           return
         }
         if (key.return || key.rightArrow) {
-          // The list opens on the checked row, so the walk starts where the run
-          // currently stands rather than at the top.
-          const key_ = PICKER_ROWS[cursor.at].key
-          setOpenPicker({ key: key_, hover: pickedIdx(key_), paneHover: null })
+          const row = LAUNCHER_ROWS[cursor.at]
+          // A picker's list opens on the checked row, so the walk starts where
+          // the run currently stands rather than at the top.
+          if (row.kind === 'picker') setOpenPicker({ key: row.key, hover: pickedIdx(row.key) })
+          // An empty section (the repo list before the fetch lands) has nothing
+          // to open onto.
+          else if (environmentSectionCount(paneInput, row.key) > 0)
+            setOpenSection({ key: row.key, hover: 0 })
           return
         }
         if (key.escape) {
@@ -1326,7 +1282,7 @@ function Launcher({
         return
       }
       if (key.upArrow) {
-        setCursor({ kind: 'option', at: PICKER_ROWS.length - 1 })
+        setCursor({ kind: 'option', at: LAUNCHER_ROWS.length - 1 })
         return
       }
       if (key.downArrow) {
@@ -1364,13 +1320,15 @@ function Launcher({
     { isActive: focused && rawMode },
   )
 
-  // The value shown on a picker row: its pick's label, or "custom" once the pane
-  // has diverged from it. Never "loading…": every resting value is known
+  // The value shown on a configuration row: a picker's pick's label (or
+  // "custom" once the sections have diverged from it), a section's one-line
+  // summary of what it holds. Never "loading…": every resting value is known
   // locally, so a pending fetch has nothing to do with what this run would use.
-  const rowValue = (key: PickerRow['key']): string => {
-    if (key === 'environment' && isCustom) return CUSTOM_ENVIRONMENT_LABEL
-    const options = optionsFor(key)
-    return options[Math.min(pickedIdx(key), options.length - 1)]?.label ?? 'Default'
+  const rowValue = (row: LauncherRow): string => {
+    if (row.kind === 'section') return environmentSectionSummary(shownPane, row.key)
+    if (row.key === 'environment' && isCustom) return CUSTOM_ENVIRONMENT_LABEL
+    const options = optionsFor(row.key)
+    return options[Math.min(pickedIdx(row.key), options.length - 1)]?.label ?? 'Default'
   }
 
   // Columns available inside the prompt box: the terminal minus its left accent
@@ -1409,30 +1367,15 @@ function Launcher({
         (rate?.output ?? '').padStart(rateTable.output)
       : ''
 
-  // Which pane row the open Environment row's walk is on, or -1 while the cursor
-  // is still on the options above the pane.
-  const openPaneHover = open?.key === 'environment' ? (open.paneHover ?? -1) : -1
-
-  // The configuration pane: the checked environment read out, section by section,
-  // under the list that names it. Its rows continue the open row's single walk,
-  // so ↓ off the last option lands on the first pane row.
-  const renderPane = (): React.ReactNode =>
-    environmentPaneRows(paneInput).map((paneRow) => {
-      if (paneRow.kind === 'heading') {
-        return (
-          <Box key={`heading:${paneRow.label}`} width={contentWidth}>
-            <Text wrap="truncate" color={theme.muted}>
-              {'  '}
-              {paneRow.label.toUpperCase()}
-            </Text>
-          </Box>
-        )
-      }
-      // A form owns the caret while it is open, so the pane's own highlight goes
-      // dark rather than showing a second one.
+  // An open section's rows, under the row that names it.
+  const renderSection = (section: PaneSection): React.ReactNode =>
+    environmentSectionRows(paneInput, section).map((paneRow) => {
+      // A form owns the caret while it is open, so the section's own highlight
+      // goes dark rather than showing a second one.
       const hovered =
         focused &&
-        openPaneHover === paneRow.hover &&
+        openSection?.key === section &&
+        openSection.hover === paneRow.hover &&
         editor === null &&
         serverEditor === null &&
         scriptEditor === null
@@ -1490,7 +1433,7 @@ function Launcher({
       // A compute field: a one-line input like a branch row, blank meaning
       // whatever the server resolves.
       if (paneRow.kind === 'compute') {
-        const held = displayPane.compute[paneRow.field]
+        const held = shownPane.compute[paneRow.field]
         return (
           <Box key={`compute:${paneRow.field}`} width={contentWidth}>
             <Text wrap="truncate">
@@ -1514,7 +1457,7 @@ function Launcher({
           scriptEditor?.section === section && scriptEditor.field === paneRow.field
         const held = editing
           ? scriptEditor.text
-          : (displayPane[section][paneRow.field as never] as string)
+          : (shownPane[section][paneRow.field as never] as string)
         const { lines, hidden } = scriptRowLines(held, editing)
         return (
           <Box key={`${paneRow.kind}:${paneRow.field}`} flexDirection="column" width={contentWidth}>
@@ -1565,7 +1508,7 @@ function Launcher({
         )
       }
       if (paneRow.kind === 'mcpServer') {
-        const checked = displayPane.mcpServers.some((s) => s.name === paneRow.name)
+        const checked = shownPane.mcpServers.some((s) => s.name === paneRow.name)
         return (
           <Box key={`mcp:${paneRow.name}`} width={contentWidth}>
             <Text wrap="truncate">
@@ -1707,7 +1650,8 @@ function Launcher({
       )
     })
 
-  const caretVisible = focused && cursor.kind === 'prompt' && !starting && openPicker === null
+  const caretVisible =
+    focused && cursor.kind === 'prompt' && !starting && openPicker === null && openSection === null
   const listWin = navSlice(shown.length, LIST_ROWS, listIdx)
   const showList = !hideList
   // The bottom line is for news only — the prompt box's hint already carries the
@@ -1718,11 +1662,11 @@ function Launcher({
     <Box flexDirection="column" width={width}>
       {/* The prompt box: the chat composer's painted slab, with an accent bar
           down its left edge and a blank row of padding above and below its
-          contents — the configuration rows first, then the input.
+          contents — the configuration rows first, the prompt row last.
 
-          The bar stays the cursor color throughout: the box holds three rows
-          now, so it marks the whole block rather than any one of them, and the
-          ▶ in the shared gutter is what says which row you are on. */}
+          The bar stays the cursor color throughout: it marks the whole block
+          rather than any one row, and the ▶ in the shared gutter is what says
+          which row you are on. */}
       <Box
         width={width}
         flexDirection="column"
@@ -1735,15 +1679,13 @@ function Launcher({
         paddingY={1}
         paddingX={PROMPT_PAD_X}
       >
-        {/* What the next run will use: two rows you walk with ↑ from the input
-            below, each opening its own list in place. Under the Environment
-            list sits the configuration pane — the checked environment, read
-            out. */}
-        {PICKER_ROWS.map((r, i) => {
-          const isOpen = open?.key === r.key
-          // The row's own caret only while its list is CLOSED: once open, the
-          // caret belongs to whichever row of the list (or the pane under it) the
-          // cursor is on, and two carets would say the cursor is in two places.
+        {/* What the next run will use: the configuration rows, walked with ↑
+            from the prompt row below, each opening in place. */}
+        {LAUNCHER_ROWS.map((r, i) => {
+          const isOpen = r.kind === 'picker' ? open?.key === r.key : openSection?.key === r.key
+          // The row's own caret only while it is CLOSED: once open, the caret
+          // belongs to whichever row under it the cursor is on, and two carets
+          // would say the cursor is in two places.
           const active = focused && cursor.kind === 'option' && cursor.at === i && !isOpen
           return (
             <Box key={r.key} flexDirection="column" width={contentWidth}>
@@ -1752,17 +1694,17 @@ function Launcher({
                   <Text color={theme.cursor}>{active ? SELECTION_GLYPH : ' '}</Text>
                 </Box>
                 <Text wrap="truncate">
-                  {/* Upper-cased like the pane's section headings, so the whole
-                      configuration block reads with one kind of label. */}
+                  {/* Upper-cased, so the whole configuration block reads with
+                      one kind of label. */}
                   <Text color={theme.muted}>{r.label.toUpperCase()}: </Text>
                   <Text color={active || isOpen ? theme.foreground : theme.muted}>
-                    {rowValue(r.key)}
+                    {rowValue(r)}
                   </Text>
                 </Text>
               </Box>
               {/* The price table's column heads, over the numeric columns they
                   name, with the unit stated once here instead of on every row. */}
-              {isOpen && rateTable && (
+              {r.kind === 'picker' && isOpen && rateTable && (
                 <Box width={contentWidth}>
                   <Text wrap="truncate" color={theme.muted}>
                     {' '.repeat(OPTION_GUTTER + rateTable.label)}
@@ -1771,7 +1713,8 @@ function Launcher({
                   </Text>
                 </Box>
               )}
-              {isOpen &&
+              {r.kind === 'picker' &&
+                isOpen &&
                 visibleRows.map((pickerRow) => {
                   // A group heading: the vendor that built the models under it,
                   // upper-cased into an eyebrow the way the dashboard's
@@ -1809,14 +1752,12 @@ function Launcher({
                     </Box>
                   )
                 })}
-              {isOpen && r.key === 'environment' && renderPane()}
+              {r.kind === 'section' && isOpen && renderSection(r.key)}
             </Box>
           )
         })}
-        {/* One blank row between the configuration rows and what you type. */}
-        <Text> </Text>
-        {/* The input, in the same glyph gutter as the rows above it, so all
-            three read down one left edge and the ▶ moves between them. */}
+        {/* The prompt row, right under MODEL in the same glyph gutter, so every
+            row reads down one left edge and the ▶ moves between them. */}
         <Box width={contentWidth}>
           <Box width={2} flexShrink={0}>
             <Text color={theme.cursor}>
@@ -1832,6 +1773,9 @@ function Launcher({
               key={`${text}:${textCursor}:${cursor.kind === 'prompt'}`}
               color={theme.foreground}
             >
+              {/* The row's persistent label: typed text sits after it, the
+                  hint only fills the empty input. */}
+              <Text color={theme.muted}>{PROMPT_LABEL.toUpperCase()}: </Text>
               {text.slice(0, textCursor)}
               {caretVisible && text !== '' && (
                 <Text inverse>{textCursor < text.length ? text[textCursor] : ' '}</Text>
@@ -1861,7 +1805,7 @@ function Launcher({
       <Box width={width}>
         <Box flexGrow={1} flexShrink={1}>
           <Text wrap="truncate" color={theme.muted}>
-            {showList ? ' Recent sessions:' : ' '}
+            {showList ? ' RECENT SESSIONS:' : ' '}
           </Text>
         </Box>
         <Box flexShrink={0}>
