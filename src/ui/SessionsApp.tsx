@@ -24,6 +24,8 @@ import {
   paneWithRepository,
   composerModelOptions,
   composerPickerRows,
+  AGENT_ENVIRONMENT_ID,
+  AGENT_ENVIRONMENT_LABEL,
   connectability,
   CUSTOM_ENVIRONMENT_ID,
   CUSTOM_ENVIRONMENT_LABEL,
@@ -534,6 +536,11 @@ const LAUNCHER_ROWS: readonly LauncherRow[] = [
 // The Agent row's resting pick: no saved config, the bare ad-hoc session.
 const NO_AGENT_LABEL = 'none'
 
+// The environment.* section rows sit indented under ENVIRONMENT, mirroring
+// where they land in the POST /v1/sessions body — the launcher IS the request
+// body, so its rows nest the way the request's keys do.
+const SECTION_INDENT = '    '
+
 // The prompt row's persistent label, upper-cased in render like every other
 // row's, and what its empty input says: enter is a real start.
 const PROMPT_LABEL = 'Prompt'
@@ -594,12 +601,12 @@ type ScriptEditor = {
 //
 //    | ▶ AGENT: none
 //    |   ENVIRONMENT: backend-sandbox
-//    |   REPOSITORIES: acme/api
-//    |   MCP SERVERS: linear
-//    |   VARIABLES: API_TOKEN
-//    |   IMAGE:
-//    |   HOOKS:
-//    |   COMPUTE: cpu 4
+//    |       REPOSITORIES: acme/api
+//    |       MCP SERVERS: linear
+//    |       VARIABLES: API_TOKEN
+//    |       IMAGE:
+//    |       HOOKS:
+//    |       COMPUTE: cpu 4
 //    |   MODEL: claude-opus-5
 //    |
 //    |   PROMPT: Enter to start a cloud session...
@@ -784,14 +791,6 @@ function Launcher({
     () => environmentOptions(environments ?? [], environmentSources),
     [environments, environmentSources],
   )
-  // The saved environments between the resting "basic sandbox" and the
-  // built-in [empty]. The `custom` row the list grows once the pane diverges
-  // is NOT here: it names no environment, so it would have nothing to seed the
-  // pane from (see environmentRowsWithCustom).
-  const environmentOptionRows = useMemo<ComposerModel[]>(
-    () => environmentOptionList.map((o) => ({ id: o.id, label: o.label })),
-    [environmentOptionList],
-  )
   // Which environment row the picked agent's own reference lands on; null for
   // an inline environment object (nothing saved to point at) or no agent.
   const agentEnvironmentIdx = useMemo(() => {
@@ -801,10 +800,31 @@ function Launcher({
     )
     return at === -1 ? null : at + 1 // +1: the list leads with "basic sandbox"
   }, [agentEnvironment, environments])
+  // An agent whose config carries its own INLINE environment grows a leading
+  // "from agent config" row: the resting check has to sit on what the run
+  // would actually use, and the row is the way back after picking something
+  // else. An agent that REFERENCES a saved environment doesn't need it — the
+  // referenced row itself takes the resting check.
+  const hasAgentEnvironmentRow = pickedAgent !== undefined && agentEnvironmentIdx === null
+  // The saved environments between the resting "basic sandbox" and the
+  // built-in [empty]. The `custom` row the list grows once the pane diverges
+  // is NOT here: it names no environment, so it would have nothing to seed the
+  // pane from (see environmentRowsWithCustom).
+  const environmentOptionRows = useMemo<ComposerModel[]>(
+    () => [
+      ...(hasAgentEnvironmentRow
+        ? [{ id: AGENT_ENVIRONMENT_ID as string | null, label: AGENT_ENVIRONMENT_LABEL }]
+        : []),
+      ...environmentOptionList.map((o) => ({ id: o.id, label: o.label })),
+    ],
+    [environmentOptionList, hasAgentEnvironmentRow],
+  )
   const environmentIdx =
     environmentPick !== null
       ? Math.min(environmentPick, environmentOptionRows.length - 1)
-      : (agentEnvironmentIdx ?? 0)
+      : hasAgentEnvironmentRow
+        ? 0
+        : (agentEnvironmentIdx ?? 0)
   const pickedEnvironment = environmentOptionRows[environmentIdx]
   // What the picked environment resolves to, as pane rows. This is what the pane
   // shows until it is edited, and what "custom" is measured against.
@@ -812,21 +832,24 @@ function Launcher({
   const seededPane = useMemo<EnvironmentPaneState>(() => {
     const id = pickedEnvironment?.id
     if (id === EMPTY_ENVIRONMENT_ID) return EMPTY_PANE
+    // The resting "from agent config" row: the picked agent's own inline
+    // environment is what the run would use, so it is what the pane reads.
+    if (id === AGENT_ENVIRONMENT_ID) {
+      return typeof agentEnvironment === 'object' && agentEnvironment !== null
+        ? environmentPane(agentEnvironment, connectedRepoNames)
+        : EMPTY_PANE
+    }
     if (id) {
       return environmentPane(
         (environments ?? []).find((e) => e.id === id)?.environment,
         connectedRepoNames,
       )
     }
-    // The resting null-id row. A picked agent's inline environment object is
-    // the seed; otherwise the basic sandbox. Without an agent the detected
-    // repo shows checked, since the base request merges it into the checkout
-    // set (an agent's own environment rules instead — see applyComposerChoices).
-    if (pickedAgent) {
-      return typeof agentEnvironment === 'object' && agentEnvironment !== null
-        ? environmentPane(agentEnvironment, connectedRepoNames)
-        : EMPTY_PANE
-    }
+    // The null-id "basic sandbox" row. Under an agent this is an EXPLICIT
+    // pick (the resting state is the agent row above), so it reads empty.
+    // Without an agent the detected repo shows checked, since the base
+    // request merges it into the checkout set (see applyComposerChoices).
+    if (pickedAgent) return EMPTY_PANE
     return paneWithRepository(EMPTY_PANE, detectedRepo)
   }, [
     environments,
@@ -890,8 +913,11 @@ function Launcher({
   // whatever environment is checked. The `custom` row names no environment, so
   // landing on it keeps the edits it stands for.
   const pickEnvironment = (at: number): void => {
-    if (optionsFor('environment')[at]?.id === CUSTOM_ENVIRONMENT_ID) return
-    setEnvironmentPick(at)
+    const id = optionsFor('environment')[at]?.id
+    if (id === CUSTOM_ENVIRONMENT_ID) return
+    // The leading "from agent config" row IS the resting state: un-pick, so
+    // the config's own environment rules again.
+    setEnvironmentPick(id === AGENT_ENVIRONMENT_ID ? null : at)
     setPane(null)
   }
   // Every picker row single-picks, so activating an option closes the dropdown.
@@ -1039,11 +1065,19 @@ function Launcher({
   // base request (or the picked agent's own config) is what that row shows.
   const submit = (): void => {
     const named = !isCustom && pickedEnvironment?.id !== EMPTY_ENVIRONMENT_ID
+    // The resting "from agent config" row ships NOTHING: no environment name,
+    // no pane — the config's own environment rules (applyComposerChoices
+    // drops even the base request's detected-repo merge under an agent).
+    const restingOnAgent = pickedEnvironment?.id === AGENT_ENVIRONMENT_ID
     onSubmit(text.trim(), {
       agent: agentOptions[agentIdx]?.id ?? null,
-      environment: named ? (pickedEnvironment?.id ?? null) : null,
+      environment:
+        named && !restingOnAgent ? (pickedEnvironment?.id ?? null) : null,
       model: modelOptions[modelIdx]?.id ?? null,
-      pane: named && pickedEnvironment?.id === null ? null : shownPane,
+      pane:
+        named && (pickedEnvironment?.id === null || restingOnAgent)
+          ? null
+          : shownPane,
     })
   }
 
@@ -1400,16 +1434,6 @@ function Launcher({
   const rowValue = (row: LauncherRow): string => {
     if (row.kind === 'section') return environmentSectionSummary(shownPane, row.key)
     if (row.key === 'environment' && isCustom) return CUSTOM_ENVIRONMENT_LABEL
-    // An untouched Environment row under a picked agent whose config carries
-    // an inline environment: nothing saved to name, so say where it comes from.
-    if (
-      row.key === 'environment' &&
-      environmentPick === null &&
-      pickedAgent &&
-      agentEnvironmentIdx === null
-    ) {
-      return 'from agent config'
-    }
     const options = optionsFor(row.key)
     return options[Math.min(pickedIdx(row.key), options.length - 1)]?.label ?? 'Default'
   }
@@ -1462,7 +1486,12 @@ function Launcher({
         editor === null &&
         serverEditor === null &&
         scriptEditor === null
-      const glyph = <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>
+      const glyph = (
+        <Text>
+          {SECTION_INDENT}
+          <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>
+        </Text>
+      )
       if (paneRow.kind === 'repo') {
         const checked = repositoryFor(paneRow.fullName) !== undefined
         return (
@@ -1564,6 +1593,7 @@ function Launcher({
                 return (
                   <Box key={at} width={contentWidth}>
                     <Text wrap="truncate">
+                      {SECTION_INDENT}
                       {'    '}
                       <Text color={theme.foreground}>
                         {here ? (
@@ -1583,6 +1613,7 @@ function Launcher({
             {hidden > 0 && (
               <Box width={contentWidth}>
                 <Text wrap="truncate" color={theme.muted}>
+                  {SECTION_INDENT}
                   {`    … ${hidden} more line${hidden === 1 ? '' : 's'}`}
                 </Text>
               </Box>
@@ -1646,6 +1677,7 @@ function Launcher({
                   return (
                     <Box key={field} width={contentWidth}>
                       <Text wrap="truncate">
+                        {SECTION_INDENT}
                         <Text color={theme.cursor}>{here ? SELECTION_GLYPH : ' '}</Text>{' '}
                         {/* Aligned under the button text, past its "+ ". */}
                         <Text color={theme.muted}>{`    ${field}: `}</Text>
@@ -1669,6 +1701,7 @@ function Launcher({
                 {serverEditor.error !== null && (
                   <Box width={contentWidth}>
                     <Text wrap="truncate" color={theme.muted}>
+                      {SECTION_INDENT}
                       {'         '}
                       {serverEditor.error}
                     </Text>
@@ -1700,6 +1733,7 @@ function Launcher({
                 return (
                   <Box key={field} width={contentWidth}>
                     <Text wrap="truncate">
+                      {SECTION_INDENT}
                       <Text color={theme.cursor}>{here ? SELECTION_GLYPH : ' '}</Text>{' '}
                       <Text color={theme.muted}>{`    ${field}: `}</Text>
                       <Text color={theme.foreground}>{typed}</Text>
@@ -1722,6 +1756,7 @@ function Launcher({
               {editor.error !== null && (
                 <Box width={contentWidth}>
                   <Text wrap="truncate" color={theme.muted}>
+                    {SECTION_INDENT}
                     {'         '}
                     {editor.error}
                   </Text>
@@ -1778,7 +1813,9 @@ function Launcher({
                 </Box>
                 <Text wrap="truncate">
                   {/* Upper-cased, so the whole configuration block reads with
-                      one kind of label. */}
+                      one kind of label; environment.* sections indent under
+                      the ENVIRONMENT row they belong to. */}
+                  {r.kind === 'section' ? SECTION_INDENT : ''}
                   <Text color={theme.muted}>{r.label.toUpperCase()}: </Text>
                   <Text color={active || isOpen ? theme.foreground : theme.muted}>
                     {rowValue(r)}
