@@ -19,7 +19,7 @@ Singular nouns, one verb per action.
 
 ```
 agent file list           agent file delete <file-id>
-agent session start       agent config default set <config-id>
+agent session start       agent config edit <config-id>
 ```
 
 - **The noun is singular, always.** `file`, not `files`. `hook`, not

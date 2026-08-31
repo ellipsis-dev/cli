@@ -55,7 +55,7 @@ agent host delete beta            # remove a host and its stored token
 agent session start --config <id>     # start a session from a saved config
 agent session start --config-file f.json   # ...or from an inline config
 agent session start --template ellipsis-helper   # ...or from a maintained template
-agent session start --config <id> --config-override "budget:\n  session: 5"  # override config fields for this session
+agent session start --config <id> --override "budget:\n  session: 5"  # override config fields for this session
 agent session start --config <id> --watch  # start and immediately stream it
 agent session list --limit 20         # list recent sessions (filter by --source, --author, --since, …)
 agent session search "webhook retries"   # search session history: transcripts, recaps, created PRs, similarity
@@ -81,9 +81,6 @@ agent config edit <config-id> --file agents/foo.yaml    # replace its definition
 agent config delete <config-id>   # delete it; the agent stops and its name is freed
 agent config link <config-id> --repo api   # move it into a repository, via a pull request
 agent config unlink <config-id>   # take it over from its file, so the API changes it
-agent config default              # the effective default agent for the repo you are standing in
-agent config default set <config-id>   # set the account default agent (--repo [owner/name] for one repo)
-agent config default clear        # clear the account default (--repo [owner/name] for one repo)
 
 agent model list                  # list selectable agent models (the account default is marked)
 

@@ -381,24 +381,23 @@ wins: the environment variable, then the token stored in `~/.ellipsis/config.jso
 Start and follow work:
 
 ```sh
-agent session start "triage the failing CI on api"   # runs the resolved default agent
+agent session start "triage the failing CI on api"   # a bare ad-hoc session
 agent session start --config <config-id> --watch     # stream until terminal
 agent session start --config-file agents/my_agent.yaml --watch
 agent session start --template ellipsis-helper --watch
 agent session get <session-id> --watch               # follow a running session
 agent session connect <session-id>                   # live view plus send messages
 agent session stop <session-id>
-agent session replay <session-id>                    # re-run against its frozen snapshot
 agent session ide <session-id>                       # browser IDE into the live sandbox
 agent session port <session-id> 3000                 # preview a port the sandbox serves
 ```
 
-With no config source, a bare `start` resolves the repository default, then the
-account default, then a bare ad-hoc config on `claude-opus-5`, so the prompt is
-the sole instruction. The CLI also sends the repository you are standing in, and
+With no config source, a bare `start` runs the bare ad-hoc config — an empty
+system prompt on the account's default model in the basic sandbox — so the
+prompt is the sole instruction. The CLI also sends the repository you are standing in, and
 the server clones it. Per-session overrides need no config edit: `--model`,
 `--system`, `--repo`, `--cpu`, `--memory`, `--timeout`, `--budget`, and
-`--config-override` for a full partial config. `--rebuild` skips the image
+`--override` for a full partial config patch. `--rebuild` skips the image
 cache. `--detach` returns immediately. `--watch --quiet` prints only status
 transitions and the result, and either watch form exits `0` only when the session
 completes.
@@ -447,7 +446,6 @@ agent config edit <id> --file agents/my_agent.yaml   # replace its definition, l
 agent config delete <id>                     # delete it; it stops and frees its name
 agent config link <id> --repo api            # move it into a repo, via a pull request
 agent config unlink <id>                     # take it over from its file
-agent config default set <config-id>         # the account default (--repo for one repo)
 agent template list                          # built-in templates and their slugs
 agent model list                             # the model ids valid under claude.model
 ```
