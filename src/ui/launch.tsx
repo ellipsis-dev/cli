@@ -6,6 +6,7 @@ import { repoFromCwd } from '../lib/git'
 import { makeOpenSocket, resolveWsBase } from '../lib/stream'
 import { applyDetectedThemeMode } from '../lib/terminalBackground'
 import type { StartAgentSessionRequest } from '../lib/types'
+import { withRepository } from '../lib/sessions'
 import { SessionsApp } from './SessionsApp'
 
 // Launches the multi-session UI (sidebar + chat) — the shared destination of
@@ -33,8 +34,8 @@ export function canHostSessionsUi(): boolean {
 
 // The composer-spawned session's start request when the entry point brings
 // no flags of its own (connect, and the composer inside a prompt-shorthand
-// UI): default-config resolution with the detected repository, exactly like
-// a bare `agent` start.
+// UI): the bare ad-hoc config with the detected repository merged into the
+// sandbox checkout set, exactly like a bare `agent` start.
 //
 // An empty prompt starts the session idle instead: the sandbox spins up and
 // Claude Code waits at its prompt, so the first composer message opens turn 0
@@ -45,7 +46,7 @@ export function defaultStartRequest(prompt: string): StartAgentSessionRequest {
   const req: StartAgentSessionRequest = {}
   if (prompt) req.prompt = prompt
   const contextRepo = repoFromCwd(process.cwd())
-  if (contextRepo) req.repository = contextRepo
+  if (contextRepo) req.environment = withRepository(undefined, contextRepo)
   return req
 }
 

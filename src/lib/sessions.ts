@@ -5,7 +5,6 @@ import { theme } from './theme'
 import type {
   AgentSession,
   AgentSessionSource,
-  EnvironmentDefaults,
   ListAgentSessionsQuery,
   ModelManufacturer,
   ModelRateCard,
@@ -261,6 +260,74 @@ export function attentionFlip(prevWord: string | undefined, nextWord: string): b
   if (prevWord === undefined) return false
   if (!isActiveStatusWord(prevWord)) return false
   return nextWord === 'waiting' || nextWord === 'sleeping' || nextWord === 'idle'
+}
+
+// --------------------------- start request shaping -------------------------
+// POST /v1/sessions takes the config patch as the request body itself: the
+// base is `from_config_id` (or, omitted, the bare ad-hoc config) and every
+// AgentConfig key on the request deep-merges on top.
+
+// Parse a repository value into an environment.repositories entry.
+// "owner/name" sets both; a bare "name" omits owner so the server defaults it
+// to the account.
+export function parseRepo(value: string): { name: string; owner?: string } {
+  const parts = value.split('/')
+  if (parts.length === 1 && parts[0]) return { name: parts[0] }
+  if (parts.length === 2 && parts[0] && parts[1]) return { owner: parts[0], name: parts[1] }
+  throw new Error(`a repository must be "name" or "owner/name", got "${value}"`)
+}
+
+// The AgentConfig keys POST /v1/sessions accepts as per-session patches. An
+// inline config file's other keys have no request-side equivalent — `trigger`
+// and `input` (the contract, not the payload) describe a saved agent, and the
+// file's `ellipsis:` block carries a name/enabled the request refuses — so
+// they are dropped rather than sent to a 422.
+const START_CONFIG_KEYS = [
+  'budget',
+  'claude',
+  'codex',
+  'environment',
+  'output',
+  'permissions',
+  'skills',
+] as const
+
+// An inline agent config (`session start -f/-t`) as a start request: its
+// per-session keys, spread onto the request body.
+export function startRequestFromConfig(
+  config: Record<string, unknown>,
+): StartAgentSessionRequest {
+  const req: Record<string, unknown> = {}
+  for (const key of START_CONFIG_KEYS) {
+    if (config[key] !== undefined) req[key] = config[key]
+  }
+  return req as StartAgentSessionRequest
+}
+
+// An environment override with `repo` ("owner/name" or a bare name) in its
+// repositories, added only when absent. An environment OBJECT deep-merges onto
+// the resolved one and repositories merge by identity, so this only ever adds
+// a checkout. Bare names compare by name alone, the way the server resolves
+// them.
+export function withRepository(
+  environment: StartAgentSessionRequest['environment'],
+  repo: string,
+): NonNullable<StartAgentSessionRequest['environment']> {
+  const entry = parseRepo(repo)
+  const base: Record<string, unknown> =
+    typeof environment === 'object' && environment !== null ? { ...environment } : {}
+  const repositories = Array.isArray(base.repositories) ? base.repositories : []
+  const has = repositories.some(
+    (r: unknown) =>
+      typeof r === 'object' &&
+      r !== null &&
+      (r as { name?: string }).name === entry.name &&
+      (entry.owner === undefined ||
+        (r as { owner?: string }).owner === undefined ||
+        (r as { owner?: string }).owner === entry.owner),
+  )
+  if (!has) base.repositories = [...repositories, entry]
+  return base as NonNullable<StartAgentSessionRequest['environment']>
 }
 
 // --------------------------- new-session picker ---------------------------
@@ -675,20 +742,48 @@ export function environmentSectionCount(input: EnvironmentPaneInput, section: Pa
 // A closed section row's value: what of the section is in the run, on one
 // line — the checked names, or the fields holding a value. Empty when nothing
 // is, so the row reads "REPOSITORIES:" the way an unset field does.
+// "N set" for the sections that summarize by count; empty when nothing is.
+function setCount(n: number): string {
+  return n === 0 ? '' : `${n} set`
+}
+
+// A memory value the way humans quote it — "16GB" prints as "16 GiB" (the
+// sandbox allocates binary units); anything unparseable prints as written.
+function memoryLabel(value: string): string {
+  const m = /^(\d+(?:\.\d+)?)\s*(gib|gb|mib|mb)$/i.exec(value.trim())
+  if (!m) return value
+  return `${m[1]} ${m[2].toLowerCase().startsWith('g') ? 'GiB' : 'MiB'}`
+}
+
 export function environmentSectionSummary(
   pane: EnvironmentPaneState,
   section: PaneSection,
 ): string {
+  // Bare repo names: the owner is almost always the account itself, so
+  // repeating it on every entry buys width and no information. A pinned ref
+  // stays, since it changes what is cloned.
   if (section === 'repositories')
     return pane.repositories
-      .map((r) => (r.ref === null ? r.fullName : `${r.fullName}@${r.ref}`))
+      .map((r) => {
+        const name = r.fullName.slice(r.fullName.indexOf('/') + 1)
+        return r.ref === null ? name : `${name}@${r.ref}`
+      })
       .join(', ')
   if (section === 'mcpServers') return pane.mcpServers.map((s) => s.name).join(', ')
-  if (section === 'variables') return pane.variables.map((v) => v.name).join(', ')
-  if (section === 'image') return IMAGE_FIELDS.filter((f) => pane.image[f] !== '').join(', ')
-  if (section === 'hooks') return HOOK_FIELDS.filter((f) => pane.hooks[f] !== '').join(', ')
+  // Values are secrets and names are noise at a glance, so just how many.
+  if (section === 'variables') return setCount(pane.variables.length)
+  if (section === 'image')
+    return setCount(IMAGE_FIELDS.filter((f) => pane.image[f] !== '').length)
+  if (section === 'hooks')
+    return setCount(HOOK_FIELDS.filter((f) => pane.hooks[f] !== '').length)
   return COMPUTE_FIELDS.filter((f) => pane.compute[f] !== '')
-    .map((f) => `${f} ${pane.compute[f]}`)
+    .map((f) =>
+      f === 'cpu'
+        ? `${pane.compute[f]} vCPU`
+        : f === 'memory'
+          ? memoryLabel(pane.compute[f])
+          : `${f} ${pane.compute[f]}`,
+    )
     .join(', ')
 }
 
@@ -713,6 +808,17 @@ export const EMPTY_PANE: EnvironmentPaneState = {
   compute: EMPTY_COMPUTE,
   image: EMPTY_IMAGE,
   hooks: EMPTY_HOOKS,
+}
+
+// The pane with `repo` ("owner/name") checked, added only when absent — how
+// the resting basic-sandbox pane shows the checkout the entry point's base
+// request merges in (see withRepository).
+export function paneWithRepository(
+  pane: EnvironmentPaneState,
+  repo: string | null,
+): EnvironmentPaneState {
+  if (!repo || pane.repositories.some((r) => r.fullName === repo)) return pane
+  return { ...pane, repositories: [...pane.repositories, { fullName: repo, ref: null }] }
 }
 
 // How an MCP server entry names itself, across the shapes the config admits: a
@@ -878,11 +984,15 @@ export function repositoryRefLabel(
 // an override replaces the resolved one, so nothing the pane doesn't show can
 // reach the run.
 //
-// `pane` null is the third case: nothing about the environment is stated at all,
-// so the server's own ladder resolves it. That is what an untouched "Default"
-// row means, and the honest thing to send when the environment list never
-// loaded — an explicit empty pane there would wipe a default we never saw.
+// `pane` null is the third case: nothing about the environment is stated
+// beyond what the entry point's base request already says (the detected
+// repository) — the right thing to send when the pane was never touched and
+// an agent config's own environment should rule.
+//
+// `agent` is the saved config the session starts from (`from_config_id`, an
+// id or the agent's name); null starts on the bare ad-hoc config.
 export interface ComposerChoices {
+  agent: string | null
   environment: string | null
   model: string | null
   pane: EnvironmentPaneState | null
@@ -908,23 +1018,35 @@ function repositoryEntry(r: CustomRepository): { owner?: string; name: string; r
   return entry
 }
 
-// The entry point's base request with the launcher's picks layered on.
+// The entry point's base request with the launcher's picks layered on. The
+// request body IS the config patch, so the picks land as its own keys.
 //
-// A named environment is the session's own choice and ships alone: the pane
-// still matches it, so re-stating its lists would only risk saying it worse.
-// Without a name the run is custom, and every list in the override REPLACES the
-// resolved one — which is exactly what the pane means. Its lists therefore ship
-// unconditionally, empty included: an empty repositories array is how "no repos"
-// is said, and omitting it would let the ladder resolve some.
+// A named environment ships as the string, which re-picks it wholesale: the
+// pane still matches it, so re-stating its lists would only risk saying it
+// worse. Without a name the pane ships as the environment object, lists
+// included even when empty — over the bare ad-hoc base that object is the
+// whole sandbox, which is exactly what the pane means. (Over a picked agent's
+// config the server merges the object instead — repositories by identity — so
+// there an edited pane adds but cannot subtract; the honest fix is a saved
+// environment, which does replace the config's reference.)
 export function applyComposerChoices(
   base: StartAgentSessionRequest,
   choices: ComposerChoices,
 ): StartAgentSessionRequest {
   const req: StartAgentSessionRequest = { ...base }
-  const override: Record<string, unknown> = {}
-  if (choices.model) override.claude = { model: choices.model }
-  // Never combined with a config source: the launcher sends no config_id, so
-  // the environment is always the session's to name (the server 400s both).
+  if (choices.agent) {
+    req.from_config_id = choices.agent
+    // With an agent picked and the environment untouched, the config's own
+    // environment rules — including the base request's detected-repo merge
+    // would silently grow its checkout set, so it is dropped. (The pane shows
+    // the config's environment, and checking the repo there is one keystroke.)
+    if (!choices.environment && !choices.pane) delete req.environment
+  }
+  // Only the model: sending any sibling claude field would override the base
+  // config's own (system especially).
+  if (choices.model) {
+    req.claude = { model: choices.model } as StartAgentSessionRequest['claude']
+  }
   if (choices.environment) {
     req.environment = choices.environment
   } else if (choices.pane) {
@@ -940,9 +1062,8 @@ export function applyComposerChoices(
     if (Object.keys(image).length > 0) environment.image = image
     const hooks = fieldsOverride(pane.hooks)
     if (Object.keys(hooks).length > 0) environment.hooks = hooks
-    override.environment = environment
+    req.environment = environment as StartAgentSessionRequest['environment']
   }
-  if (Object.keys(override).length > 0) req.override = override
   return req
 }
 
@@ -964,22 +1085,6 @@ export function parseVariableEntry(input: string): CustomVariable | { error: str
   return { name, value: eq === -1 ? null : text.slice(eq + 1) }
 }
 
-// Which rungs of the defaults ladder point at one environment: the account
-// rung, and every repository rung. An environment can hold several at once, so
-// this is a list — "account default, default for acme/api".
-export function environmentDefaultRungs(
-  ladder: EnvironmentDefaults | null,
-  id: string,
-): string[] {
-  if (!ladder) return []
-  return [
-    ...(ladder.account === id ? ['account default'] : []),
-    ...Object.entries(ladder.repositories)
-      .filter(([, envId]) => envId === id)
-      .map(([repo]) => `default for ${repo}`),
-  ]
-}
-
 // Where a synced environment's definition lives, for its option row:
 // "owner/name/path/to/file.yaml @ sha1234". Only what the API already gave us —
 // no source_details (an API-managed environment) means null, and the repo id
@@ -999,54 +1104,34 @@ export function environmentSourceLabel(
   return `${repo}/${src.path}${sha}`
 }
 
-// The Environment row's options: every saved environment, each labelled with
-// the default rungs it holds and the file it syncs from, then the built-in
-// "[empty]". `picked` is the row checked while the row is untouched — the
-// environment the ladder resolves for the repo you are standing in, so the
-// launcher can SEND what it shows instead of leaving the server to resolve
-// something else.
-//
-// A "Default" row appears only when no rung resolves at all: then there is no
-// name to show and the server's own resolution is the honest answer.
+// The label of the resting null-id row: what an unnamed start resolves to —
+// the built-in basic sandbox (with the detected repository merged into its
+// checkout set, which the pane shows checked).
+export const BASIC_ENVIRONMENT_LABEL = 'basic sandbox'
+
+// The leading row the Environment list grows when the picked agent's config
+// carries its own environment: checked at rest (so the checkbox agrees with
+// the row's "from agent config" value), re-pickable after choosing something
+// else, and sending NOTHING on the wire — the config's environment rules.
+export const AGENT_ENVIRONMENT_ID = 'agent:builtin'
+export const AGENT_ENVIRONMENT_LABEL = 'from agent config'
+
+// The Environment row's options: the resting "basic sandbox" first, then
+// every saved environment (each labelled with the file it syncs from), then
+// the built-in "[empty]". Index 0 is the untouched pick.
 export function environmentOptions(
   environments: readonly { id: string; name: string }[],
-  ladder: EnvironmentDefaults | null,
-  detectedRepo: string | null,
   sourceLabels: ReadonlyMap<string, string> = new Map(),
-): { options: { id: string | null; label: string }[]; picked: number } {
-  const resolved = ladder ? effectiveEnvironmentDefault(ladder, detectedRepo)?.id : undefined
-  const listed = environments.map((e) => {
-    const notes = [...(sourceLabels.has(e.id) ? [sourceLabels.get(e.id) as string] : []),
-      ...environmentDefaultRungs(ladder, e.id)]
-    return {
-      id: e.id as string | null,
-      label: notes.length > 0 ? `${e.name} (${notes.join(', ')})` : e.name,
-    }
-  })
-  const empty = { id: EMPTY_ENVIRONMENT_ID as string | null, label: EMPTY_ENVIRONMENT_LABEL }
-  const at = resolved ? environments.findIndex((e) => e.id === resolved) : -1
-  if (at !== -1) return { options: [...listed, empty], picked: at }
-  return {
-    options: [{ id: null as string | null, label: 'Default' }, ...listed, empty],
-    picked: 0,
-  }
-}
-
-// The environment a config-less session in `repo` resolves to: the repo rung of
-// the defaults ladder, else the account rung, else null (the basic sandbox).
-// Repo names compare case-insensitively, the way GitHub treats them.
-export function effectiveEnvironmentDefault(
-  ladder: EnvironmentDefaults,
-  repo: string | null,
-): { id: string; rung: 'repo' | 'account' } | null {
-  const repoRung = repo
-    ? Object.entries(ladder.repositories).find(
-        ([name]) => name.toLowerCase() === repo.toLowerCase(),
-      )?.[1]
-    : undefined
-  if (repoRung) return { id: repoRung, rung: 'repo' }
-  if (ladder.account) return { id: ladder.account, rung: 'account' }
-  return null
+): { id: string | null; label: string }[] {
+  const listed = environments.map((e) => ({
+    id: e.id as string | null,
+    label: sourceLabels.has(e.id) ? `${e.name} (${sourceLabels.get(e.id)})` : e.name,
+  }))
+  return [
+    { id: null, label: BASIC_ENVIRONMENT_LABEL },
+    ...listed,
+    { id: EMPTY_ENVIRONMENT_ID, label: EMPTY_ENVIRONMENT_LABEL },
+  ]
 }
 
 // ------------------------------- layout ---------------------------------

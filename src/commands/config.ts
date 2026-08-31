@@ -11,7 +11,6 @@ import { configUrl } from '../lib/urls'
 import { readConfigFile } from './session'
 import type {
   AgentConfig,
-  AgentDefaults,
   CreateAgentConfigRequest,
   CreatedAgentConfig,
   SavedAgentConfig,
@@ -23,7 +22,7 @@ export function registerConfig(program: Command): void {
   const config = alsoKnownAs(
     program
       .command('config')
-      .description('Inspect your agent configs and set which one runs by default'),
+      .description('Inspect and manage your saved agent configs'),
     'configs',
   )
 
@@ -255,145 +254,6 @@ export function registerConfig(program: Command): void {
       })
     })
 
-  // ------------------------------- defaults --------------------------------
-  // The default-config ladder a bare session start resolves: repo default ->
-  // account default -> the bare platform config. Rung-addressed, never row
-  // ids: writes target the ACCOUNT rung unless --repo names (or detects) a
-  // repository. Reading is context-aware (bare `agent config default` shows
-  // the effective default where you stand); writes never are — a mutation
-  // whose target depends on your cwd would be a footgun, so --repo is always
-  // explicit.
-  const defaults = apiRoutes(
-    alsoKnownAs(
-      config
-        .command('default')
-        .description('Show or set which agent config runs when a session names none'),
-      'defaults',
-    ),
-    'GET /v1/agents/defaults',
-  )
-    .option('--json', 'output raw JSON')
-    // Bare `agent config default`: the effective default for the repo you're
-    // standing in, computed locally from GET /defaults + the origin remote
-    // (the same ladder session start resolves server-side).
-    .action(async (opts: { json?: boolean }) => {
-      await runAction(async () => {
-        const ladder = await api().agents.defaults.list()
-        const repo = repoFromCwd(process.cwd())
-        const repoRung = repo ? repoDefault(ladder, repo) : undefined
-        const effective = repoRung ?? ladder.account ?? null
-        if (opts.json) {
-          printJson({ repository: repo ?? null, effective })
-          return
-        }
-        if (!effective) {
-          console.log(
-            repo
-              ? `no default set for ${repo} or the account (sessions start on the bare config)`
-              : 'no account default set (sessions start on the bare config)',
-          )
-          return
-        }
-        const rung = repoRung ? `repo default for ${repo}` : 'account default'
-        console.log(`using config "${effective}" (${rung})`)
-      })
-    })
-
-  apiRoutes(
-    alsoKnownAs(
-      defaults
-        .command('list')
-        .description('List every default that is set, account rung and per-repo rungs'),
-      'ls',
-    ),
-    'GET /v1/agents/defaults',
-  )
-    .option('--json', 'output raw JSON')
-    // The group also defines --json (for the bare view), and commander parses
-    // parent options even when they follow the subcommand name — so read the
-    // merged view, not just this command's own opts.
-    .action(async (_opts: { json?: boolean }, cmd: Command) => {
-      await runAction(async () => {
-        const client = api()
-        const ladder = await client.agents.defaults.list()
-        if (cmd.optsWithGlobals().json) {
-          printJson(ladder)
-          return
-        }
-        const rungs: [string, string][] = [
-          ...(ladder.account ? ([['account', ladder.account]] as [string, string][]) : []),
-          ...Object.entries(ladder.repositories),
-        ]
-        if (rungs.length === 0) {
-          console.log('No defaults set. Sessions start on the bare config.')
-          return
-        }
-        // The ladder carries ids only, but a human reads this table — so join
-        // the account's configs to show each rung's name.
-        const names = new Map(
-          (await client.agents.configs.list()).configs.map((c) => [c.id, configName(c)]),
-        )
-        printTable(
-          ['RUNG', 'CONFIG', 'CONFIG ID'],
-          rungs.map(([rung, id]) => [rung, names.get(id) ?? id, id]),
-        )
-      })
-    })
-
-  apiRoutes(
-    defaults
-      .command('set <config-id>')
-      .description('Set the account default agent config, or a repo default with --repo'),
-    'PUT /v1/agents/defaults',
-  )
-    .option(
-      '-r, --repo [repository]',
-      'target a repo rung: "owner/name", or no value for the repo you are standing in',
-    )
-    .option('--json', 'output raw JSON')
-    .action(
-      async (configId: string, opts: { repo?: string | boolean; json?: boolean }, cmd: Command) => {
-        await runAction(async () => {
-          const repository = resolveRepoFlag(opts.repo)
-          const ladder = await api().agents.defaults.set({
-            config_id: configId,
-            ...(repository ? { repository } : {}),
-          })
-          if (cmd.optsWithGlobals().json) {
-            printJson(ladder)
-            return
-          }
-          const rung = repository ? `default for ${repository}` : 'account default'
-          const id = repository ? repoDefault(ladder, repository) : ladder.account
-          console.log(`✓ set ${rung} to ${id ?? configId}`)
-        })
-      },
-    )
-
-  apiRoutes(
-    alsoKnownAs(
-      defaults
-        .command('clear')
-        .description('Clear the account default agent config, or a repo default with --repo'),
-      'rm',
-      'delete',
-    ),
-    'DELETE /v1/agents/defaults',
-  )
-    .option(
-      '-r, --repo [repository]',
-      'target a repo rung: "owner/name", or no value for the repo you are standing in',
-    )
-    .action(async (opts: { repo?: string | boolean }) => {
-      await runAction(async () => {
-        const repository = resolveRepoFlag(opts.repo)
-        await api().agents.defaults.delete({ repository })
-        console.log(
-          `✓ cleared ${repository ? `default for ${repository}` : 'account default'}`,
-        )
-      })
-    })
-
   apiRoutes(
     config
       .command('init [path]')
@@ -470,31 +330,6 @@ function printCreated(created: CreatedAgentConfig): void {
 
 function configName(c: SavedAgentConfig): string {
   return c.agent_config.ellipsis.name ?? c.id
-}
-
-// --repo semantics on defaults mutations: absent -> the account rung; bare
-// --repo -> the repo you're standing in (from the origin remote, an error
-// when there isn't one); --repo owner/name -> that repo. Shared with
-// `agent review default`, whose rungs are addressed identically.
-export function resolveRepoFlag(repo: string | boolean | undefined): string | undefined {
-  if (repo === undefined || repo === false) return undefined
-  if (repo === true) {
-    const detected = repoFromCwd(process.cwd())
-    if (!detected) {
-      throw new Error(
-        'no git repository detected here; pass --repo owner/name or run inside a clone',
-      )
-    }
-    return detected
-  }
-  return repo
-}
-
-// The repo rung's config id. Rungs are keyed "owner/name" as GitHub spells it,
-// so match case-insensitively rather than indexing directly.
-function repoDefault(ladder: AgentDefaults, repo: string): string | undefined {
-  const want = repo.toLowerCase()
-  return Object.entries(ladder.repositories).find(([r]) => r.toLowerCase() === want)?.[1]
 }
 
 // A minimal valid agent config. `claude.system` is the only required field;

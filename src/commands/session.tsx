@@ -36,12 +36,10 @@ import { recordToItems } from '@ellipsis-dev/sdk/store'
 import { makeOpenSocket, resolveWsBase } from '../lib/stream'
 import type { Ellipsis, Session as FrameSession } from '@ellipsis-dev/sdk'
 import type {
-  AgentConfig,
   AgentSession,
   AgentSessionSource,
   AgentSessionStatus,
   GithubAccountSnippet,
-  ReplayAgentSessionRequest,
   SessionLogSegment,
   SessionRecord,
   SessionSearchResult,
@@ -53,7 +51,16 @@ import { openBrowser } from '../lib/auth'
 import { registerConnect, runConnect } from './connect'
 import { canHostSessionsUi, defaultStartRequest, runSessionsUi } from '../ui/launch'
 import { formatStepLine, oneLine, recordText } from '../lib/steps'
-import { sessionConfigName } from '../lib/sessions'
+import {
+  parseRepo,
+  sessionConfigName,
+  startRequestFromConfig,
+  withRepository,
+} from '../lib/sessions'
+
+// Re-exported for existing importers (help.ts starts the helper template
+// through the same mapping).
+export { startRequestFromConfig, withRepository }
 
 // Poll cadence for the `--watch` REST fallback (used only when live WebSocket
 // streaming is unavailable). Not user-configurable — the fallback is rare.
@@ -88,7 +95,7 @@ export function registerSession(program: Command): void {
     )
     .option(
       '-c, --config <config-id>',
-      'start from a saved agent config (default: the resolved default config)',
+      "start from a saved agent config, by id or the agent's name (default: the bare ad-hoc config)",
     )
     .option(
       '-f, --config-file <path>',
@@ -100,11 +107,11 @@ export function registerSession(program: Command): void {
     )
     .option(
       '-e, --environment <environment-id>',
-      'run in a saved environment, by id or name (only without -c/-f: an agent config decides its own environment)',
+      "run in a saved environment, by id or name (beats the agent config's own reference)",
     )
     .option(
       '--override <yaml>',
-      'partial patch (YAML/JSON) on the resolved session config, applied last, e.g. "budget:\\n  session: 5"',
+      'partial patch (YAML/JSON) of AgentConfig keys, deep-merged onto the base config, e.g. "budget:\\n  session: 5"',
     )
     .option(
       '--override-file <path>',
@@ -213,46 +220,59 @@ export function registerSession(program: Command): void {
           if (opts.connect && opts.json) {
             throw new Error('--connect is interactive and cannot be combined with --json')
           }
-          const req: StartAgentSessionRequest = {
-            metadata: opts.metadata,
+          // The request body doubles as the config patch: every AgentConfig
+          // key on it deep-merges onto the base (`from_config_id`, or the
+          // bare ad-hoc config when none is named).
+          let req: StartAgentSessionRequest = {}
+          if (opts.config) req.from_config_id = opts.config
+          if (opts.configFile) {
+            req = { ...req, ...startRequestFromConfig(readConfigFile(opts.configFile)) }
           }
-          if (opts.config) req.config_id = opts.config
-          if (opts.configFile) req.config = readConfigFile(opts.configFile) as AgentConfig
           // Templates left the start request (#6394): resolve the slug to its
           // YAML via GET /v1/agents/templates/{slug} and start inline.
           if (opts.template) {
             const template = await api().agents.templates.get(opts.template)
-            req.config = parseYaml(template.yaml) as AgentConfig
+            req = { ...req, ...startRequestFromConfig(parseYaml(template.yaml)) }
           }
-          // The environment is only a session-level choice when no config
-          // decides it; the server 400s the combination, so pre-check locally
-          // for a clearer error.
+          // Sugar flags (--model, --repo, --cpu, ...) and the raw --override
+          // are one structured patch, deep-merged onto the inline config so an
+          // explicit flag wins over the same field from -f/-t.
+          const override = buildStartOverride(opts)
+          if (override) req = deepMerge(req, override) as StartAgentSessionRequest
+          // A NAMED environment re-picks it wholesale, so there is nothing for
+          // the environment fields of an override to merge into.
           if (opts.environment) {
-            if (opts.config || opts.configFile) {
+            if (isPlainObject(req.environment) && Object.keys(req.environment).length > 0) {
               throw new Error(
-                '--environment cannot be combined with --config/--config-file: the agent config decides its environment',
+                '--environment names a saved environment wholesale; it cannot be combined with environment overrides (--repo/--cpu/--memory/--timeout or an override\'s environment block)',
               )
             }
             req.environment = opts.environment
+          } else {
+            // The repo we're standing in (origin remote), merged into the
+            // sandbox checkout set: an environment OBJECT deep-merges onto the
+            // resolved one and repositories merge by identity, so this only
+            // ever adds. Outside a git repo (or with no usable remote), and
+            // when a saved environment is named, nothing is added.
+            const contextRepo = repoFromCwd(process.cwd())
+            if (contextRepo && typeof req.environment !== 'string') {
+              req.environment = withRepository(req.environment, contextRepo)
+            }
           }
-          // The repo we're standing in (origin remote), sent unconditionally —
-          // with no config source it picks the repo rung of the server's
-          // defaults ladder, and either way the server merges it into the
-          // sandbox checkout set. Outside a git repo (or with no usable
-          // remote) nothing is sent.
-          const contextRepo = repoFromCwd(process.cwd())
-          if (contextRepo) req.repository = contextRepo
-          // Sugar flags (--model, --repo, --cpu, ...) and the raw
-          // --override are merged into one structured override, applied
-          // onto the chosen (or default) config and re-validated server-side.
-          const override = buildStartOverride(opts)
-          if (override) req.override = override
           // Appended to the initial user query at build time; gives this
           // session instructions on top of the config's shared system prompt.
           if (promptText) req.prompt = promptText
-          // Skip the image cache for the initial provision (wakes cache as
-          // usual); the fresh build's snapshot becomes the new cache entry.
-          if (opts.rebuild) req.force_rebuild = true
+          // Platform housekeeping rides the request's own `ellipsis` block:
+          // --rebuild skips the image cache for the initial provision (wakes
+          // cache as usual; the fresh build's snapshot refreshes the cache).
+          // Partial on the wire (the server defaults what is omitted); the
+          // generated type marks defaulted fields required, hence the cast.
+          const ellipsis: Record<string, unknown> = {}
+          if (Object.keys(opts.metadata).length > 0) ellipsis.metadata = opts.metadata
+          if (opts.rebuild) ellipsis.force_rebuild = true
+          if (Object.keys(ellipsis).length > 0) {
+            req.ellipsis = ellipsis as StartAgentSessionRequest['ellipsis']
+          }
           // A promptless start opens idle: no fabricated kickoff message,
           // Claude Code waits at the prompt like a local `claude` (the
           // server-side contract since #6394 — nothing extra to send).
@@ -652,90 +672,6 @@ export function registerSession(program: Command): void {
     })
 
   apiRoutes(
-    session
-      .command('replay <session-id>')
-      .description("Re-run an existing session's trigger input as a fresh session"),
-    'POST /v1/sessions/{id}/replay',
-    'WS /v1/sessions/{id}/stream with --watch',
-  )
-    .option(
-      '-c, --config <config-id>',
-      "run against a different saved agent config instead of the original session's snapshot",
-    )
-    .option(
-      '--override <yaml>',
-      'partial patch (YAML/JSON) on the replayed config, e.g. "claude:\\n  model: claude-opus-4-8"',
-    )
-    .option(
-      '--override-file <path>',
-      'read the partial override from a file (.yaml/.yml or .json) instead of inline',
-    )
-    .option(
-      '-p, --prompt <text>',
-      "the session prompt; omit to inherit the original session's prompt, pass '' to clear it",
-    )
-    .option(
-      '-w, --watch',
-      'block until the session reaches a terminal status, streaming live output',
-    )
-    .option('--quiet', 'with --watch, wait without streaming: print only the final result')
-    .option('--json', 'output raw JSON')
-    .action(
-      async (
-        sessionId: string,
-        opts: {
-          config?: string
-          override?: string
-          overrideFile?: string
-          prompt?: string
-          watch?: boolean
-          quiet?: boolean
-          json?: boolean
-        },
-      ) => {
-        await runAction(async () => {
-          if (opts.quiet && !opts.watch) {
-            throw new Error('--quiet only applies with --watch')
-          }
-          const req: ReplayAgentSessionRequest = {}
-          if (opts.config) req.config_id = opts.config
-          applyConfigOverride(req, opts)
-          // Distinguish "flag omitted" (inherit the original prompt) from
-          // `--prompt ''` (clear it): only set the field when the flag was passed.
-          if (opts.prompt !== undefined) req.prompt = opts.prompt
-
-          const client = api()
-          const { session } = await client.sessions.replay(sessionId, req)
-
-          if (opts.watch) {
-            if (!opts.json) {
-              console.log(`✓ started replay ${session.id} (from ${sessionId})`)
-              await printSessionUrl(client, session.id)
-            }
-            if (opts.quiet) {
-              await watchSession(client, session.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
-            } else {
-              await watchSessionStreaming(
-                client,
-                session.id,
-                FALLBACK_POLL_INTERVAL_SECONDS,
-                opts.json,
-              )
-            }
-            return
-          }
-          if (opts.json) {
-            printJson(session)
-            return
-          }
-          console.log(`✓ started replay ${session.id} (${session.status}, from ${sessionId})`)
-          await printSessionUrl(client, session.id)
-          console.log(`  follow with: agent session get ${session.id} --watch`)
-        })
-      },
-    )
-
-  apiRoutes(
     session.command('stop <session-id>').description('Stop an in-flight session'),
     'POST /v1/sessions/{id}/stop',
   )
@@ -938,36 +874,13 @@ async function printSessionUrl(client: Ellipsis, sessionId: string): Promise<voi
   console.log(`  ${sessionUrl(resolveAppBase(), me.customer_login, sessionId)}`)
 }
 
-// Apply the mutually-exclusive override flags onto a session request: an
-// inline YAML/JSON string or a file, both parsed to the one structured
-// `override` patch applied onto the resolved config server-side.
-export function applyConfigOverride(
-  req: {
-    override?: Record<string, unknown> | null
-  },
-  opts: { override?: string; overrideFile?: string },
-): void {
-  if (opts.override && opts.overrideFile) {
-    throw new Error('provide only one of --override / --override-file')
-  }
-  if (opts.overrideFile) {
-    req.override = readMappingFile(opts.overrideFile, 'override')
-  } else if (opts.override) {
-    const parsed = parseYaml(opts.override)
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      throw new Error('--override must be a YAML/JSON mapping of fields to override')
-    }
-    req.override = parsed as Record<string, unknown>
-  }
-}
-
-// Build the single structured config override for `session start`. The raw
+// Build the structured config patch for `session start`. The raw
 // --override / --override-file supplies the base mapping (any
 // field); the sugar flags (--model, --system, --repo, --cpu, --memory,
 // --timeout, --budget) are assembled into a partial config and deep-merged on
 // top, so an explicit flag wins over the same field in a raw override. Returns
-// undefined when nothing was set (no override sent). The result is applied onto
-// the chosen (or default) config and re-validated server-side.
+// undefined when nothing was set. The result rides the request body itself,
+// which the server deep-merges onto the base config and re-validates.
 export function buildStartOverride(opts: {
   override?: string
   overrideFile?: string
@@ -1012,15 +925,6 @@ export function buildStartOverride(opts: {
 
   const merged = deepMerge(base, sugar)
   return Object.keys(merged).length ? merged : undefined
-}
-
-// Parse a --repo value into an environment.repositories entry. "owner/name" sets
-// both; a bare "name" omits owner so the server defaults it to the account.
-function parseRepo(value: string): { name: string; owner?: string } {
-  const parts = value.split('/')
-  if (parts.length === 1 && parts[0]) return { name: parts[0] }
-  if (parts.length === 2 && parts[0] && parts[1]) return { owner: parts[0], name: parts[1] }
-  throw new Error(`--repo must be "name" or "owner/name", got "${value}"`)
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {

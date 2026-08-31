@@ -4,8 +4,8 @@ import { api, APIError } from '../lib/api'
 import { apiRoutes } from '../lib/help'
 import { runAction } from '../lib/output'
 import { repoFromCwd } from '../lib/git'
-import { startConnect } from './session'
-import type { AgentConfig, StartAgentSessionRequest } from '../lib/types'
+import { startConnect, startRequestFromConfig, withRepository } from './session'
+import type { StartAgentSessionRequest } from '../lib/types'
 
 // The template behind `agent help --interactive`. Kebab-case like every other
 // slug in the registry; it is not served yet, so a 404 here is expected and
@@ -66,13 +66,17 @@ export function resolveCommandPath(program: Command, path: string[]): Command | 
 
 async function startHelperSession(): Promise<void> {
   const template = await api().agents.templates.get(HELPER_TEMPLATE_SLUG)
-  const req: StartAgentSessionRequest = {
-    config: parseYaml(template.yaml) as AgentConfig,
-  }
-  // Same as `session start`: send the repo we're standing in so the helper can
-  // answer questions about this checkout. Ignored server-side if unknown.
+  const req: StartAgentSessionRequest = startRequestFromConfig(
+    parseYaml(template.yaml) as Record<string, unknown>,
+  )
+  // Same as `session start`: merge the repo we're standing in into the
+  // sandbox checkout set so the helper can answer questions about this
+  // checkout. A template whose environment is a name reference can't take the
+  // merge, so it is skipped there.
   const contextRepo = repoFromCwd(process.cwd())
-  if (contextRepo) req.repository = contextRepo
+  if (contextRepo && typeof req.environment !== 'string') {
+    req.environment = withRepository(req.environment, contextRepo)
+  }
   // No prompt: the helper opens idle and waits for the question (a promptless
   // start is idle by definition since #6394).
 

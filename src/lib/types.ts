@@ -35,7 +35,6 @@ export type ListSessionRecordsResponse = S['SessionRecordsListResponse']
 export type ListAgentSessionsResponse = S['SessionsListResponse']
 export type StartAgentSessionRequest = NonNullable<Parameters<Ellipsis['sessions']['start']>[0]>
 export type SessionResponse = S['SessionResponse']
-export type ReplayAgentSessionRequest = NonNullable<Parameters<Ellipsis['sessions']['replay']>[1]>
 export type SendSessionMessageRequest = S['SendSessionMessageRequest']
 export type SessionLogSegment = S['SessionLogSegment']
 export type GetSessionLogResponse = S['GetSessionLogResponse']
@@ -48,7 +47,7 @@ export type SessionSearchResult = S['SessionSearchResult']
 export type SearchSessionsResponse = S['SessionSearchResponse']
 export type GithubAccountSnippet = S['GithubAccountSnippet']
 
-// -------------------------- configs / defaults ----------------------------
+// ------------------------------- configs -----------------------------------
 
 export type AgentConfig = S['AgentConfig']
 export type SavedAgentConfig = S['Config']
@@ -57,15 +56,12 @@ export type CreateAgentConfigRequest = Parameters<Ellipsis['agents']['configs'][
 export type CreatedAgentConfig = S['AgentConfigResponse']
 export type ConfigManagedBy = S['ConfigManagedBy']
 export type LinkedAgentConfig = S['LinkAgentConfigResponse']
-export type AgentDefaults = S['AgentDefaults']
-export type PutAgentDefaultRequest = S['PutAgentDefaultRequest']
 
 // ------------------------------ environments -------------------------------
 
 export type EnvironmentConfig = S['EnvironmentConfig']
 export type SavedEnvironment = S['Environment']
 export type ListEnvironmentsResponse = S['EnvironmentsListResponse']
-export type EnvironmentDefaults = S['EnvironmentDefaults']
 
 // -------------------------------- templates -------------------------------
 

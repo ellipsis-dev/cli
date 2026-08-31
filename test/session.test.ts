@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  applyConfigOverride,
   buildStartOverride,
   fetchLogSegment,
   readConfigFile,
@@ -146,54 +145,6 @@ describe('readConfigFile', () => {
   })
 })
 
-describe('applyConfigOverride', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-override-'))
-  const write = (name: string, body: string): string => {
-    const path = join(dir, name)
-    writeFileSync(path, body)
-    return path
-  }
-
-  it('passes an inline override through as the YAML/JSON string', () => {
-    const req: { override?: Record<string, unknown> } = {}
-    applyConfigOverride(req, { override: 'claude:\n  model: claude-opus-4-8' })
-    expect(req).toEqual({ override: { claude: { model: 'claude-opus-4-8' } } })
-  })
-
-  it('reads and parses a file override into the structured mapping', () => {
-    const path = write('override.yaml', 'budget:\n  session: 5\n')
-    const req: { override?: Record<string, unknown> } = {}
-    applyConfigOverride(req, { overrideFile: path })
-    expect(req).toEqual({ override: { budget: { session: 5 } } })
-  })
-
-  it('rejects passing both inline and file forms', () => {
-    const path = write('both.yaml', 'enabled: false\n')
-    expect(() =>
-      applyConfigOverride({}, { override: 'enabled: false', overrideFile: path }),
-    ).toThrow(/only one of --override \/ --override-file/)
-  })
-
-  it('is a no-op when neither form is given', () => {
-    const req: { override?: Record<string, unknown> } = {}
-    applyConfigOverride(req, {})
-    expect(req).toEqual({})
-  })
-
-  it('surfaces an override-specific error when the file is missing', () => {
-    expect(() => applyConfigOverride({}, { overrideFile: join(dir, 'nope.yaml') })).toThrow(
-      /could not read override file/,
-    )
-  })
-
-  it('surfaces an override-specific error for a non-mapping file', () => {
-    const path = write('list.yaml', '- a\n- b\n')
-    expect(() => applyConfigOverride({}, { overrideFile: path })).toThrow(
-      /could not parse YAML override file/,
-    )
-  })
-})
-
 describe('buildStartOverride', () => {
   const dir = mkdtempSync(join(tmpdir(), 'agent-start-override-'))
   const write = (name: string, body: string): string => {
@@ -260,7 +211,7 @@ describe('buildStartOverride', () => {
   })
 
   it('rejects a malformed --repo value', () => {
-    expect(() => buildStartOverride({ repo: ['a/b/c'] })).toThrow(/--repo must be/)
+    expect(() => buildStartOverride({ repo: ['a/b/c'] })).toThrow(/must be "name" or "owner\/name"/)
   })
 })
 

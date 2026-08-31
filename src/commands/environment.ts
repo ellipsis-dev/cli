@@ -3,16 +3,9 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { api } from '../lib/api'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
-import { repoFromCwd } from '../lib/git'
 import { formatTs, printJson, printTable, printYaml, runAction } from '../lib/output'
-import { effectiveEnvironmentDefault } from '../lib/sessions'
-import { resolveRepoFlag } from './config'
 import { readConfigFile } from './session'
-import type {
-  EnvironmentConfig,
-  EnvironmentDefaults,
-  SavedEnvironment,
-} from '../lib/types'
+import type { EnvironmentConfig, SavedEnvironment } from '../lib/types'
 
 const DEFAULT_ENVIRONMENT_PATH = 'agents/environments/my_environment.yaml'
 
@@ -91,7 +84,7 @@ export function registerEnvironment(program: Command): void {
         console.log(
           'Reference it from agent configs (`environment: ' +
             e.name +
-            '`) or make it the default: `agent environment default set ' +
+            '`) or start a session in it: `agent session start -e ' +
             e.name +
             '`.',
         )
@@ -137,143 +130,6 @@ export function registerEnvironment(program: Command): void {
         await api().environments.delete(environmentId)
         if (opts.json) printJson({ id: environmentId, deleted: true })
         else console.log(`✓ deleted ${environmentId}`)
-      })
-    })
-
-  // ------------------------------- defaults --------------------------------
-  // The default-environment ladder a config-less session resolves: repo
-  // default -> account default -> the built-in basic sandbox. Same rung
-  // addressing as `agent config default`.
-  const defaults = apiRoutes(
-    alsoKnownAs(
-      environment
-        .command('default')
-        .description('Show or set which environment serves sessions that name none'),
-      'defaults',
-    ),
-    'GET /v1/environments/defaults',
-  )
-    .option('--json', 'output raw JSON')
-    // Bare `agent environment default`: the effective default for the repo
-    // you're standing in, computed locally from GET /defaults + the origin
-    // remote (the same ladder session start resolves server-side).
-    .action(async (opts: { json?: boolean }) => {
-      await runAction(async () => {
-        const ladder = await api().environments.defaults.list()
-        const repo = repoFromCwd(process.cwd())
-        const effective = effectiveEnvironmentDefault(ladder, repo ?? null)
-        if (opts.json) {
-          printJson({ repository: repo ?? null, effective: effective?.id ?? null })
-          return
-        }
-        if (!effective) {
-          console.log(
-            repo
-              ? `no default environment for ${repo} or the account (sessions get the basic sandbox)`
-              : 'no account default environment set (sessions get the basic sandbox)',
-          )
-          return
-        }
-        const rung = effective.rung === 'repo' ? `repo default for ${repo}` : 'account default'
-        console.log(`using environment "${effective.id}" (${rung})`)
-      })
-    })
-
-  apiRoutes(
-    alsoKnownAs(
-      defaults
-        .command('list')
-        .description('List every default environment that is set, account rung and per-repo rungs'),
-      'ls',
-    ),
-    'GET /v1/environments/defaults',
-  )
-    .option('--json', 'output raw JSON')
-    .action(async (_opts: { json?: boolean }, cmd: Command) => {
-      await runAction(async () => {
-        const client = api()
-        const ladder = await client.environments.defaults.list()
-        if (cmd.optsWithGlobals().json) {
-          printJson(ladder)
-          return
-        }
-        const rungs: [string, string][] = [
-          ...(ladder.account ? ([['account', ladder.account]] as [string, string][]) : []),
-          ...Object.entries(ladder.repositories),
-        ]
-        if (rungs.length === 0) {
-          console.log('No default environments set. Sessions get the basic sandbox.')
-          return
-        }
-        const names = new Map(
-          (await client.environments.list()).environments.map((e) => [e.id, e.name]),
-        )
-        printTable(
-          ['RUNG', 'ENVIRONMENT', 'ENVIRONMENT ID'],
-          rungs.map(([rung, id]) => [rung, names.get(id) ?? id, id]),
-        )
-      })
-    })
-
-  apiRoutes(
-    defaults
-      .command('set <environment-id>')
-      .description('Set the account default environment, or a repo default with --repo'),
-    'PUT /v1/environments/defaults',
-  )
-    .option(
-      '-r, --repo [repository]',
-      'target a repo rung: "owner/name", or no value for the repo you are standing in',
-    )
-    .option('--json', 'output raw JSON')
-    .action(
-      async (
-        environmentId: string,
-        opts: { repo?: string | boolean; json?: boolean },
-        cmd: Command,
-      ) => {
-        await runAction(async () => {
-          const repository = resolveRepoFlag(opts.repo)
-          const ladder = await api().environments.defaults.set({
-            environment: environmentId,
-            ...(repository ? { repository } : {}),
-          })
-          if (cmd.optsWithGlobals().json) {
-            printJson(ladder)
-            return
-          }
-          const rung = repository ? `default for ${repository}` : 'account default'
-          // Echo the id the ladder now holds for the rung we just wrote, so a
-          // name argument comes back resolved. Only that rung, never the
-          // fallback below it.
-          const set = effectiveEnvironmentDefault(ladder, repository ?? null)
-          const id = repository ? (set?.rung === 'repo' ? set.id : undefined) : ladder.account
-          console.log(`✓ set ${rung} to ${id ?? environmentId}`)
-        })
-      },
-    )
-
-  apiRoutes(
-    alsoKnownAs(
-      defaults
-        .command('clear')
-        .description('Clear the account default environment, or a repo default with --repo'),
-      'rm',
-      'delete',
-    ),
-    'DELETE /v1/environments/defaults',
-  )
-    .option(
-      '-r, --repo [repository]',
-      'target a repo rung: "owner/name", or no value for the repo you are standing in',
-    )
-    .action(async (opts: { repo?: string | boolean }) => {
-      await runAction(async () => {
-        const repository = resolveRepoFlag(opts.repo)
-        await api().environments.defaults.delete({ repository })
-        console.log(
-          `✓ cleared ${repository ? `default environment for ${repository}` : 'account default environment'}`,
-        )
       })
     })
 
