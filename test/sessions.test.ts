@@ -9,7 +9,6 @@ import {
   composerModelOptions,
   composerPickerRows,
   connectability,
-  effectiveEnvironmentDefault,
   environmentOptions,
   environmentPane,
   environmentSectionAt,
@@ -26,7 +25,11 @@ import {
   mcpServerName,
   oneLine,
   paneEquals,
+  paneWithRepository,
+  parseRepo,
   resolveRepoFullName,
+  startRequestFromConfig,
+  withRepository,
   scriptRowLines,
   parseVariableEntry,
   repositoryRefLabel,
@@ -562,32 +565,37 @@ describe('composerPickerRows', () => {
 })
 
 describe('applyComposerChoices', () => {
-  // Nothing stated about the environment: no name, and a null pane, so the
-  // server's own ladder resolves it.
-  const untouched = { environment: null, model: null, pane: null }
+  // Nothing picked: no agent, no environment name, a null pane — the base
+  // request (and, with an agent, its config) is the whole message.
+  const untouched = { agent: null, environment: null, model: null, pane: null }
 
   it('leaves the base request alone when nothing was picked', () => {
-    expect(applyComposerChoices({ prompt: 'hi', repository: 'acme/api' }, untouched)).toEqual({
+    const base = {
       prompt: 'hi',
-      repository: 'acme/api',
-    })
+      environment: { repositories: [{ owner: 'acme', name: 'api' }] },
+    }
+    expect(applyComposerChoices(base, untouched)).toEqual(base)
   })
 
-  it('keeps the context repo, which picks the repo rung of the defaults ladder', () => {
+  it('keeps the context repo and patches the model as a claude block', () => {
     const req = applyComposerChoices(
-      { repository: 'acme/api' },
+      { environment: { repositories: [{ owner: 'acme', name: 'api' }] } },
       { ...untouched, model: 'claude-opus-5' },
     )
-    expect(req.override).toEqual({ claude: { model: 'claude-opus-5' } })
-    expect(req.repository).toBe('acme/api')
+    expect(req.claude).toEqual({ model: 'claude-opus-5' })
+    expect(req.environment).toEqual({ repositories: [{ owner: 'acme', name: 'api' }] })
   })
 
-  // A named environment ships alone: the pane still matches it, so re-stating
-  // its lists could only say them worse.
-  it('names a chosen environment on the request, not in the override', () => {
+  // A named environment ships as the string, which re-picks it wholesale: the
+  // pane still matches it, so re-stating its lists could only say them worse.
+  it('names a chosen environment on the request, over the pane', () => {
     const req = applyComposerChoices(
       { prompt: 'ship it' },
-      { ...untouched, environment: 'env_1', pane: { ...EMPTY_PANE, variables: [{ name: 'A', value: '1' }] } },
+      {
+        ...untouched,
+        environment: 'env_1',
+        pane: { ...EMPTY_PANE, variables: [{ name: 'A', value: '1' }] },
+      },
     )
     expect(req).toEqual({ prompt: 'ship it', environment: 'env_1' })
   })
@@ -600,26 +608,44 @@ describe('applyComposerChoices', () => {
     expect(req).toEqual({
       prompt: 'ship it',
       environment: 'env_1',
-      override: { claude: { model: 'claude-fable-5' } },
+      claude: { model: 'claude-fable-5' },
     })
   })
 
-  // The launcher never sends a config source, so the server can't 400 the
-  // config + environment combination.
-  it('never sends a config id', () => {
-    const req = applyComposerChoices({}, { ...untouched, environment: 'env_1' })
-    expect(req).not.toHaveProperty('config_id')
+  it('starts from a picked agent config', () => {
+    expect(applyComposerChoices({}, { ...untouched, agent: 'cfg_1' })).toEqual({
+      from_config_id: 'cfg_1',
+    })
+  })
+
+  // With an agent picked and the environment rows untouched, the config's own
+  // environment rules: keeping the base request's detected-repo merge would
+  // silently grow the config's checkout set.
+  it('drops the base environment when an agent is picked and the rows are untouched', () => {
+    const req = applyComposerChoices(
+      { environment: { repositories: [{ owner: 'acme', name: 'api' }] } },
+      { ...untouched, agent: 'cfg_1' },
+    )
+    expect(req).toEqual({ from_config_id: 'cfg_1' })
+  })
+
+  it('keeps a named environment (or the pane) alongside a picked agent', () => {
+    expect(
+      applyComposerChoices({}, { ...untouched, agent: 'cfg_1', environment: 'env_1' }),
+    ).toEqual({ from_config_id: 'cfg_1', environment: 'env_1' })
+    expect(
+      applyComposerChoices({}, { ...untouched, agent: 'cfg_1', pane: EMPTY_PANE }).environment,
+    ).toEqual({ repositories: [], variables: [], mcp_servers: [] })
   })
 
   it('does not mutate the request it was given', () => {
-    const base = { repository: 'acme/api' }
+    const base = { prompt: 'hi' }
     applyComposerChoices(base, { ...untouched, environment: 'env_1' })
-    expect(base).toEqual({ repository: 'acme/api' })
+    expect(base).toEqual({ prompt: 'hi' })
   })
 
-  // The whole point of the pane: without an environment name it IS the sandbox,
-  // and every list in an override replaces the resolved one — so all three ship
-  // together, empty included, or the ladder would fill the gaps back in.
+  // The whole point of the pane: without an environment name it IS the
+  // sandbox, shipped as the request's own environment object.
   it('ships the whole pane when no environment is named', () => {
     const req = applyComposerChoices(
       {},
@@ -634,23 +660,23 @@ describe('applyComposerChoices', () => {
       },
     )
     expect(req).toEqual({
-      override: {
-        environment: {
-          repositories: [{ owner: 'acme', name: 'api', ref: 'main' }],
-          variables: [{ name: 'NODE_ENV', value: 'production' }],
-          mcp_servers: [{ name: 'linear' }],
-        },
+      environment: {
+        repositories: [{ owner: 'acme', name: 'api', ref: 'main' }],
+        variables: [{ name: 'NODE_ENV', value: 'production' }],
+        mcp_servers: [{ name: 'linear' }],
       },
     })
   })
 
-  // The [empty] pick is the pane emptied, and empty arrays are how "nothing" is
-  // said: omitting them would let the ladder resolve an environment instead.
+  // The [empty] pick is the pane emptied, and empty arrays are how "nothing"
+  // is said over the bare ad-hoc base.
   it('clears every list for an empty pane', () => {
-    const req = applyComposerChoices({ repository: 'acme/api' }, { ...untouched, pane: EMPTY_PANE })
+    const req = applyComposerChoices(
+      { environment: { repositories: [{ owner: 'acme', name: 'api' }] } },
+      { ...untouched, pane: EMPTY_PANE },
+    )
     expect(req).toEqual({
-      repository: 'acme/api',
-      override: { environment: { repositories: [], variables: [], mcp_servers: [] } },
+      environment: { repositories: [], variables: [], mcp_servers: [] },
     })
   })
 
@@ -659,17 +685,17 @@ describe('applyComposerChoices', () => {
       {},
       { ...untouched, pane: { ...EMPTY_PANE, variables: [{ name: 'API_TOKEN', value: null }] } },
     )
-    expect(req.override?.environment).toMatchObject({ variables: [{ name: 'API_TOKEN' }] })
+    expect(req.environment).toMatchObject({ variables: [{ name: 'API_TOKEN' }] })
   })
 
-  // Compute, image and hooks are scalars in merging object overrides, so only
-  // the set fields ship — an unset one keeps whatever the server resolves.
+  // Compute, image and hooks are scalars in a merging object, so only the set
+  // fields ship — an unset one keeps whatever the server resolves.
   it('sends only the set compute fields', () => {
     const req = applyComposerChoices(
       {},
       { ...untouched, pane: { ...EMPTY_PANE, compute: { cpu: '4', memory: '16GB', timeout: '' } } },
     )
-    expect(req.override?.environment).toMatchObject({ compute: { cpu: 4, memory: '16GB' } })
+    expect(req.environment).toMatchObject({ compute: { cpu: 4, memory: '16GB' } })
   })
 
   it('sends only the set image fields', () => {
@@ -677,7 +703,7 @@ describe('applyComposerChoices', () => {
       {},
       { ...untouched, pane: { ...EMPTY_PANE, image: { dockerfile_append: '', setup: 'npm install' } } },
     )
-    expect(req.override?.environment).toMatchObject({ image: { setup: 'npm install' } })
+    expect(req.environment).toMatchObject({ image: { setup: 'npm install' } })
   })
 
   it('sends only the set hook fields', () => {
@@ -685,7 +711,7 @@ describe('applyComposerChoices', () => {
       {},
       { ...untouched, pane: { ...EMPTY_PANE, hooks: { post_start: 'doppler setup', post_clone: '' } } },
     )
-    expect(req.override?.environment).toMatchObject({ hooks: { post_start: 'doppler setup' } })
+    expect(req.environment).toMatchObject({ hooks: { post_start: 'doppler setup' } })
   })
 
   // A server the pane was seeded with keeps its own entry, so a definition the
@@ -705,7 +731,7 @@ describe('applyComposerChoices', () => {
         },
       },
     )
-    expect(req.override?.environment).toMatchObject({
+    expect(req.environment).toMatchObject({
       mcp_servers: [seeded, { name: 'docs', url: 'https://mcp.example.com' }],
     })
   })
@@ -1075,18 +1101,19 @@ describe('environmentSectionSummary', () => {
     ],
     variables: [{ name: 'API_TOKEN', value: null }],
     mcpServers: [{ name: 'linear', command: null, url: null }],
-    compute: { cpu: '4', memory: '', timeout: '' },
+    compute: { cpu: '4', memory: '16GB', timeout: '' },
     image: { dockerfile_append: 'RUN true', setup: '' },
   }
 
-  // What of the section is in the run, on one line — a pinned ref rides its
-  // repo's name.
-  it('reads out the checked names and the fields holding a value', () => {
-    expect(environmentSectionSummary(pane, 'repositories')).toBe('acme/api, acme/web@dev')
+  // What of the section is in the run, on one line: repos by bare name (a
+  // pinned ref rides along), variables/image/hooks as counts, compute the way
+  // humans quote machines.
+  it('summarizes each section for its collapsed row', () => {
+    expect(environmentSectionSummary(pane, 'repositories')).toBe('api, web@dev')
     expect(environmentSectionSummary(pane, 'mcpServers')).toBe('linear')
-    expect(environmentSectionSummary(pane, 'variables')).toBe('API_TOKEN')
-    expect(environmentSectionSummary(pane, 'image')).toBe('dockerfile_append')
-    expect(environmentSectionSummary(pane, 'compute')).toBe('cpu 4')
+    expect(environmentSectionSummary(pane, 'variables')).toBe('1 set')
+    expect(environmentSectionSummary(pane, 'image')).toBe('1 set')
+    expect(environmentSectionSummary(pane, 'compute')).toBe('4 vCPU, 16 GiB')
   })
 
   it('is empty when the section holds nothing', () => {
@@ -1101,58 +1128,26 @@ describe('environmentOptions', () => {
     { id: 'env_2', name: 'web-e2e' },
   ]
 
-  // Every rung the environment holds is named on its row, so the list says why
-  // one of them is checked.
-  it('tags each environment with the default rungs it holds', () => {
-    const { options, picked } = environmentOptions(
-      environments,
-      { account: 'env_1', repositories: { 'acme/api': 'env_2' } },
-      'acme/api',
-    )
+  // The resting basic sandbox leads (index 0 is the untouched pick), the
+  // built-in [empty] closes the list.
+  it('leads with the basic sandbox and ends with [empty]', () => {
+    const options = environmentOptions(environments)
     expect(options.map((o) => o.label)).toEqual([
-      'backend (account default)',
-      'web-e2e (default for acme/api)',
+      'basic sandbox',
+      'backend',
+      'web-e2e',
       '[empty]',
     ])
-    // The repo rung wins for the repo we are standing in.
-    expect(picked).toBe(1)
+    expect(options[0].id).toBeNull()
   })
 
-  it('checks the account rung outside a repo with a default', () => {
-    const { options, picked } = environmentOptions(
+  // A synced environment's row explains where its definition lives.
+  it('names the source file a synced environment came from', () => {
+    const options = environmentOptions(
       environments,
-      { account: 'env_1', repositories: {} },
-      null,
-    )
-    expect(options[picked].id).toBe('env_1')
-  })
-
-  // Only then is there no name to show, so the server's own resolution stands.
-  it('adds a Default row when no rung resolves', () => {
-    const { options, picked } = environmentOptions(
-      environments,
-      { account: null, repositories: {} },
-      'acme/api',
-    )
-    expect(options[0]).toEqual({ id: null, label: 'Default' })
-    expect(picked).toBe(0)
-  })
-
-  it('adds the Default row while the ladder has not landed', () => {
-    const { options, picked } = environmentOptions(environments, null, 'acme/api')
-    expect(options[picked]).toEqual({ id: null, label: 'Default' })
-  })
-
-  // A synced environment's row explains where its definition lives, ahead of
-  // the default rungs it holds.
-  it('names the source file before the default rungs', () => {
-    const { options } = environmentOptions(
-      environments,
-      { account: 'env_1', repositories: {} },
-      null,
       new Map([['env_1', 'acme/api/e.yaml @ abcdef1']]),
     )
-    expect(options[0].label).toBe('backend (acme/api/e.yaml @ abcdef1, account default)')
+    expect(options[1].label).toBe('backend (acme/api/e.yaml @ abcdef1)')
   })
 })
 
@@ -1214,28 +1209,58 @@ describe('environmentSourceLabel', () => {
   })
 })
 
-describe('effectiveEnvironmentDefault', () => {
-  const ladder = { account: 'env_account', repositories: { 'Acme/API': 'env_repo' } }
+describe('start request shaping', () => {
+  it('parses a repository value into an environment entry', () => {
+    expect(parseRepo('acme/api')).toEqual({ owner: 'acme', name: 'api' })
+    expect(parseRepo('api')).toEqual({ name: 'api' })
+    expect(() => parseRepo('a/b/c')).toThrow(/must be "name" or "owner\/name"/)
+  })
 
-  it('prefers the repo rung over the account rung', () => {
-    expect(effectiveEnvironmentDefault(ladder, 'acme/api')).toEqual({
-      id: 'env_repo',
-      rung: 'repo',
+  // Only the keys POST /v1/sessions accepts as per-session patches; a file's
+  // trigger/input/ellipsis blocks describe a saved agent, not a run.
+  it('maps an inline config onto the start request keys', () => {
+    expect(
+      startRequestFromConfig({
+        ellipsis: { name: 'my-agent' },
+        claude: { system: 'do it', model: 'claude-opus-5' },
+        environment: { repositories: [{ name: 'api' }] },
+        budget: { session: 5 },
+        trigger: { type: 'cron', schedule: '* * * * *' },
+        input: { json_schema: {} },
+      }),
+    ).toEqual({
+      claude: { system: 'do it', model: 'claude-opus-5' },
+      environment: { repositories: [{ name: 'api' }] },
+      budget: { session: 5 },
     })
   })
 
-  it('falls back to the account rung for another repo, and outside a repo', () => {
-    expect(effectiveEnvironmentDefault(ladder, 'acme/web')).toEqual({
-      id: 'env_account',
-      rung: 'account',
+  it('adds the detected repo to an environment override only when absent', () => {
+    expect(withRepository(undefined, 'acme/api')).toEqual({
+      repositories: [{ owner: 'acme', name: 'api' }],
     })
-    expect(effectiveEnvironmentDefault(ladder, null)).toEqual({
-      id: 'env_account',
-      rung: 'account',
+    expect(
+      withRepository({ repositories: [{ owner: 'acme', name: 'api' }] }, 'acme/api'),
+    ).toEqual({ repositories: [{ owner: 'acme', name: 'api' }] })
+    // A bare-name entry counts as the same repository.
+    expect(withRepository({ repositories: [{ name: 'api' }] }, 'acme/api')).toEqual({
+      repositories: [{ name: 'api' }],
     })
   })
 
-  it('resolves nothing when no rung is set (the basic sandbox)', () => {
-    expect(effectiveEnvironmentDefault({ account: null, repositories: {} }, 'acme/api')).toBeNull()
+  it('leaves the other keys of an environment override in place', () => {
+    expect(withRepository({ variables: [{ name: 'A' }] }, 'api')).toEqual({
+      variables: [{ name: 'A' }],
+      repositories: [{ name: 'api' }],
+    })
+  })
+})
+
+describe('paneWithRepository', () => {
+  it('checks the repo once, and does nothing without one', () => {
+    const pane = paneWithRepository(EMPTY_PANE, 'acme/api')
+    expect(pane.repositories).toEqual([{ fullName: 'acme/api', ref: null }])
+    expect(paneWithRepository(pane, 'acme/api')).toBe(pane)
+    expect(paneWithRepository(pane, null)).toBe(pane)
   })
 })

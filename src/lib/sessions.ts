@@ -742,20 +742,48 @@ export function environmentSectionCount(input: EnvironmentPaneInput, section: Pa
 // A closed section row's value: what of the section is in the run, on one
 // line — the checked names, or the fields holding a value. Empty when nothing
 // is, so the row reads "REPOSITORIES:" the way an unset field does.
+// "N set" for the sections that summarize by count; empty when nothing is.
+function setCount(n: number): string {
+  return n === 0 ? '' : `${n} set`
+}
+
+// A memory value the way humans quote it — "16GB" prints as "16 GiB" (the
+// sandbox allocates binary units); anything unparseable prints as written.
+function memoryLabel(value: string): string {
+  const m = /^(\d+(?:\.\d+)?)\s*(gib|gb|mib|mb)$/i.exec(value.trim())
+  if (!m) return value
+  return `${m[1]} ${m[2].toLowerCase().startsWith('g') ? 'GiB' : 'MiB'}`
+}
+
 export function environmentSectionSummary(
   pane: EnvironmentPaneState,
   section: PaneSection,
 ): string {
+  // Bare repo names: the owner is almost always the account itself, so
+  // repeating it on every entry buys width and no information. A pinned ref
+  // stays, since it changes what is cloned.
   if (section === 'repositories')
     return pane.repositories
-      .map((r) => (r.ref === null ? r.fullName : `${r.fullName}@${r.ref}`))
+      .map((r) => {
+        const name = r.fullName.slice(r.fullName.indexOf('/') + 1)
+        return r.ref === null ? name : `${name}@${r.ref}`
+      })
       .join(', ')
   if (section === 'mcpServers') return pane.mcpServers.map((s) => s.name).join(', ')
-  if (section === 'variables') return pane.variables.map((v) => v.name).join(', ')
-  if (section === 'image') return IMAGE_FIELDS.filter((f) => pane.image[f] !== '').join(', ')
-  if (section === 'hooks') return HOOK_FIELDS.filter((f) => pane.hooks[f] !== '').join(', ')
+  // Values are secrets and names are noise at a glance, so just how many.
+  if (section === 'variables') return setCount(pane.variables.length)
+  if (section === 'image')
+    return setCount(IMAGE_FIELDS.filter((f) => pane.image[f] !== '').length)
+  if (section === 'hooks')
+    return setCount(HOOK_FIELDS.filter((f) => pane.hooks[f] !== '').length)
   return COMPUTE_FIELDS.filter((f) => pane.compute[f] !== '')
-    .map((f) => `${f} ${pane.compute[f]}`)
+    .map((f) =>
+      f === 'cpu'
+        ? `${pane.compute[f]} vCPU`
+        : f === 'memory'
+          ? memoryLabel(pane.compute[f])
+          : `${f} ${pane.compute[f]}`,
+    )
     .join(', ')
 }
 
