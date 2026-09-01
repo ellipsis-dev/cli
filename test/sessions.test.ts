@@ -567,7 +567,7 @@ describe('composerPickerRows', () => {
 describe('applyComposerChoices', () => {
   // Nothing picked: no agent, no environment name, a null pane — the base
   // request (and, with an agent, its config) is the whole message.
-  const untouched = { agent: null, environment: null, model: null, pane: null }
+  const untouched = { environment: null, model: null, pane: null }
 
   it('leaves the base request alone when nothing was picked', () => {
     const base = {
@@ -612,31 +612,6 @@ describe('applyComposerChoices', () => {
     })
   })
 
-  it('starts from a picked agent config', () => {
-    expect(applyComposerChoices({}, { ...untouched, agent: 'cfg_1' })).toEqual({
-      from_config_id: 'cfg_1',
-    })
-  })
-
-  // With an agent picked and the environment rows untouched, the config's own
-  // environment rules: keeping the base request's detected-repo merge would
-  // silently grow the config's checkout set.
-  it('drops the base environment when an agent is picked and the rows are untouched', () => {
-    const req = applyComposerChoices(
-      { environment: { repositories: [{ owner: 'acme', name: 'api' }] } },
-      { ...untouched, agent: 'cfg_1' },
-    )
-    expect(req).toEqual({ from_config_id: 'cfg_1' })
-  })
-
-  it('keeps a named environment (or the pane) alongside a picked agent', () => {
-    expect(
-      applyComposerChoices({}, { ...untouched, agent: 'cfg_1', environment: 'env_1' }),
-    ).toEqual({ from_config_id: 'cfg_1', environment: 'env_1' })
-    expect(
-      applyComposerChoices({}, { ...untouched, agent: 'cfg_1', pane: EMPTY_PANE }).environment,
-    ).toEqual({ repositories: [], variables: [], mcp_servers: [] })
-  })
 
   it('does not mutate the request it was given', () => {
     const base = { prompt: 'hi' }
@@ -1231,7 +1206,7 @@ describe('start request shaping', () => {
     ).toEqual({
       claude: { system: 'do it', model: 'claude-opus-5' },
       environment: { repositories: [{ name: 'api' }] },
-      budget: { session: 5 },
+      budget: 5,
     })
   })
 

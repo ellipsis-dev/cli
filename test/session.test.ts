@@ -174,7 +174,7 @@ describe('buildStartOverride', () => {
         compute: { cpu: 2, memory: '8GB', timeout: '30m' },
         repositories: [{ owner: 'ellipsis-dev', name: 'ellipsis' }, { name: 'solo' }],
       },
-      budget: { session: 0.5 },
+      budget: 0.5,
     })
   })
 
@@ -193,7 +193,7 @@ describe('buildStartOverride', () => {
   it('uses a file override as the base', () => {
     const path = write('base.yaml', 'budget:\n  session: 1\n')
     expect(buildStartOverride({ overrideFile: path, budget: 5 })).toEqual({
-      budget: { session: 5 },
+      budget: 5,
     })
   })
 

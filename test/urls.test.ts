@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appLoginUrl, cliAuthUrl, configUrl, hyperlink, sessionUrl } from '../src/lib/urls'
+import { appLoginUrl, automationUrl, cliAuthUrl, hyperlink, sessionUrl } from '../src/lib/urls'
 
 describe('sessionUrl', () => {
   it('builds the account page link with the session query param', () => {
@@ -15,10 +15,10 @@ describe('sessionUrl', () => {
   })
 })
 
-describe('configUrl', () => {
-  it('builds the agent (config) detail path scoped by account login', () => {
-    expect(configUrl('https://app.ellipsis.dev', 'octocat', 'cfg_123')).toBe(
-      'https://app.ellipsis.dev/octocat/agents/configs/cfg_123',
+describe('automationUrl', () => {
+  it('builds the automation detail path scoped by account login', () => {
+    expect(automationUrl('https://app.ellipsis.dev', 'octocat', 'agent_123')).toBe(
+      'https://app.ellipsis.dev/octocat/automations/agent_123',
     )
   })
 })

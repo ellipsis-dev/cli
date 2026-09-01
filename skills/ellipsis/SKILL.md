@@ -382,7 +382,7 @@ Start and follow work:
 
 ```sh
 agent session start "triage the failing CI on api"   # a bare ad-hoc session
-agent session start --config <config-id> --watch     # stream until terminal
+agent automation run <automation-id> --input '{...}'   # invoke an automation as defined
 agent session start --config-file agents/my_agent.yaml --watch
 agent session start --template ellipsis-helper --watch
 agent session get <session-id> --watch               # follow a running session
@@ -405,7 +405,7 @@ completes.
 Search and audit what agents have done:
 
 ```sh
-agent session list --limit 20                # --config, --source, --author, --days, --since
+agent session list --limit 20                # --automation, --source, --author, --days, --since
 agent session search "webhook retries"       # transcripts, recaps, created PRs, similarity
 agent session search "owner/repo#512"        # finds the session that opened that PR
 agent session record <session-id>            # the stored transcript, one line per record
@@ -438,20 +438,21 @@ than an error.
 Author and deploy agents:
 
 ```sh
-agent config init agents/my_agent.yaml       # scaffold a starter config locally
-agent config list                            # saved configs with their source file
-agent config get <config-id>                 # one config as YAML
-agent config create --file agents/my_agent.yaml   # create it, live at once
-agent config edit <id> --file agents/my_agent.yaml   # replace its definition, live at once
-agent config delete <id>                     # delete it; it stops and frees its name
-agent config link <id> --repo api            # move it into a repo, via a pull request
-agent config unlink <id>                     # take it over from its file
+agent automation init agents/my_agent.yaml   # scaffold a starter definition locally
+agent automation list                        # automations with their source file
+agent automation get <id>                    # one automation as YAML
+agent automation run <id> --input '{...}'    # invoke it exactly as defined
+agent automation create --file agents/my_agent.yaml   # create it, live at once
+agent automation edit <id> --file agents/my_agent.yaml   # replace its definition, live at once
+agent automation delete <id>                 # delete it; it stops and frees its name
+agent automation link <id> --repo api        # move it into a repo, via a pull request
+agent automation unlink <id>                 # take it over from its file
 agent template list                          # built-in templates and their slugs
 agent model list                             # the model ids valid under claude.model
 ```
 
 An agent is owned by one of two writers, and that is what these verbs move.
-`agent config create` with no `--repo` creates it through the API alone: no
+`agent automation create` with no `--repo` creates it through the API alone: no
 file, live immediately, changed by `config edit`. With `--repo` it instead
 opens a pull request adding the file, exactly as the dashboard does, and the
 agent goes live when that merges — thereafter the file is what changes it, and

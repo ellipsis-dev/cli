@@ -94,12 +94,8 @@ export function registerSession(program: Command): void {
       'what the agent should do this session (positional shorthand for --prompt)',
     )
     .option(
-      '-c, --config <config-id>',
-      "start from a saved agent config, by id or the agent's name (default: the bare ad-hoc config)",
-    )
-    .option(
       '-f, --config-file <path>',
-      'start from an inline agent config (.yaml/.yml or .json file)',
+      'start from an inline agent config (.yaml/.yml or .json file); to run a saved automation use `agent automation run`',
     )
     .option(
       '-t, --template <slug>',
@@ -107,11 +103,11 @@ export function registerSession(program: Command): void {
     )
     .option(
       '-e, --environment <environment-id>',
-      "run in a saved environment, by id or name (beats the agent config's own reference)",
+      "run in a saved environment, by id or name (default: the organization's default environment)",
     )
     .option(
       '--override <yaml>',
-      'partial patch (YAML/JSON) of AgentConfig keys, deep-merged onto the base config, e.g. "budget:\\n  session: 5"',
+      'partial patch (YAML/JSON) of AgentConfig keys merged onto the inline config, e.g. "claude:\\n  effort: high"',
     )
     .option(
       '--override-file <path>',
@@ -164,7 +160,6 @@ export function registerSession(program: Command): void {
       async (
         promptWords: string[],
         opts: {
-          config?: string
           configFile?: string
           template?: string
           environment?: string
@@ -188,12 +183,12 @@ export function registerSession(program: Command): void {
         },
       ) => {
         await runAction(async () => {
-          // A config source is optional: with none, the server runs on the
-          // platform default config and the prompt is the sole instruction.
-          // At most one source may be given.
-          const sources = [opts.config, opts.configFile, opts.template].filter(Boolean)
+          // An inline config source is optional: with none, the session runs
+          // on the bare ad-hoc config in the organization's defaults and the
+          // prompt is the sole instruction. At most one source may be given.
+          const sources = [opts.configFile, opts.template].filter(Boolean)
           if (sources.length > 1) {
-            throw new Error('provide only one of --config / --config-file / --template')
+            throw new Error('provide only one of --config-file / --template')
           }
           // An unquoted prompt arrives as one word per argv entry, so join it
           // back into a sentence: `agent fix the tests` means one instruction.
@@ -220,18 +215,17 @@ export function registerSession(program: Command): void {
           if (opts.connect && opts.json) {
             throw new Error('--connect is interactive and cannot be combined with --json')
           }
-          // The request body doubles as the config patch: every AgentConfig
-          // key on it deep-merges onto the base (`from_config_id`, or the
-          // bare ad-hoc config when none is named).
+          // The flat raw-session body: AgentConfig blocks merge onto the bare
+          // ad-hoc config; there is no base-config pointer (a saved
+          // automation is invoked with `agent automation run` instead).
           let req: StartAgentSessionRequest = {}
-          if (opts.config) req.from_config_id = opts.config
           if (opts.configFile) {
             req = { ...req, ...startRequestFromConfig(readConfigFile(opts.configFile)) }
           }
           // Templates left the start request (#6394): resolve the slug to its
-          // YAML via GET /v1/agents/templates/{slug} and start inline.
+          // YAML via GET /v1/templates/{slug} and start inline.
           if (opts.template) {
-            const template = await api().agents.templates.get(opts.template)
+            const template = await api().templates.get(opts.template)
             req = { ...req, ...startRequestFromConfig(parseYaml(template.yaml)) }
           }
           // Sugar flags (--model, --repo, --cpu, ...) and the raw --override
@@ -262,17 +256,11 @@ export function registerSession(program: Command): void {
           // Appended to the initial user query at build time; gives this
           // session instructions on top of the config's shared system prompt.
           if (promptText) req.prompt = promptText
-          // Platform housekeeping rides the request's own `ellipsis` block:
-          // --rebuild skips the image cache for the initial provision (wakes
-          // cache as usual; the fresh build's snapshot refreshes the cache).
-          // Partial on the wire (the server defaults what is omitted); the
-          // generated type marks defaulted fields required, hence the cast.
-          const ellipsis: Record<string, unknown> = {}
-          if (Object.keys(opts.metadata).length > 0) ellipsis.metadata = opts.metadata
-          if (opts.rebuild) ellipsis.force_rebuild = true
-          if (Object.keys(ellipsis).length > 0) {
-            req.ellipsis = ellipsis as StartAgentSessionRequest['ellipsis']
-          }
+          // Run settings ride top-level: --rebuild skips the image cache for
+          // the initial provision (wakes cache as usual; the fresh build's
+          // snapshot refreshes the cache).
+          if (Object.keys(opts.metadata).length > 0) req.metadata = opts.metadata
+          if (opts.rebuild) req.force_rebuild = true
           // A promptless start opens idle: no fabricated kickoff message,
           // Claude Code waits at the prompt like a local `claude` (the
           // server-side contract since #6394 — nothing extra to send).
@@ -280,22 +268,12 @@ export function registerSession(program: Command): void {
           const client = api()
           const { session } = await client.sessions.start(req)
 
-          // Say which agent the server picked when it came from the defaults
-          // ladder, so a bare `agent` never silently runs an unexpected config.
-          // The connect UI shows the config in its footer meta line (anything
-          // printed before the app would land in scrollback); every other
-          // mode prints this note.
-          const resolvedConfigName = sessionConfigName(session)
+          // Transparency for the environment resolution: say which environment
+          // the server resolved when the session didn't name one (the
+          // organization default, or the built-in basic sandbox). The connect
+          // UI shows it in its footer meta line (anything printed before the
+          // app would land in scrollback); every other mode prints this note.
           let configNote: string | undefined
-          if (resolvedConfigName) {
-            if (session.agent.source === 'repo_default') {
-              configNote = `using config "${resolvedConfigName}" (repo default)`
-            } else if (session.agent.source === 'account_default') {
-              configNote = `using config "${resolvedConfigName}" (account default)`
-            }
-          }
-          // Same transparency for the environment ladder: say which
-          // environment the server resolved when the session didn't name one.
           const environmentSource = session.environment?.source
           if (session.environment?.environment_id && environmentSource !== 'request') {
             const label =
@@ -325,7 +303,7 @@ export function registerSession(program: Command): void {
               await watchSessionStreaming(client, session.id, FALLBACK_POLL_INTERVAL_SECONDS, false)
               return
             }
-            await startConnect(session, undefined, resolvedConfigName ?? undefined)
+            await startConnect(session, undefined, sessionConfigName(session) ?? undefined)
             return
           }
 
@@ -374,7 +352,7 @@ export function registerSession(program: Command): void {
     'GET /v1/sessions',
     'GET /v1/integrations/github/members to resolve --author',
   )
-    .option('-c, --config <config-id>', 'only sessions run by this saved agent config')
+    .option('--automation <automation-id>', 'only sessions this automation started, by id or name')
     .option(
       '-s, --source <source>',
       'only sessions from this source (repeatable)',
@@ -392,7 +370,7 @@ export function registerSession(program: Command): void {
     .option('--json', 'output raw JSON')
     .action(
       async (opts: {
-        config?: string
+        automation?: string
         source: string[]
         author?: string
         days?: number
@@ -405,7 +383,7 @@ export function registerSession(program: Command): void {
           const client = api()
           const sessions = (
             await client.sessions.list({
-              config_id: opts.config,
+              automation: opts.automation,
               source: opts.source.length ? (opts.source as AgentSessionSource[]) : undefined,
               author_id: opts.author ? await resolveAuthorId(client, opts.author) : undefined,
               days: opts.days,
@@ -455,8 +433,8 @@ export function registerSession(program: Command): void {
       'only sessions attributed to this GitHub login (see `agent github members`)',
     )
     .option(
-      '-c, --config <config-id>',
-      'only sessions run by this saved agent config (repeatable)',
+      '--automation <automation-id>',
+      'only sessions this automation started (repeatable)',
       collect,
       [] as string[],
     )
@@ -489,7 +467,7 @@ export function registerSession(program: Command): void {
         query: string,
         opts: {
           author?: string
-          config: string[]
+          automation: string[]
           source: string[]
           repo?: string
           status: string[]
@@ -509,7 +487,7 @@ export function registerSession(program: Command): void {
             scope: opts.scope as SessionSearchScope,
             source: opts.source.length ? (opts.source as AgentSessionSource[]) : undefined,
             author_id: authorId === undefined ? undefined : [authorId],
-            config_id: opts.config.length ? opts.config : undefined,
+            config_id: opts.automation.length ? opts.automation : undefined,
             session_ids: opts.session.length ? opts.session : undefined,
             repo: opts.repo,
             status: opts.status.length ? (opts.status as AgentSessionStatus[]) : undefined,
@@ -921,7 +899,7 @@ export function buildStartOverride(opts: {
   if (opts.repo && opts.repo.length) environment.repositories = opts.repo.map(parseRepo)
   if (Object.keys(environment).length) sugar.environment = environment
 
-  if (opts.budget !== undefined) sugar.budget = { session: opts.budget }
+  if (opts.budget !== undefined) sugar.budget = opts.budget
 
   const merged = deepMerge(base, sugar)
   return Object.keys(merged).length ? merged : undefined

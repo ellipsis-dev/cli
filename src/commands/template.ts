@@ -16,12 +16,12 @@ export function registerTemplate(program: Command): void {
         .description('List the built-in agent templates and the slugs --template takes'),
       'ls',
     ),
-    'GET /v1/agents/templates',
+    'GET /v1/templates',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
-        const { templates } = await api().agents.templates.list()
+        const { templates } = await api().templates.list()
         if (opts.json) {
           printJson(templates)
           return
@@ -36,7 +36,7 @@ export function registerTemplate(program: Command): void {
           ['SLUG', 'NAME', 'DESCRIPTION'],
           templates.map((t) => [t.slug, t.name, t.description]),
         )
-        console.log('\nCreate one: agent config init --template <slug> --repo <name>')
+        console.log('\nCreate one: agent automation init --template <slug> --repo <name>')
       })
     })
 }

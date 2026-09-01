@@ -173,15 +173,11 @@ export function registerAnalytics(program: Command): void {
           // The pull-requests endpoint filters by raw GitHub account types
           // ("User"/"Bot"), unlike the all|user|bot enum elsewhere; map here so
           // the CLI flag reads the same across subcommands.
-          const accountTypes =
-            opts.accountType === 'user'
-              ? ['User']
-              : opts.accountType === 'bot'
-                ? ['Bot']
-                : undefined
+          const accountType =
+            opts.accountType === 'user' ? 'User' : opts.accountType === 'bot' ? 'Bot' : undefined
           const res = await api().analytics.pullRequests({
             ...windowQuery(opts),
-            account_type: accountTypes,
+            account_type: accountType,
             status: opts.status.length > 0 ? opts.status : undefined,
           })
           if (opts.json) {

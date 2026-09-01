@@ -65,7 +65,7 @@ export function resolveCommandPath(program: Command, path: string[]): Command | 
 }
 
 async function startHelperSession(): Promise<void> {
-  const template = await api().agents.templates.get(HELPER_TEMPLATE_SLUG)
+  const template = await api().templates.get(HELPER_TEMPLATE_SLUG)
   const req: StartAgentSessionRequest = startRequestFromConfig(
     parseYaml(template.yaml) as Record<string, unknown>,
   )
