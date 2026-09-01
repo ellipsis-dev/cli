@@ -1,4 +1,29 @@
-import { clampLines, type ItemKind, type TranscriptItem } from '@ellipsis-dev/sdk/store'
+import {
+  BRANCH_GLYPH,
+  clampLines,
+  gutterFor,
+  isToolActivity,
+  isToolFold,
+  LIVE_GLYPH,
+  USER_BAR,
+  type ItemKind,
+  type TranscriptItem,
+} from '@ellipsis-dev/sdk/store'
+
+// The layout itself — which line wears which mark, what nests under what —
+// is the SDK's (@ellipsis-dev/sdk/store layout.ts), shared with the
+// dashboard's chat so the two can only disagree in colour and typography.
+// Re-exported here for the callers that grew up importing them from this file.
+export {
+  BRANCH_GLYPH,
+  gutterFor,
+  isAgentSpeech,
+  isToolActivity,
+  layOutItems,
+  LIVE_GLYPH,
+  USER_BAR,
+  type PlacedItem,
+} from '@ellipsis-dev/sdk/store'
 import { fitLines, hasMarkdown, renderMarkdown, visibleWidth } from '../lib/markdown'
 import { theme } from '../lib/theme'
 
@@ -100,25 +125,6 @@ export type TranscriptRow = {
   pulse?: boolean
 }
 
-// The mark on a live line — a tool call running, tokens streaming, a sandbox
-// coming up. It pulses (see TranscriptRow.pulse), which is the app's one
-// "something is happening right now" signal; a settled line takes ✓, ● or ✦
-// instead. Filled, because a pulsing outline reads as flicker rather than a
-// heartbeat.
-export const LIVE_GLYPH = '⏺'
-
-// Your own messages wear a BAR down their left edge rather than a mark on their
-// first row — the same shape the composer you typed them into has, so a message
-// looks like what it was typed in. It is the one gutter that repeats on every
-// row of its item, since a bar that stopped after the first line would read as a
-// glyph rather than an edge.
-export const USER_BAR = '┃'
-
-// The mark on a line nested under the message that produced it: a tool call
-// the agent made while writing that message, and the result that came back.
-// It reads as a branch off the prose above, which is what the nesting means.
-export const BRANCH_GLYPH = '⎿'
-
 // Extra columns between a ⎿ and its text. The glyph's ink runs right up to its
 // cell's edge, so the one space every other mark gets is not enough — the body
 // reads as touching the branch. Applied to every row of the item, so a wrapped
@@ -157,7 +163,7 @@ export function itemRows(
   // message — a turn-opening run branches off nothing, so it wears ● like any
   // other line the agent owns. Either way not ✦: that mark is the
   // infrastructure speaking, which a fold is not.
-  const isFold = item.key.startsWith('grp:')
+  const isFold = isToolFold(item)
   const gutter = isFold ? (opts.nested ? BRANCH_GLYPH : '●') : gutterFor(item)
   const textPad = gutter === BRANCH_GLYPH ? BRANCH_TEXT_PAD : 0
   const width = contentWidth(cols, { indent, textPad })
@@ -201,64 +207,6 @@ export function itemRows(
   }
   if (clamped.more > 0) push([], { clampedLines: clamped.more })
   return rows
-}
-
-// How each visible item is placed in the chat: nested under the message that
-// produced it, or standing on its own.
-//
-// A tool call is not a turn in the conversation — it is something the agent did
-// while writing the message above it. So a run of tool activity (the ● call,
-// its ⎿ result, and any collapsed "Ran N …" fold standing in for them) is
-// indented under the preceding assistant message and marked with the branch
-// glyph, attached with no blank row between. Prose, user messages and notices
-// keep their own gutter mark and their spacing.
-//
-// INDENT is decided by what came last: a run only indents under something the
-// AGENT said (isAgentSpeech: prose or ✻ thinking), because a ⎿ branch under your
-// own message would read as work YOU did — so a turn-opening run stays flat and
-// separated by its own blank row. Pure, for tests.
-export type PlacedItem = {
-  item: TranscriptItem
-  indent: number
-  nested: boolean
-  attach: boolean
-}
-export function layOutItems(items: readonly TranscriptItem[]): PlacedItem[] {
-  const out: PlacedItem[] = []
-  // Whether the last message was the agent's, which is what decides the visual
-  // nesting: only what the agent said gets a ⎿ branch under it.
-  let nestUnder = false
-  for (const item of items) {
-    if (!isToolActivity(item)) {
-      out.push({ item, indent: 0, nested: false, attach: false })
-      nestUnder = isAgentSpeech(item)
-      continue
-    }
-    out.push({
-      item,
-      indent: nestUnder ? NEST_INDENT : 0,
-      nested: nestUnder,
-      // Attach every line of the run: the first to its parent message, the
-      // rest to the line above.
-      attach: nestUnder,
-    })
-  }
-  return out
-}
-
-// Lines that represent work the agent did rather than something it said: a
-// tool call, its result, and the collapsed fold that stands in for a run of
-// them (keyed grp:*, kind 'notice').
-export function isToolActivity(item: TranscriptItem): boolean {
-  return item.kind === 'tool' || item.kind === 'tool_result' || item.key.startsWith('grp:')
-}
-
-// Whether a message is one the AGENT said, which is what a tool run may branch
-// off with its ⎿. Its prose and its ✻ thinking both count — with extended
-// thinking on, thinking is what most runs actually follow. Your own message
-// does not: a branch under your own message reads as work YOU did.
-export function isAgentSpeech(item: TranscriptItem): boolean {
-  return item.kind === 'assistant' || item.kind === 'thinking'
 }
 
 // A live status line — "Generating…", "Running Bash(pytest…)…" — with its
@@ -403,24 +351,6 @@ function isCollapsible(item: TranscriptItem): boolean {
     (item.kind === 'tool_result' || item.kind === 'user') &&
     item.text.split('\n').length > COLLAPSE_LINES
   )
-}
-
-// The sender icon in the 2-column gutter: the cyan ▶ marks a message you sent
-// (the --prompt initial message included) — the SAME glyph and colour the
-// composer's prompt wears, so a message reads as yours whether it is still in
-// the input box or already in the transcript. ● marks the assistant's prose
-// (default foreground; the tool-call ● is green + bold, so the two never read
-// the same), ✦ (dim) marks system/notice lines — the infrastructure speaking.
-// Everything else keeps the SDK's glyph (⎿ results, ✻ thinking) or none.
-//
-// Because your rows already wear ▶, the selection marker is invisible on them:
-// that is the trade for the prompt glyph matching, and the "+N lines" hint
-// still names the key that opens the highlighted block. Pure, for tests.
-export function gutterFor(item: TranscriptItem): string {
-  if (item.kind === 'user') return USER_BAR
-  if (item.kind === 'assistant') return '●'
-  if (item.kind === 'system' || item.kind === 'notice') return '✦'
-  return item.gutter ?? ''
 }
 
 // Colour + weight for each transcript item kind, matched loosely to Claude Code.
