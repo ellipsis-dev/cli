@@ -858,7 +858,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     for (const placed of layOutItems(visible)) {
       out.push(
         ...itemRows(placed.item, cols, {
-          indent: placed.indent,
+          indent: placed.nested ? NEST_INDENT : 0,
           nested: placed.nested,
           attach: placed.attach,
         }),

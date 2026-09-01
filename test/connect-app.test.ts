@@ -238,10 +238,10 @@ describe('layOutItems', () => {
 
   it('nests a call and its result under the message that made them', () => {
     const out = layOutItems([prose('a'), call('t1'), res('r1')])
-    expect(out.map((p) => [p.item.key, p.indent, p.nested])).toEqual([
-      ['a', 0, false],
-      ['t1', 2, true],
-      ['r1', 2, true],
+    expect(out.map((p) => [p.item.key, p.nested])).toEqual([
+      ['a', false],
+      ['t1', true],
+      ['r1', true],
     ])
   })
 
@@ -252,17 +252,17 @@ describe('layOutItems', () => {
 
   it('nests a collapsed fold too — it stands in for the run', () => {
     const out = layOutItems([prose('a'), fold('t1')])
-    expect(out[1]).toMatchObject({ indent: 2, nested: true })
+    expect(out[1]).toMatchObject({ nested: true })
   })
 
   it('leaves a turn-opening tool call flat, never branching off YOUR message', () => {
     // Your message is a lifted box; a ⎿ branch under it would read as work you
     // did rather than work the agent did.
     const out = layOutItems([user('u'), call('t1'), res('r1')])
-    expect(out.map((p) => [p.item.key, p.indent, p.nested])).toEqual([
-      ['u', 0, false],
-      ['t1', 0, false],
-      ['r1', 0, false],
+    expect(out.map((p) => [p.item.key, p.nested])).toEqual([
+      ['u', false],
+      ['t1', false],
+      ['r1', false],
     ])
   })
 
@@ -272,7 +272,7 @@ describe('layOutItems', () => {
     // every run in the transcript.
     const think: TranscriptItem = { key: 'th', kind: 'thinking', text: 'hmm', gutter: '✻' }
     const out = layOutItems([think, fold('t1')])
-    expect(out[1]).toMatchObject({ indent: 2, nested: true, attach: true })
+    expect(out[1]).toMatchObject({ nested: true, attach: true })
   })
 
   it('leaves a run with no parent above it flat', () => {
@@ -284,7 +284,7 @@ describe('layOutItems', () => {
   it('keeps prose, user messages and notices flat', () => {
     const notice: TranscriptItem = { key: 'n', kind: 'notice', text: 'Session asleep' }
     const out = layOutItems([prose('a'), user('u'), notice])
-    expect(out.every((p) => !p.nested && p.indent === 0)).toBe(true)
+    expect(out.every((p) => !p.nested)).toBe(true)
   })
 })
 
