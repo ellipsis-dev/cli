@@ -9,9 +9,9 @@ export function sessionUrl(appBase: string, accountLogin: string, sessionId: str
   return `${appBase}/${encodeURIComponent(accountLogin)}?session=${encodeURIComponent(sessionId)}`
 }
 
-// The agent (config) detail page is keyed by the config id (agent_id == config_id).
-export function configUrl(appBase: string, accountLogin: string, configId: string): string {
-  return `${appBase}/${encodeURIComponent(accountLogin)}/agents/configs/${encodeURIComponent(configId)}`
+// The automation detail page, keyed by the automation id.
+export function automationUrl(appBase: string, accountLogin: string, automationId: string): string {
+  return `${appBase}/${encodeURIComponent(accountLogin)}/automations/${encodeURIComponent(automationId)}`
 }
 
 // The device-code approval page for `agent login`. `userCode` is the user_code

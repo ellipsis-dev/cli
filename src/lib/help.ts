@@ -19,7 +19,7 @@ function withoutAliases(term: string, cmd: Command): string {
 // vanishing from help.
 const TOP_LEVEL_GROUPS: ReadonlyArray<{ title: string; commands: readonly string[] }> = [
   { title: 'Sessions', commands: ['session', 'review'] },
-  { title: 'Agents', commands: ['config', 'model', 'template'] },
+  { title: 'Automations', commands: ['automation', 'model', 'template'] },
   { title: 'Platform', commands: ['variable', 'file'] },
   { title: 'Integrations', commands: ['integration', 'github', 'slack', 'linear', 'sentry'] },
   { title: 'Spend', commands: ['budget', 'usage', 'analytics'] },

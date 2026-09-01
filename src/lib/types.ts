@@ -47,15 +47,15 @@ export type SessionSearchResult = S['SessionSearchResult']
 export type SearchSessionsResponse = S['SessionSearchResponse']
 export type GithubAccountSnippet = S['GithubAccountSnippet']
 
-// ------------------------------- configs -----------------------------------
+// ----------------------------- automations ---------------------------------
 
 export type AgentConfig = S['AgentConfig']
-export type SavedAgentConfig = S['Config']
-export type ListAgentConfigsResponse = S['AgentConfigsListResponse']
-export type CreateAgentConfigRequest = Parameters<Ellipsis['agents']['configs']['create']>[0]
-export type CreatedAgentConfig = S['AgentConfigResponse']
+export type Automation = S['Automation']
+export type ListAutomationsResponse = S['AutomationsListResponse']
+export type CreateAutomationRequest = Parameters<Ellipsis['automations']['create']>[0]
+export type CreatedAutomation = S['AutomationResponse']
 export type ConfigManagedBy = S['ConfigManagedBy']
-export type LinkedAgentConfig = S['LinkAgentConfigResponse']
+export type LinkedAutomation = S['LinkAutomationResponse']
 
 // ------------------------------ environments -------------------------------
 
@@ -183,7 +183,8 @@ export type CliAuthPollStatus =
 // and pass around a query without importing the SDK's inline parameter types.
 
 export interface ListAgentSessionsQuery {
-  config_id?: string
+  // An automation id or name: only sessions that automation started.
+  automation?: string
   source?: AgentSessionSource[]
   days?: number
   start?: string

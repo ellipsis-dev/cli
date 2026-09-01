@@ -126,11 +126,11 @@ export function rowMeta(session: AgentSession, now: Date = new Date()): string {
   return bits.join(', ')
 }
 
-// The agent identity to show for a session: the config's own name, else the id
-// of the saved config its snapshot came from. Both are absent for inline,
-// platform-default, and built-in configs, which have nothing to name.
+// The agent identity to show for a session: the definition's own name, else
+// the id of the automation its snapshot came from. Both are absent for raw,
+// template, and built-in sessions, which have nothing to name.
 export function sessionConfigName(session: AgentSession): string | null {
-  return session.agent.config.ellipsis.name ?? session.agent.config_id ?? null
+  return session.agent.config.ellipsis.name ?? session.agent.automation_id ?? null
 }
 
 // The sidebar's status bands, top to bottom: live conversations, then parked
@@ -263,9 +263,9 @@ export function attentionFlip(prevWord: string | undefined, nextWord: string): b
 }
 
 // --------------------------- start request shaping -------------------------
-// POST /v1/sessions takes the config patch as the request body itself: the
-// base is `from_config_id` (or, omitted, the bare ad-hoc config) and every
-// AgentConfig key on the request deep-merges on top.
+// POST /v1/sessions is flat: the AgentConfig blocks on the request merge onto
+// the bare ad-hoc config (there is no base-config pointer; a saved automation
+// is invoked with POST /v1/automations/{id}/sessions instead).
 
 // Parse a repository value into an environment.repositories entry.
 // "owner/name" sets both; a bare "name" omits owner so the server defaults it
@@ -277,13 +277,13 @@ export function parseRepo(value: string): { name: string; owner?: string } {
   throw new Error(`a repository must be "name" or "owner/name", got "${value}"`)
 }
 
-// The AgentConfig keys POST /v1/sessions accepts as per-session patches. An
-// inline config file's other keys have no request-side equivalent — `trigger`
-// and `input` (the contract, not the payload) describe a saved agent, and the
-// file's `ellipsis:` block carries a name/enabled the request refuses — so
-// they are dropped rather than sent to a 422.
+// The AgentConfig keys POST /v1/sessions accepts. An inline config file's
+// other keys have no request-side equivalent — `trigger` and `input` (the
+// contract, not the payload) describe an automation, and the file's
+// `ellipsis:` block carries a name/enabled the request refuses — so they are
+// dropped rather than sent to a 422. `budget` is a dollar number on the
+// request where the file has a `budget.session`, so it is lifted.
 const START_CONFIG_KEYS = [
-  'budget',
   'claude',
   'codex',
   'environment',
@@ -300,6 +300,11 @@ export function startRequestFromConfig(
   const req: Record<string, unknown> = {}
   for (const key of START_CONFIG_KEYS) {
     if (config[key] !== undefined) req[key] = config[key]
+  }
+  const budget = config.budget
+  if (budget && typeof budget === 'object' && !Array.isArray(budget)) {
+    const session = (budget as { session?: unknown }).session
+    if (typeof session === 'number') req.budget = session
   }
   return req as StartAgentSessionRequest
 }
@@ -989,10 +994,7 @@ export function repositoryRefLabel(
 // repository) — the right thing to send when the pane was never touched and
 // an agent config's own environment should rule.
 //
-// `agent` is the saved config the session starts from (`from_config_id`, an
-// id or the agent's name); null starts on the bare ad-hoc config.
 export interface ComposerChoices {
-  agent: string | null
   environment: string | null
   model: string | null
   pane: EnvironmentPaneState | null
@@ -1025,25 +1027,14 @@ function repositoryEntry(r: CustomRepository): { owner?: string; name: string; r
 // pane still matches it, so re-stating its lists would only risk saying it
 // worse. Without a name the pane ships as the environment object, lists
 // included even when empty — over the bare ad-hoc base that object is the
-// whole sandbox, which is exactly what the pane means. (Over a picked agent's
-// config the server merges the object instead — repositories by identity — so
-// there an edited pane adds but cannot subtract; the honest fix is a saved
-// environment, which does replace the config's reference.)
+// whole sandbox, which is exactly what the pane means.
 export function applyComposerChoices(
   base: StartAgentSessionRequest,
   choices: ComposerChoices,
 ): StartAgentSessionRequest {
   const req: StartAgentSessionRequest = { ...base }
-  if (choices.agent) {
-    req.from_config_id = choices.agent
-    // With an agent picked and the environment untouched, the config's own
-    // environment rules — including the base request's detected-repo merge
-    // would silently grow its checkout set, so it is dropped. (The pane shows
-    // the config's environment, and checking the repo there is one keystroke.)
-    if (!choices.environment && !choices.pane) delete req.environment
-  }
-  // Only the model: sending any sibling claude field would override the base
-  // config's own (system especially).
+  // Only the model: sending any sibling claude field would override the
+  // inline config's own (system especially).
   if (choices.model) {
     req.claude = { model: choices.model } as StartAgentSessionRequest['claude']
   }
@@ -1108,13 +1099,6 @@ export function environmentSourceLabel(
 // the built-in basic sandbox (with the detected repository merged into its
 // checkout set, which the pane shows checked).
 export const BASIC_ENVIRONMENT_LABEL = 'basic sandbox'
-
-// The leading row the Environment list grows when the picked agent's config
-// carries its own environment: checked at rest (so the checkbox agrees with
-// the row's "from agent config" value), re-pickable after choosing something
-// else, and sending NOTHING on the wire — the config's environment rules.
-export const AGENT_ENVIRONMENT_ID = 'agent:builtin'
-export const AGENT_ENVIRONMENT_LABEL = 'from agent config'
 
 // The Environment row's options: the resting "basic sandbox" first, then
 // every saved environment (each labelled with the file it syncs from), then

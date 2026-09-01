@@ -5,7 +5,7 @@ import { registerHost } from './commands/host'
 import { registerMe } from './commands/me'
 import { registerSession } from './commands/session'
 import { registerReview } from './commands/review'
-import { registerConfig } from './commands/config'
+import { registerAutomation } from './commands/automation'
 import { registerEnvironment } from './commands/environment'
 import { registerVariable } from './commands/variable'
 import { registerFile } from './commands/file'
@@ -42,7 +42,7 @@ registerHost(program)
 registerMe(program)
 registerSession(program)
 registerReview(program)
-registerConfig(program)
+registerAutomation(program)
 registerEnvironment(program)
 registerVariable(program)
 registerFile(program)

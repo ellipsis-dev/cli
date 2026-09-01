@@ -52,11 +52,11 @@ agent host current                # show the active host and how it resolves
 agent host set beta --rename staging   # rename / re-point a host (--api-base / --app-base)
 agent host delete beta            # remove a host and its stored token
 
-agent session start --config <id>     # start a session from a saved config
+agent session start -e backend "..."   # run a prompt in a saved environment
 agent session start --config-file f.json   # ...or from an inline config
 agent session start --template ellipsis-helper   # ...or from a maintained template
-agent session start --config <id> --override "budget:\n  session: 5"  # override config fields for this session
-agent session start --config <id> --watch  # start and immediately stream it
+agent session start --budget 5 "..."   # cap this session's spend, in dollars
+agent session start --watch "..."      # start and immediately stream it
 agent session list --limit 20         # list recent sessions (filter by --source, --author, --since, …)
 agent session search "webhook retries"   # search session history: transcripts, recaps, created PRs, similarity
 agent session search "acme/api#512" --author tony --since "3 days ago"   # PR-shaped queries and facets
@@ -72,15 +72,16 @@ agent review get <review-id>      # a review's findings, scope, and whether it p
 agent review list --repo api      # list a repository's reviews, newest first
 agent review init                 # scaffold a starter review pipeline (code_review.yaml)
 
-agent config list                 # list saved agent configs
-agent config get <config-id>      # show one config as YAML (--json for JSON)
-agent config init [path]          # scaffold a starter config (default: agents/my_agent.yaml)
-agent config create --file agents/foo.yaml   # create an agent, live at once (or --template <slug>)
-agent config create --repo api --file agents/foo.yaml   # instead define it as a file, via a pull request
-agent config edit <config-id> --file agents/foo.yaml    # replace its definition, live at once
-agent config delete <config-id>   # delete it; the agent stops and its name is freed
-agent config link <config-id> --repo api   # move it into a repository, via a pull request
-agent config unlink <config-id>   # take it over from its file, so the API changes it
+agent automation list             # list your automations
+agent automation get <id>         # show one automation as YAML (--json for JSON)
+agent automation run <id> --input '{"issue": "ENG-42"}'   # invoke it exactly as defined
+agent automation init [path]      # scaffold a starter definition (default: agents/my_agent.yaml)
+agent automation create --file agents/foo.yaml   # create one, live at once (or --template <slug>)
+agent automation create --repo api --file agents/foo.yaml   # instead define it as a file, via a pull request
+agent automation edit <id> --file agents/foo.yaml    # replace its definition, live at once
+agent automation delete <id>      # delete it; it stops and its name is freed
+agent automation link <id> --repo api   # move it into a repository, via a pull request
+agent automation unlink <id>      # take it over from its file, so the API changes it
 
 agent model list                  # list selectable agent models (the account default is marked)
 
@@ -189,7 +190,7 @@ out for all of them.
 Every field is optional and the defaults above are what you get with no
 `sessionBar` at all. Two caveats on `repo`: a shell outside a repository lists
 every repository rather than nothing, and sessions that name their repository
-only inside their agent config — dashboard starts, cron runs — do not
+only inside their automation — dashboard starts, cron runs — do not
 match a repo filter, so `"repo": "any"` is the way to see those alongside the
 rest.
 

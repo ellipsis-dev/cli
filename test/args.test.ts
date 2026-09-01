@@ -126,7 +126,7 @@ describe('looksLikeCommandTypo', () => {
 })
 
 describe('similarCommands', () => {
-  const commands = ['session', 'review', 'config', 'install', 'model', 'host']
+  const commands = ['session', 'review', 'automation', 'install', 'model', 'host']
 
   it('finds the intended command behind a typo', () => {
     expect(similarCommands('sesion', commands)).toEqual(['session'])

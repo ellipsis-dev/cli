@@ -19,7 +19,7 @@ Singular nouns, one verb per action.
 
 ```
 agent file list           agent file delete <file-id>
-agent session start       agent config edit <config-id>
+agent session start       agent automation edit <automation-id>
 ```
 
 - **The noun is singular, always.** `file`, not `files`. `hook`, not
@@ -68,7 +68,7 @@ One meaning per short flag, across the whole CLI. The reserved ones:
 | ----- | ---- | ------- |
 | `-o` | `--output <path>` | a file to write to. Never a format. |
 | `-d` | `--detach` | start and return. Never `--days`. |
-| `-c` | `--config <config-id>` | a saved agent config |
+| `-i` | `--input <json>` | an automation's typed input payload |
 | `-f` | `--file` / `--from-file` / `--config-file` | an input file. Never `--force`. |
 | `-r` | `--repo` | a repository |
 | `-s` | `--source` | a session source |
@@ -103,7 +103,7 @@ One line, imperative verb first, no trailing period.
   When a command also has an `addHelpText('after', ...)` usage note, chain the
   note *inside* the `apiRoutes()` call so the route line still lands last.
 - **Name the concept the same way every time.** The object under `agent
-  config` is an **agent config** — never "configuration", never bare "agent".
+  automation` is an **automation** (a saved agent definition) — never "config", never bare "agent".
 - **No em dashes or en dashes** in any new user-facing string. Use a colon, a
   comma, or two sentences. (Legacy table placeholders still hold `—`; do not
   add more, and prefer `-` for new ones.)
