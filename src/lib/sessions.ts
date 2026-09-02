@@ -593,8 +593,8 @@ export function computeOverride(compute: CustomCompute): Record<string, unknown>
 }
 
 // The built-in bare-sandbox preset's id. A sentinel, never sent: the launcher
-// translates it into `environment: {}` (omitting the environment would let
-// the server resolve the account default instead).
+// translates it into `environment: {}`, so the request says the sandbox
+// outright rather than leaving it to omission.
 export const EMPTY_ENVIRONMENT_ID = 'empty:builtin'
 export const EMPTY_ENVIRONMENT_LABEL = 'empty'
 
@@ -951,10 +951,8 @@ export function repositoryRefLabel(
 // The composer's picks, as the launcher reports them. `model` null = that row
 // was never touched, so the server resolves it (the account's default model).
 //
-// `environment` is one of the four things POST /v1/sessions can be told:
-// - `default`: nothing. The server runs the organization's default
-//   environment, else the bare sandbox. Sent while the launcher does not yet
-//   know which that is, so the request never claims more than the screen.
+// `environment` is one of the three things POST /v1/sessions can be told —
+// what you see is what you get, the request always names it:
 // - `named`: a saved environment, by id, substituted wholesale. The pane still
 //   matches it, so re-stating its lists could only say them worse.
 // - `empty`: `{}`, the bare sandbox.
@@ -962,7 +960,6 @@ export function repositoryRefLabel(
 //   in it replaces the resolved one, so nothing the pane doesn't show can
 //   reach the run.
 export type ComposerEnvironment =
-  | { kind: 'default' }
   | { kind: 'named'; id: string }
   | { kind: 'empty' }
   | { kind: 'custom'; pane: EnvironmentPaneState }
@@ -1077,52 +1074,35 @@ export function environmentSourceLabel(
 
 // One preset in the launcher's ENVIRONMENT row: a saved environment, or the
 // built-in empty sandbox. `note` is what the row under the presets says about
-// the picked one — "account default" and/or the file it syncs from.
+// the picked one — the file it syncs from.
 export interface EnvironmentPreset {
   id: string
   name: string
   note: string | null
-  isDefault: boolean
 }
 
-// The presets, in the order the row prints them: the organization's default
-// environment first (it is what an untouched start runs in), the other saved
-// environments in the order the API lists them, then `empty`. The default is
-// matched by id or name, since the setting accepts either.
+// The presets, in the order the row prints them: the saved environments in
+// the order the API lists them, then `empty`. There is no organization
+// default to lead with — the server has none, and the request names its
+// environment outright.
 export function environmentPresets(
   environments: readonly { id: string; name: string }[],
-  defaultEnvironment: string | null | undefined,
   sourceLabels: ReadonlyMap<string, string> = new Map(),
 ): EnvironmentPreset[] {
-  const isDefault = (e: { id: string; name: string }): boolean =>
-    defaultEnvironment != null && (e.id === defaultEnvironment || e.name === defaultEnvironment)
-  const listed = environments.map((e) => {
-    const parts = [isDefault(e) ? 'account default' : null, sourceLabels.get(e.id) ?? null]
-    return {
-      id: e.id,
-      name: e.name,
-      note: parts.filter(Boolean).join(' · ') || null,
-      isDefault: isDefault(e),
-    }
-  })
   return [
-    ...listed.filter((p) => p.isDefault),
-    ...listed.filter((p) => !p.isDefault),
-    { id: EMPTY_ENVIRONMENT_ID, name: EMPTY_ENVIRONMENT_LABEL, note: null, isDefault: false },
+    ...environments.map((e) => ({ id: e.id, name: e.name, note: sourceLabels.get(e.id) ?? null })),
+    { id: EMPTY_ENVIRONMENT_ID, name: EMPTY_ENVIRONMENT_LABEL, note: null },
   ]
 }
 
-// Which preset an untouched launcher stands on: the account default when
-// there is one, else `empty` — what the server runs when the request names
-// nothing. Undefined while the setting is unknown (still loading, or the
-// fetch failed): no preset is checked and the request says nothing either.
+// Which preset an untouched launcher stands on: the first saved environment,
+// else `empty` — always the row at the head. Undefined while the list is
+// still loading: no preset is checked and enter waits.
 export function restingPresetIndex(
   presets: readonly EnvironmentPreset[],
-  defaultEnvironment: string | null | undefined,
+  loaded: boolean,
 ): number | undefined {
-  if (defaultEnvironment === undefined) return undefined
-  const at = presets.findIndex((p) => p.isDefault)
-  return at === -1 ? presets.length - 1 : at
+  return loaded && presets.length > 0 ? 0 : undefined
 }
 
 // ------------------------------- layout ---------------------------------

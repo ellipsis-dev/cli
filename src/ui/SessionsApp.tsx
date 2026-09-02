@@ -313,12 +313,6 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   // server without GET /models) leaves the list empty and the launcher falls
   // back to its built-in set.
   const [environments, setEnvironments] = useState<SavedEnvironment[] | null>(null)
-  // The organization's default environment: what an untouched start runs in,
-  // so the launcher can show it checked. undefined until the settings land
-  // (or if they never do), null when the organization has none.
-  const [defaultEnvironment, setDefaultEnvironment] = useState<string | null | undefined>(
-    undefined,
-  )
   const [secretNames, setSecretNames] = useState<string[] | null>(null)
   const [repos, setRepos] = useState<RepositorySummary[] | null>(null)
   const [models, setModels] = useState<SupportedModel[] | null>(null)
@@ -335,12 +329,6 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       .catch((err) => {
         setEnvironments([])
         reportApiError('environments', err)
-      })
-    void api.settings.organization
-      .get()
-      .then((r) => setDefaultEnvironment(r.default_environment ?? null))
-      .catch((err) => {
-        reportApiError('settings', err)
       })
     void api.secrets
       .list()
@@ -482,7 +470,6 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       error={startError ?? apiError}
       armed={armed}
       environments={environments}
-      defaultEnvironment={defaultEnvironment}
       secretNames={secretNames}
       repos={repos}
       builtInServers={builtInServers}
@@ -595,7 +582,7 @@ type ScriptEditor = {
 //    | ▶ PROMPT: Enter to start a cloud session...
 //
 //      ENVIRONMENT   ▸staging◂   ci   empty
-//                    account default · acme/api/envs/staging.yaml @ abc1234
+//                    acme/api/envs/staging.yaml @ abc1234
 //        repositories   [x] acme/api
 //                           branch: main
 //                       [ ] acme/web
@@ -636,8 +623,9 @@ type ScriptEditor = {
 // in actually drops it: the fields replace the resolved lists rather than
 // adding to them (see applyComposerChoices).
 //
-// The account default leads the presets and is what an untouched launcher
-// stands on; `empty` (the bare sandbox) closes the row. The repository the
+// The first saved environment is what an untouched launcher stands on;
+// `empty` (the bare sandbox) closes the row. There is no organization default:
+// what is checked is what the request names. The repository the
 // CLI is standing in shows checked under every preset, since the request adds
 // it to whichever environment resolves.
 //
@@ -665,7 +653,6 @@ function Launcher({
   error,
   armed,
   environments,
-  defaultEnvironment,
   secretNames,
   repos,
   builtInServers,
@@ -687,9 +674,6 @@ function Launcher({
   armed: boolean
   // null while loading; [] when the account has none / the fetch failed.
   environments: SavedEnvironment[] | null
-  // The organization's default environment (a name or id), null when it has
-  // none, undefined while unknown (loading, or the settings fetch failed).
-  defaultEnvironment: string | null | undefined
   models: SupportedModel[] | null
   // The account's stored variable names, checkable in the variables section.
   secretNames: string[] | null
@@ -711,9 +695,9 @@ function Launcher({
   const [text, setText] = useState('')
   const [textCursor, setTextCursor] = useState(0)
   const [cursor, setCursor] = useState<LauncherCursor>({ kind: 'prompt' })
-  // null = the preset row is untouched: the account default (or `empty`) is
-  // checked and the request names nothing. The list arrives async, so there
-  // is no index to seed this with at mount.
+  // null = the preset row is untouched: the first saved environment (or
+  // `empty`) is checked and the request names it. The list arrives async, so
+  // there is no index to seed this with at mount.
   const [presetPick, setPresetPick] = useState<number | null>(null)
   // null = the model row is untouched, so it tracks whichever row carries the
   // server-resolved pick (see modelIdx). The list arrives async, so there is no
@@ -746,16 +730,16 @@ function Launcher({
     return labels
   }, [environments, repos])
   const presets = useMemo(
-    () => environmentPresets(environments ?? [], defaultEnvironment, environmentSources),
-    [environments, defaultEnvironment, environmentSources],
+    () => environmentPresets(environments ?? [], environmentSources),
+    [environments, environmentSources],
   )
   // The checked preset: the explicit pick, else the resting one — undefined
-  // while the default is unknown, so nothing is checked that the request
+  // while the list is still loading, so nothing is checked that the request
   // would not send.
   const presetIdx =
     presetPick !== null
       ? Math.min(presetPick, presets.length - 1)
-      : restingPresetIndex(presets, defaultEnvironment)
+      : restingPresetIndex(presets, environments !== null)
   const pickedPreset = presetIdx === undefined ? undefined : presets[presetIdx]
   // What the picked preset resolves to, as field rows, with the detected
   // repository checked in (the request adds it to every environment). This is
@@ -940,16 +924,15 @@ function Launcher({
   // what to ask it.
   //
   // What ships is what the screen says: the checked preset by name (or `{}`
-  // for `empty`), the rows whole once they have diverged, and nothing at all
-  // while no preset is checked because the default is still unknown.
+  // for `empty`), or the rows whole once they have diverged. No preset checked
+  // means the list is still loading, and enter waits for it.
   const submit = (): void => {
+    if (!isCustom && pickedPreset === undefined) return
     const environment: ComposerEnvironment = isCustom
       ? { kind: 'custom', pane: shownPane }
-      : pickedPreset === undefined
-        ? { kind: 'default' }
-        : pickedPreset.id === EMPTY_ENVIRONMENT_ID
-          ? { kind: 'empty' }
-          : { kind: 'named', id: pickedPreset.id }
+      : pickedPreset!.id === EMPTY_ENVIRONMENT_ID
+        ? { kind: 'empty' }
+        : { kind: 'named', id: pickedPreset!.id }
     onSubmit(text.trim(), { environment, model: modelOptions[modelIdx]?.id ?? null })
   }
 

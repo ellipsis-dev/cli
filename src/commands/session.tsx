@@ -100,7 +100,7 @@ export function registerSession(program: Command): void {
     )
     .option(
       '-e, --environment <environment-id>',
-      "run in a saved environment, by id or name (default: the organization's default environment)",
+      'run in a saved environment, by id or name (default: the built-in basic sandbox)',
     )
     .option(
       '--override <yaml>',
@@ -181,8 +181,8 @@ export function registerSession(program: Command): void {
       ) => {
         await runAction(async () => {
           // An inline config source is optional: with none, the session runs
-          // on the bare ad-hoc config in the organization's defaults and the
-          // prompt is the sole instruction. At most one source may be given.
+          // on the bare ad-hoc config (model and budget from the organization's
+          // settings) and the prompt is the sole instruction. At most one source may be given.
           const sources = [opts.configFile, opts.template].filter(Boolean)
           if (sources.length > 1) {
             throw new Error('provide only one of --config-file / --template')
@@ -262,21 +262,15 @@ export function registerSession(program: Command): void {
           const { session } = await client.sessions.start(req)
 
           // Transparency for the environment resolution: say which environment
-          // the server resolved when the session didn't name one (the
-          // organization default, or the built-in basic sandbox). The connect
+          // the server resolved when the session didn't name one (the agent
+          // config's own reference). The connect
           // UI shows it in its footer meta line (anything printed before the
           // app would land in scrollback); every other mode prints this note.
           let configNote: string | undefined
           const environmentSource = session.environment?.source
           if (session.environment?.environment_id && environmentSource !== 'request') {
             const label =
-              environmentSource === 'repo_default'
-                ? 'repo default'
-                : environmentSource === 'account_default'
-                  ? 'account default'
-                  : environmentSource === 'agent_config'
-                    ? 'from the agent config'
-                    : environmentSource
+              environmentSource === 'agent_config' ? 'from the agent config' : environmentSource
             const note = `using environment ${session.environment.environment_id} (${label})`
             configNote = configNote ? `${configNote}; ${note}` : note
           }
