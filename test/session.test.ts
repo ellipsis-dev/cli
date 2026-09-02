@@ -172,10 +172,16 @@ describe('buildStartOverride', () => {
       claude: { model: 'claude-opus-4-8', system: 'do the thing' },
       environment: {
         compute: { cpu: 2, memory: '8GB', timeout: '30m' },
-        repositories: [{ owner: 'ellipsis-dev', name: 'ellipsis' }, { name: 'solo' }],
       },
+      // --repo is the request's additive key, not part of the environment
+      // block, so it joins whichever environment resolves (and composes with -e).
+      repositories: ['ellipsis-dev/ellipsis', 'solo'],
       budget: 0.5,
     })
+  })
+
+  it('rejects a malformed --repo', () => {
+    expect(() => buildStartOverride({ repo: ['a/b/c'] })).toThrow(/owner\/name/)
   })
 
   it('deep-merges sugar flags on top of a raw inline override (flags win)', () => {
