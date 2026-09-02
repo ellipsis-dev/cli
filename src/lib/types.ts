@@ -30,7 +30,6 @@ export type SessionPrompting = S['SessionPrompting']
 // flowing from REST straight into the store without a cast at each call site.
 export type SessionRecord = SessionRecordFrame
 export type SessionMessage = SessionMessageFrame
-export type SessionExecution = S['SessionExecution']
 export type ListSessionRecordsResponse = S['SessionRecordsListResponse']
 export type ListAgentSessionsResponse = S['SessionsListResponse']
 export type StartAgentSessionRequest = NonNullable<Parameters<Ellipsis['sessions']['start']>[0]>
@@ -39,12 +38,6 @@ export type SendSessionMessageRequest = S['SendSessionMessageRequest']
 export type SessionLogSegment = S['SessionLogSegment']
 export type GetSessionLogResponse = S['GetSessionLogResponse']
 
-// ------------------------------ session search ----------------------------
-
-export type SessionSearchScope = S['SessionSearchScope']
-export type RecordSearchHit = S['RecordHit']
-export type SessionSearchResult = S['SessionSearchResult']
-export type SearchSessionsResponse = S['SessionSearchResponse']
 export type GithubAccountSnippet = S['GithubAccountSnippet']
 
 // ----------------------------- automations ---------------------------------
@@ -201,20 +194,6 @@ export interface ListAgentSessionsQuery {
   // ones that completed, errored, or were stopped. A session parked between
   // turns counts as unfinished.
   unfinished?: boolean
-}
-
-export interface SearchSessionsQuery {
-  q: string
-  scope?: SessionSearchScope
-  source?: AgentSessionSource[]
-  author_id?: number[]
-  config_id?: string[]
-  session_ids?: string[]
-  repo?: string
-  status?: AgentSessionStatus[]
-  start?: string
-  end?: string
-  limit?: number
 }
 
 export interface ListFilesQuery {

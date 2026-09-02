@@ -18,7 +18,6 @@ import {
   collectKeyValue,
   collectSource,
   collectStatus,
-  parseScope,
   parseWhen,
   toInt,
   toNumber,
@@ -39,11 +38,8 @@ import type {
   AgentSession,
   AgentSessionSource,
   AgentSessionStatus,
-  GithubAccountSnippet,
   SessionLogSegment,
   SessionRecord,
-  SessionSearchResult,
-  SessionSearchScope,
   StartAgentSessionRequest,
 } from '../lib/types'
 import { repoFromCwd } from '../lib/git'
@@ -409,107 +405,6 @@ export function registerSession(program: Command): void {
               formatTs(s.created_at),
               usdFromMillicents(s.cost?.total ?? 0),
             ]),
-          )
-        })
-      },
-    )
-
-  apiRoutes(
-    session
-      .command('search <query>')
-      .description('Search session history by transcript text, recap, created PR, or similarity')
-      .addHelpText(
-        'after',
-        '\nA PR-shaped query ("#512", "acme/api#512", or a pull request URL) also finds the ' +
-          'session that created that exact pull request.\n' +
-          'Sources: react, manual, api, cli, mention, cron. ' +
-          '--since/--until accept ISO 8601 or "today", "yesterday", "N days ago".',
-      ),
-    'GET /v1/sessions/search',
-    'GET /v1/integrations/github/members to resolve --author',
-  )
-    .option(
-      '-a, --author <login>',
-      'only sessions attributed to this GitHub login (see `agent github members`)',
-    )
-    .option(
-      '--automation <automation-id>',
-      'only sessions this automation started (repeatable)',
-      collect,
-      [] as string[],
-    )
-    .option(
-      '-s, --source <source>',
-      'only sessions from this source (repeatable)',
-      collectSource,
-      [] as string[],
-    )
-    .option('-r, --repo <owner/name>', 'only sessions on this repository (a bare name works too)')
-    .option(
-      '--status <status>',
-      'only sessions in this status (repeatable)',
-      collectStatus,
-      [] as string[],
-    )
-    .option('--scope <scope>', 'what to search: records, recaps, or both', parseScope, 'both')
-    .option(
-      '--session <session-id>',
-      'restrict the search to this session (repeatable)',
-      collect,
-      [] as string[],
-    )
-    .option('--since <when>', 'only sessions at or after this time', (v: string) => parseWhen(v))
-    .option('--until <when>', 'only sessions at or before this time', (v: string) => parseWhen(v))
-    .option('-l, --limit <n>', 'max result sessions (up to 100)', toInt, 20)
-    .option('--json', 'output raw JSON')
-    .action(
-      async (
-        query: string,
-        opts: {
-          author?: string
-          automation: string[]
-          source: string[]
-          repo?: string
-          status: string[]
-          scope: string
-          session: string[]
-          since?: string
-          until?: string
-          limit: number
-          json?: boolean
-        },
-      ) => {
-        await runAction(async () => {
-          const client = api()
-          const authorId = opts.author ? await resolveAuthorId(client, opts.author) : undefined
-          const res = await client.sessions.search({
-            q: query,
-            scope: opts.scope as SessionSearchScope,
-            source: opts.source.length ? (opts.source as AgentSessionSource[]) : undefined,
-            author_id: authorId === undefined ? undefined : [authorId],
-            config_id: opts.automation.length ? opts.automation : undefined,
-            session_ids: opts.session.length ? opts.session : undefined,
-            repo: opts.repo,
-            status: opts.status.length ? (opts.status as AgentSessionStatus[]) : undefined,
-            start: opts.since,
-            end: opts.until,
-            limit: opts.limit,
-          })
-          if (opts.json) {
-            printJson(res)
-            return
-          }
-          if (res.results.length === 0) {
-            console.log('No matching sessions found.')
-            return
-          }
-          for (const result of res.results) {
-            for (const line of formatSearchResult(result, res.attributed_users)) {
-              console.log(line)
-            }
-          }
-          console.log(
-            '\nInspect one: agent session get <session-id>. Full history: agent session export <session-id>',
           )
         })
       },
@@ -953,7 +848,7 @@ function readMappingFile(path: string, label: string): Record<string, unknown> {
 }
 
 // Resolve a --author GitHub login to the account id the API filters by
-// (author_id on GET /sessions and /sessions/search), via the org roster.
+// (author_id on GET /sessions), via the org roster.
 // An unknown login fails with the known logins so the user can self-correct.
 export async function resolveAuthorId(client: Ellipsis, login: string): Promise<number> {
   const { members } = await client.integrations.github.members()
@@ -964,33 +859,6 @@ export async function resolveAuthorId(client: Ellipsis, login: string): Promise<
     `no GitHub member with login "${login}"` +
       (known ? ` (known logins: ${known})` : ''),
   )
-}
-
-// One search result as display lines: a header (id, status, author, age,
-// matched arms), then the best snippet indented. The recap snippet wins over
-// record hits when both matched; record_hit_count renders as a trailing count
-// so "many hits" is visible without dumping every record. Exported for tests.
-export function formatSearchResult(
-  result: SessionSearchResult,
-  users: Record<string, GithubAccountSnippet>,
-  now: Date = new Date(),
-): string[] {
-  const s = result.session
-  const author = s.attribution?.id ? users[String(s.attribution.id)]?.login : undefined
-  const header = [
-    s.id,
-    s.status,
-    ...(author ? [author] : []),
-    relativeAge(s.created_at, now),
-    `matched: ${result.matched.join(', ')}`,
-  ].join('  ')
-  const lines = [header]
-  const snippet = result.recap_snippet ?? result.record_hits[0]?.snippet
-  if (snippet) lines.push(`    ${oneLine(snippet, 200)}`)
-  if (result.record_hit_count > 1) {
-    lines.push(`    ${result.record_hit_count} matching records`)
-  }
-  return lines
 }
 
 // formatStepLine / recordText moved to lib/steps.ts (shared with `session

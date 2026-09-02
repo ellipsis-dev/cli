@@ -58,8 +58,6 @@ agent session start --template ellipsis-helper   # ...or from a maintained templ
 agent session start --budget 5 "..."   # cap this session's spend, in dollars
 agent session start --watch "..."      # start and immediately stream it
 agent session list --limit 20         # list recent sessions (filter by --source, --author, --since, …)
-agent session search "webhook retries"   # search session history: transcripts, recaps, created PRs, similarity
-agent session search "acme/api#512" --author tony --since "3 days ago"   # PR-shaped queries and facets
 agent session get <session-id>        # inspect one session (prints a dashboard link)
 agent session get <session-id> --watch  # follow a session until it finishes
 agent session record <session-id>     # read a session's stored transcript, one line per record
@@ -263,7 +261,7 @@ scoped to that one repo only — no account-wide PAT involved.
 
 ### Status
 
-The full public REST surface (auth, sessions, session search/steps, configs,
+The full public REST surface (auth, sessions, session steps, configs,
 integration discovery, budget/usage) is wired against the live API, including
 live WebSocket streaming and `session stop`.
 Still pending: replacing the hand-rolled request/response types with the
