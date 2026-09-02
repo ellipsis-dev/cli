@@ -5,7 +5,8 @@ import { basename, dirname, extname } from 'node:path'
 import { api } from '../lib/api'
 import { resolveAppBase } from '../lib/config'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
-import { formatTs, printJson, printTable, printYaml, runAction } from '../lib/output'
+import { formatTs, printJson, printTable, printYaml, runAction, usd, usdFromMillicents } from '../lib/output'
+import { formatSeconds, summarizeSamples } from '../lib/metrics'
 import { automationUrl, sessionUrl } from '../lib/urls'
 import { readConfigFile } from './session'
 import type {
@@ -78,6 +79,43 @@ export function registerAutomation(program: Command): void {
         ])
         printYaml(a)
         console.error(`\nview: ${automationUrl(resolveAppBase(), me.customer_login, automationId)}`)
+      })
+    })
+
+  apiRoutes(
+    automation
+      .command('metrics <automation-id>')
+      .description("Print an automation's trailing spend against its budget and its session medians"),
+    'GET /v1/automations/{id}/metrics',
+  )
+    .option('--json', 'output raw JSON (every session sample and the spend windows)')
+    .action(async (automationId: string, opts: { json?: boolean }) => {
+      await runAction(async () => {
+        const metrics = await api().automations.metrics(automationId)
+        if (opts.json) {
+          printJson(metrics)
+          return
+        }
+        printTable(
+          ['WINDOW', 'SPENT', 'LIMIT', 'PLATFORM MAX'],
+          metrics.spend_windows.map((w) => [
+            `${w.window_days}d`,
+            usd(w.spent_usd),
+            usd(w.limit_usd),
+            usd(w.platform_max_usd),
+          ]),
+        )
+        const summary = summarizeSamples(metrics.samples)
+        if (summary.count === 0) {
+          console.log('\nNo finished sessions yet.')
+          return
+        }
+        console.log(
+          `\n${summary.count} finished session${summary.count === 1 ? '' : 's'}: ` +
+            `median ${formatSeconds(summary.duration_seconds_p50!)}, ` +
+            `${usdFromMillicents(summary.cost_millicents_p50!)}, ` +
+            `${summary.tokens_p50!.toLocaleString('en-US')} tokens`,
+        )
       })
     })
 

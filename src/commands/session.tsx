@@ -24,6 +24,7 @@ import {
 } from '../lib/args'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { sessionUrl } from '../lib/urls'
+import { joinPatches, omittedNote } from '../lib/sessionDiff'
 import {
   sessionStatusWord,
   streamSession,
@@ -495,6 +496,37 @@ export function registerSession(program: Command): void {
         })
       },
     )
+
+  apiRoutes(
+    session
+      .command('diff <session-id>')
+      .description("Print the session's uncommitted changes as a unified patch, one section per file"),
+    'GET /v1/sessions/{id}/diff',
+  )
+    .option('-o, --output <path>', 'write the patch to a file instead of stdout')
+    .option('--json', 'output raw JSON (files with their patches, and the omitted paths)')
+    .action(async (sessionId: string, opts: { output?: string; json?: boolean }) => {
+      await runAction(async () => {
+        const diff = await api().sessions.diff(sessionId)
+        if (opts.json) {
+          printJson(diff)
+          return
+        }
+        if (diff.files.length === 0 && diff.omitted_paths.length === 0) {
+          console.error('No uncommitted changes were captured for this session.')
+          return
+        }
+        const patch = joinPatches(diff.files)
+        if (opts.output) {
+          writeFileSync(opts.output, patch)
+          console.log(opts.output)
+        } else {
+          process.stdout.write(patch)
+        }
+        const note = omittedNote(diff.omitted_paths)
+        if (note) console.error(note)
+      })
+    })
 
   apiRoutes(
     session
