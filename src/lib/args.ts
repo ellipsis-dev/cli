@@ -53,7 +53,6 @@ export const SESSION_STATUSES = [
   'stopped',
 ] as const
 
-export const SEARCH_SCOPES = ['records', 'recaps', 'both'] as const
 
 function oneOf(kind: string, allowed: readonly string[], value: string): string {
   if (!allowed.includes(value)) {
@@ -62,17 +61,13 @@ function oneOf(kind: string, allowed: readonly string[], value: string): string 
   return value
 }
 
-// Repeatable, validated variants of `collect` for the search facets.
+// Repeatable, validated variants of `collect` for the list facets.
 export function collectSource(value: string, previous: string[]): string[] {
   return [...previous, oneOf('source', SESSION_SOURCES, value)]
 }
 
 export function collectStatus(value: string, previous: string[]): string[] {
   return [...previous, oneOf('status', SESSION_STATUSES, value)]
-}
-
-export function parseScope(value: string): string {
-  return oneOf('scope', SEARCH_SCOPES, value)
 }
 
 // Parse a time-window flag: an ISO 8601 timestamp passed through verbatim, or

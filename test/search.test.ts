@@ -1,17 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Ellipsis } from '@ellipsis-dev/sdk'
-import {
-  formatSearchResult,
-  formatStepLine,
-  recordText,
-  resolveAuthorId,
-} from '../src/commands/session'
-import type {
-  AgentSession,
-  GithubAccountSnippet,
-  SessionRecord,
-  SessionSearchResult,
-} from '../src/lib/types'
+import { formatStepLine, recordText, resolveAuthorId } from '../src/commands/session'
+import type { AgentSession, SessionRecord } from '../src/lib/types'
 
 function session(overrides: Partial<AgentSession> = {}): AgentSession {
   return {
@@ -31,35 +21,6 @@ function session(overrides: Partial<AgentSession> = {}): AgentSession {
     ...overrides,
   }
 }
-
-describe('searchSessions', () => {
-  afterEach(() => vi.unstubAllGlobals())
-
-  it('GETs /v1/sessions/search with repeated facet keys', async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ results: [], attributed_users: {} }), { status: 200 }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    await new Ellipsis({ apiKey: 't', baseUrl: 'http://api.test' }).sessions.search({
-      q: 'shift trade webhook',
-      scope: 'both',
-      author_id: [5201153],
-      source: ['cron', 'cli'],
-      session_ids: ['session_1', 'session_2'],
-      limit: 20,
-    })
-    const url = fetchMock.mock.calls[0][0] as string
-    expect(url).toContain('http://api.test/v1/sessions/search?')
-    expect(url).toContain('q=shift+trade+webhook')
-    expect(url).toContain('scope=both')
-    expect(url).toContain('author_id=5201153')
-    expect(url).toContain('source=cron&source=cli')
-    expect(url).toContain('session_ids=session_1&session_ids=session_2')
-    expect(url).toContain('limit=20')
-  })
-})
 
 describe('getAgentSessionRecords', () => {
   afterEach(() => vi.unstubAllGlobals())
@@ -124,65 +85,6 @@ describe('resolveAuthorId', () => {
     await expect(resolveAuthorId(client, 'tony')).rejects.toThrow(
       /no GitHub member with login "tony"$/,
     )
-  })
-})
-
-describe('formatSearchResult', () => {
-  const now = new Date('2026-07-06T12:00:00Z')
-  const users: Record<string, GithubAccountSnippet> = {
-    '5201153': { id: 5201153, login: 'hbrooks', type: 'User', avatar_url: '' },
-  }
-
-  it('renders header, author, age, matched arms, and the recap snippet', () => {
-    const result: SessionSearchResult = {
-      session: session({ attribution: { id: '5201153', type: 'github_user' } }),
-      matched: ['recap', 'similar'],
-      recap_snippet: 'looked into the shift trade webhook retries',
-      record_hits: [],
-      record_hit_count: 0,
-    }
-    expect(formatSearchResult(result, users, now)).toEqual([
-      'session_1  completed  hbrooks  3 days ago  matched: recap, similar',
-      '    looked into the shift trade webhook retries',
-    ])
-  })
-
-  it('falls back to the best record snippet and shows the hit count', () => {
-    const result: SessionSearchResult = {
-      session: session(),
-      matched: ['records'],
-      recap_snippet: null,
-      record_hits: [
-        {
-          id: 'rec_1',
-          session_execution_id: 'exec_1',
-          agent_session_id: 'session_1',
-          stream_seq: 4,
-          record_type: 'assistant',
-          created_at: '2026-07-03T12:00:00+00:00',
-          snippet: 'the webhook retries three times',
-        },
-      ],
-      record_hit_count: 7,
-    }
-    expect(formatSearchResult(result, users, now)).toEqual([
-      'session_1  completed  3 days ago  matched: records',
-      '    the webhook retries three times',
-      '    7 matching records',
-    ])
-  })
-
-  it('omits the snippet line when no arm produced one (pr/similar only)', () => {
-    const result: SessionSearchResult = {
-      session: session(),
-      matched: ['pr'],
-      recap_snippet: null,
-      record_hits: [],
-      record_hit_count: 0,
-    }
-    expect(formatSearchResult(result, users, now)).toEqual([
-      'session_1  completed  3 days ago  matched: pr',
-    ])
   })
 })
 

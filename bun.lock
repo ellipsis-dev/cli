@@ -5,7 +5,7 @@
     "": {
       "name": "@ellipsis/cli",
       "dependencies": {
-        "@ellipsis-dev/sdk": "^0.20.0",
+        "@ellipsis-dev/sdk": "^0.22.0",
         "chalk": "^5.6.2",
         "cli-table3": "^0.6.5",
         "commander": "^12.1.0",
@@ -35,7 +35,7 @@
 
     "@colors/colors": ["@colors/colors@1.5.0", "", {}, "sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ=="],
 
-    "@ellipsis-dev/sdk": ["@ellipsis-dev/sdk@0.20.0", "", {}, "sha512-UfML5NxOajmQrFbmFlKpuLjtCsX24l2F/nZYlFejyXcrD4IQa9WaCyx6qPn4Tg3D2eIZl27GB2hHYvqxDzwCjQ=="],
+    "@ellipsis-dev/sdk": ["@ellipsis-dev/sdk@0.22.0", "", {}, "sha512-iuY5S4EIoHug+qN51mgDfz6VD9Yep+w6aUVotlC9ulij26Wa0r8CyccZ+YZg96mSge+jG2J7U9Kx/KvJw4q8IA=="],
 
     "@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.27.7", "", { "os": "aix", "cpu": "ppc64" }, "sha512-EKX3Qwmhz1eMdEJokhALr0YiD0lhQNwDqkPYyPhiSwKrh7/4KRjQc04sZ8db+5DVVnZ1LmbNDI1uAMPEUBnQPg=="],
 
