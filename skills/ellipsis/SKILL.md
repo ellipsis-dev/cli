@@ -101,29 +101,30 @@ ellipsis:
   name: Recent work summary
   description: Summarizes the week's merged work across api and web
 
-claude:
-  model: claude-haiku-4-5-20251001
-  system: |
-    Summarize the pull requests merged in api and web over the last 7
-    days. Group them by theme, lead with user-facing changes, and return
-    the summary as your answer. Ground every line in a real PR. Never
-    invent activity.
-
 trigger:
   type: cron
   schedule: "0 9 * * 1"
 
-environment:
-  repositories:
-    - name: api
-    - name: web
+session:
+  claude:
+    model: claude-haiku-4-5-20251001
+    system: |
+      Summarize the pull requests merged in api and web over the last 7
+      days. Group them by theme, lead with user-facing changes, and return
+      the summary as your answer. Ground every line in a real PR. Never
+      invent activity.
 
-permissions:
-  github:
-    permissions: read_only
+  environment:
+    repositories:
+      - name: api
+      - name: web
 
-budget:
-  session: 1.00
+  permissions:
+    github:
+      permissions: read_only
+
+  budget:
+    session: 1.00
 ```
 
 Merged to the default branch, this runs every Monday at 09:00 UTC, reads both
@@ -184,14 +185,6 @@ ellipsis:
   name: Migration reviewer
   description: Flags unsafe database migrations on pull requests
 
-claude:
-  system: |
-    Review the database migrations in this pull request for production
-    safety: locking that blocks writes on large tables, missing backfills
-    for new non-null columns, and rollout ordering that breaks if the
-    migration and the code deploy out of order. Comment on the pull
-    request with what you find.
-
 trigger:
   type: react
   pull_request:
@@ -200,18 +193,27 @@ trigger:
     base: [default]
     paths: ["migrations/**"]
 
-environment:
-  repositories:
-    - name: api
+session:
+  claude:
+    system: |
+      Review the database migrations in this pull request for production
+      safety: locking that blocks writes on large tables, missing backfills
+      for new non-null columns, and rollout ordering that breaks if the
+      migration and the code deploy out of order. Comment on the pull
+      request with what you find.
 
-permissions:
-  github:
-    permissions:
-      contents: read
-      pull_requests: write
+  environment:
+    repositories:
+      - name: api
 
-budget:
-  session: 2.00
+  permissions:
+    github:
+      permissions:
+        contents: read
+        pull_requests: write
+
+  budget:
+    session: 2.00
 ```
 
 - `pull_request.on` takes `opened`, `pushed`, `merged`, `closed`,
@@ -482,34 +484,39 @@ Top-level keys, all optional except `ellipsis`:
 | Key | Purpose |
 | --- | --- |
 | `ellipsis` | `version: v1`, `name`, `description`, `metadata`, and the `enabled`, `interactive`, `ide` flags. Its presence marks the file as a config. |
+| `trigger` | One trigger, or omit for a manual-only agent. |
+| `input` | A JSON Schema for the payload `agent automation run` passes, and the message template it renders into. |
+| `session` | What every session runs on; the keys below. The same keys, flattened, are the body of `agent` / `POST /v1/sessions`. |
+
+Under `session`:
+
+| Key | Purpose |
+| --- | --- |
 | `claude` | `system`, `model`, `effort`, `fallback_model`, `max_turns`, `settings`. |
 | `codex` | Run on OpenAI's Codex CLI instead. Declaring the block selects the harness. |
-| `trigger` | One trigger, or omit for a manual-only agent. |
-| `environment` | Where the agent runs: `repositories`, `variables`, `ports`, `compute`, `image`, `hooks`. |
+| `environment` | A saved environment by name, or an inline block: `repositories`, `variables`, `ports`, `compute`, `image`, `hooks`, `mcp_servers`. |
 | `permissions` | What it may do: `github` scopes its GitHub token, `ellipsis` its API token. |
 | `skills` | Claude Code skills beyond what the cloned repositories provide. |
-| `structured_output` | A JSON Schema contract, so downstream automation gets typed data. |
+| `output` | A JSON Schema contract, so downstream automation gets typed data. |
 | `budget` | `session`, `day`, `week`, `month`, in US dollars. |
-| `llm` | `proxy: proxycfg_...` to route this agent through your own gateway. |
-| `mcp_servers` | Built-in integrations to opt into by name: `linear`, `slack`. |
 
 The schema is strict, so an unknown or misplaced key fails validation rather
 than being silently dropped. Points that decide whether a config works:
 
-- `claude.system` takes inline text, a `{file: path}` reference to a repository
+- `session.claude.system` takes inline text, a `{file: path}` reference to a repository
   file, or an ordered list of both, joined at session start. It is appended to
   Claude Code's default prompt. 64 KiB per file.
-- `claude.model` defaults to `claude-opus-5`. Claude, GPT, and GLM models are
+- `session.claude.model` defaults to `claude-opus-5`. Claude, GPT, and GLM models are
   available, and `agent model list` is the authoritative list of ids. Digest and
   summary jobs run well on `claude-haiku-4-5-20251001`; judgment jobs earn the
   frontier model.
-- `budget.session` defaults to $250, which is also the platform maximum, so it
+- `session.budget.session` defaults to $250, which is also the platform maximum, so it
   can only be lowered. `day`, `week`, and `month` are trailing 1, 7, and 28 day
   caps on this agent, with ceilings of $1,000, $10,000, and $40,000. A session
   that reaches a cap stops mid-task and records `budget_hit`, which is a distinct
   exit status from an error. Accounts also have their own trailing caps, plus
   opt-in per-developer caps.
-- `structured_output` makes an agent a function with a contract: it exits through
+- `session.output` makes an agent a function with a contract: it exits through
   your JSON Schema, so downstream automation gets typed data instead of prose to
   parse. Schema failures exit loudly as `tool_call_failed`. It does not go
   together with a mention trigger.

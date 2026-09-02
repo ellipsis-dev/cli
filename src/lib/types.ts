@@ -42,7 +42,10 @@ export type GithubAccountSnippet = S['GithubAccountSnippet']
 
 // ----------------------------- automations ---------------------------------
 
-export type AgentConfig = S['AgentConfig']
+// The automation file: identity + trigger + input + a `session:` block.
+export type AutomationConfig = S['AutomationConfig']
+// What one session runs on; the flat body of POST /v1/sessions.
+export type SessionConfig = S['SessionConfig']
 export type Automation = S['Automation']
 export type ListAutomationsResponse = S['AutomationsListResponse']
 export type CreateAutomationRequest = Parameters<Ellipsis['automations']['create']>[0]
@@ -52,7 +55,9 @@ export type LinkedAutomation = S['LinkAutomationResponse']
 
 // ------------------------------ environments -------------------------------
 
-export type EnvironmentConfig = S['EnvironmentConfig']
+// The saved-environment file (identity + body); the inline session block is
+// S['EnvironmentConfig'].
+export type EnvironmentDocument = S['EnvironmentDocument']
 export type SavedEnvironment = S['Environment']
 export type ListEnvironmentsResponse = S['EnvironmentsListResponse']
 

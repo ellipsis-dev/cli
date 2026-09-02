@@ -5,7 +5,7 @@ import { api } from '../lib/api'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { formatTs, printJson, printTable, printYaml, runAction } from '../lib/output'
 import { readConfigFile } from './session'
-import type { EnvironmentConfig, SavedEnvironment } from '../lib/types'
+import type { EnvironmentDocument, SavedEnvironment } from '../lib/types'
 
 const DEFAULT_ENVIRONMENT_PATH = 'agents/environments/my_environment.yaml'
 
@@ -73,7 +73,7 @@ export function registerEnvironment(program: Command): void {
     .action(async (opts: { file: string; json?: boolean }) => {
       await runAction(async () => {
         const created = await api().environments.create({
-          environment: readConfigFile(opts.file) as EnvironmentConfig,
+          environment: readConfigFile(opts.file) as EnvironmentDocument,
         })
         if (opts.json) {
           printJson(created)
@@ -105,7 +105,7 @@ export function registerEnvironment(program: Command): void {
     .action(async (environmentId: string, opts: { file: string; json?: boolean }) => {
       await runAction(async () => {
         const { environment: updated } = await api().environments.update(environmentId, {
-          environment: readConfigFile(opts.file) as EnvironmentConfig,
+          environment: readConfigFile(opts.file) as EnvironmentDocument,
         })
         if (opts.json) {
           printJson(updated)
