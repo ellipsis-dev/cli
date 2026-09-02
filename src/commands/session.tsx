@@ -91,7 +91,7 @@ export function registerSession(program: Command): void {
     )
     .option(
       '-f, --config-file <path>',
-      'start from an inline agent config (.yaml/.yml or .json file); to run a saved automation use `agent automation run`',
+      'start from a config file (.yaml/.yml or .json: an automation file, whose session: block is used, or a bare session config); to run a saved automation use `agent automation run`',
     )
     .option(
       '-t, --template <slug>',
@@ -103,7 +103,7 @@ export function registerSession(program: Command): void {
     )
     .option(
       '--override <yaml>',
-      'partial patch (YAML/JSON) of AgentConfig keys merged onto the inline config, e.g. "claude:\\n  effort: high"',
+      'partial patch (YAML/JSON) of session config keys merged onto the inline config, e.g. "claude:\\n  effort: high"',
     )
     .option(
       '--override-file <path>',
@@ -211,9 +211,9 @@ export function registerSession(program: Command): void {
           if (opts.connect && opts.json) {
             throw new Error('--connect is interactive and cannot be combined with --json')
           }
-          // The flat raw-session body: AgentConfig blocks merge onto the bare
-          // ad-hoc config; there is no base-config pointer (a saved
-          // automation is invoked with `agent automation run` instead).
+          // The flat raw-session body: a SessionConfig plus run settings;
+          // there is no base config to merge onto (a saved automation is
+          // invoked with `agent automation run` instead).
           let req: StartAgentSessionRequest = {}
           if (opts.configFile) {
             req = { ...req, ...startRequestFromConfig(readConfigFile(opts.configFile)) }

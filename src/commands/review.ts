@@ -130,22 +130,19 @@ export function registerReview(program: Command): void {
     'GET /v1/reviews',
   )
     .option('--repo <owner/name>', 'only reviews of this repository')
-    .option('--pr <number>', 'only reviews of this pull request', parsePositiveInt)
-    .option('-s, --status <status>', 'only reviews in this session status')
+    .option('--pr <number>', 'only reviews of this pull request number', parsePositiveInt)
+    .option('-s, --status <status>', 'only reviews in this status')
     .option('-l, --limit <n>', 'max results (server cap: 200)', parsePositiveInt)
     .option('--json', 'output raw JSON')
     .action(async (opts: ListOptions) => {
       await runAction(async () => {
-        const repo = opts.repo ? splitRepo(opts.repo) : undefined
-        if (opts.pr !== undefined && repo === undefined) {
-          throw new Error('--pr needs --repo <owner/name> to say which repository')
-        }
+        // Every filter is a set on the wire; the flags take one value each.
+        if (opts.repo) splitRepo(opts.repo)
         const reviews = (
           await api().reviews.list({
-            owner: repo?.owner,
-            repo: repo?.name,
-            pull_request_number: opts.pr,
-            status: opts.status,
+            repository: opts.repo ? [opts.repo] : undefined,
+            pull_request_number: opts.pr !== undefined ? [opts.pr] : undefined,
+            status: opts.status ? [opts.status] : undefined,
             limit: opts.limit,
           })
         ).items

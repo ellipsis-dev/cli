@@ -8,7 +8,12 @@ import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { formatTs, printJson, printTable, printYaml, runAction } from '../lib/output'
 import { automationUrl, sessionUrl } from '../lib/urls'
 import { readConfigFile } from './session'
-import type { AgentConfig, Automation, CreateAutomationRequest, CreatedAutomation } from '../lib/types'
+import type {
+  AutomationConfig,
+  Automation,
+  CreateAutomationRequest,
+  CreatedAutomation,
+} from '../lib/types'
 
 const DEFAULT_CONFIG_PATH = 'agents/my_agent.yaml'
 
@@ -183,8 +188,8 @@ export function registerAutomation(program: Command): void {
           }
           const client = api()
           const definition = opts.file
-            ? (readConfigFile(opts.file) as AgentConfig)
-            : (parseYaml((await client.templates.get(opts.template!)).yaml) as AgentConfig)
+            ? (readConfigFile(opts.file) as AutomationConfig)
+            : (parseYaml((await client.templates.get(opts.template!)).yaml) as AutomationConfig)
           const req: CreateAutomationRequest = { automation: definition }
           const created = await client.automations.create(req)
           // With --repo the automation is then moved into the repository by
@@ -231,7 +236,7 @@ export function registerAutomation(program: Command): void {
     .action(async (automationId: string, opts: { file: string; json?: boolean }) => {
       await runAction(async () => {
         const { automation: updated } = await api().automations.update(automationId, {
-          automation: readConfigFile(opts.file) as AgentConfig,
+          automation: readConfigFile(opts.file) as AutomationConfig,
         })
         if (opts.json) {
           printJson(updated)
@@ -352,7 +357,7 @@ export function registerAutomation(program: Command): void {
             const client = api()
             const template = await client.templates.get(opts.template!)
             const created = await client.automations.create({
-              automation: parseYaml(template.yaml) as AgentConfig,
+              automation: parseYaml(template.yaml) as AutomationConfig,
             })
             const linked = await client.automations.link(created.automation.id, {
               repository: opts.repo!,
@@ -399,11 +404,11 @@ function printCreated(created: CreatedAutomation): void {
 }
 
 function automationName(a: Automation): string {
-  return a.agent_config.ellipsis.name ?? a.id
+  return a.config.ellipsis.name ?? a.id
 }
 
-// A minimal valid automation. `claude.system` is the only required field;
-// everything else has a server-side default. Roots Ellipsis syncs from:
+// A minimal valid automation. `session.claude.system` is the only required
+// field; everything else has a server-side default. Roots Ellipsis syncs from:
 // agents/, .agents/, ellipsis/, .ellipsis/ (any depth), as .yaml/.yml.
 function starterConfig(name: string): string {
   return `# Ellipsis automation. Commit this to your default branch; Ellipsis syncs it
@@ -413,17 +418,19 @@ ellipsis:
   name: ${name}
   description: What this automation does.
 
-claude:
-  # System prompt defining the agent's behavior (required).
-  system: |
-    You are an Ellipsis agent. Describe the task you want it to perform here.
-  # model: claude-opus-5   # optional; defaults to the organization default
-
-# Optional, uncomment and fill in as needed:
+# When it runs. Omit for an automation you invoke yourself (\`agent automation run\`).
 # trigger:
 #   type: cron
 #   schedule: "0 9 * * 1-5"   # weekdays at 09:00
-# environment: backend        # a saved environment, by name
+
+# What each session runs on.
+session:
+  claude:
+    # System prompt defining the agent's behavior (required).
+    system: |
+      You are an Ellipsis agent. Describe the task you want it to perform here.
+    # model: claude-opus-5   # optional; defaults to the organization default
+  # environment: backend      # a saved environment, by name
 `
 }
 
@@ -432,7 +439,7 @@ claude:
 // API-managed automation has no file at all, which is a different thing from a
 // github-managed one whose source is momentarily unknown — so name it.
 function automationSource(a: Automation): string {
-  const s = a.agent_config_source_details as
+  const s = a.source_details as
     | { repo_id: number; path: string; branch: string }
     | null
     | undefined

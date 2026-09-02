@@ -126,11 +126,13 @@ export function rowMeta(session: AgentSession, now: Date = new Date()): string {
   return bits.join(', ')
 }
 
-// The agent identity to show for a session: the definition's own name, else
-// the id of the automation its snapshot came from. Both are absent for raw,
-// template, and built-in sessions, which have nothing to name.
+// The agent identity to show for a session: the automation's own name, else
+// the id of the automation it was started from. Both are absent for raw
+// sessions, which have nothing to name.
 export function sessionConfigName(session: AgentSession): string | null {
-  return session.agent.config.ellipsis.name ?? session.agent.automation_id ?? null
+  const automation = session.automation
+  if (!automation) return null
+  return automation.config.ellipsis.name ?? automation.id ?? null
 }
 
 // The sidebar's status bands, top to bottom: live conversations, then parked
@@ -263,9 +265,9 @@ export function attentionFlip(prevWord: string | undefined, nextWord: string): b
 }
 
 // --------------------------- start request shaping -------------------------
-// POST /v1/sessions is flat: the AgentConfig blocks on the request merge onto
-// the bare ad-hoc config (there is no base-config pointer; a saved automation
-// is invoked with POST /v1/automations/{id}/sessions instead).
+// POST /v1/sessions is flat: the request IS a SessionConfig plus run settings
+// (there is no base config and no merge; a saved automation is invoked with
+// POST /v1/automations/{id}/sessions instead).
 
 // Parse a repository value into an environment.repositories entry.
 // "owner/name" sets both; a bare "name" omits owner so the server defaults it
@@ -277,12 +279,13 @@ export function parseRepo(value: string): { name: string; owner?: string } {
   throw new Error(`a repository must be "name" or "owner/name", got "${value}"`)
 }
 
-// The AgentConfig keys POST /v1/sessions accepts. An inline config file's
-// other keys have no request-side equivalent — `trigger` and `input` (the
-// contract, not the payload) describe an automation, and the file's
-// `ellipsis:` block carries a name/enabled the request refuses — so they are
-// dropped rather than sent to a 422. `budget` is a dollar number on the
-// request where the file has a `budget.session`, so it is lifted.
+// The SessionConfig keys POST /v1/sessions accepts. An automation file nests
+// them under `session:`; its other keys have no request-side equivalent —
+// `trigger` and `input` (the contract, not the payload) describe an
+// automation, and the `ellipsis:` block carries a name/enabled the request
+// refuses — so they are dropped rather than sent to a 422. `budget` is a
+// dollar number on the request where the file has a `budget.session`, so it
+// is lifted.
 const START_CONFIG_KEYS = [
   'claude',
   'codex',
@@ -292,11 +295,18 @@ const START_CONFIG_KEYS = [
   'skills',
 ] as const
 
-// An inline agent config (`session start -f/-t`) as a start request: its
-// per-session keys, spread onto the request body.
+// An inline config file (`session start -f/-t`) as a start request. The file
+// is either an automation document (session keys under `session:`, as every
+// template and `agent automation init` file is) or a bare session config;
+// either way its per-session keys are spread onto the request body.
 export function startRequestFromConfig(
-  config: Record<string, unknown>,
+  document: Record<string, unknown>,
 ): StartAgentSessionRequest {
+  const nested = document.session
+  const config: Record<string, unknown> =
+    nested && typeof nested === 'object' && !Array.isArray(nested)
+      ? (nested as Record<string, unknown>)
+      : document
   const req: Record<string, unknown> = {}
   for (const key of START_CONFIG_KEYS) {
     if (config[key] !== undefined) req[key] = config[key]

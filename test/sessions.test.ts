@@ -52,10 +52,11 @@ import {
   mergeSidebarSessions,
 } from '../src/lib/sessions'
 import { theme } from '../src/lib/theme'
-import type { AgentConfig, AgentSession, SupportedModel } from '../src/lib/types'
+import type { AutomationConfig, AgentSession, SessionConfig, SupportedModel } from '../src/lib/types'
 
-// The session fixtures only read the config's name, so the rest is a stub.
-const BARE_CONFIG = { ellipsis: { name: null } } as unknown as AgentConfig
+// The session fixtures only read the automation's name, so the rest is a stub.
+const BARE_CONFIG = { ellipsis: { name: null } } as unknown as AutomationConfig
+const BARE_SESSION_CONFIG = {} as unknown as SessionConfig
 
 function session(overrides: Partial<AgentSession>): AgentSession {
   return {
@@ -64,7 +65,8 @@ function session(overrides: Partial<AgentSession>): AgentSession {
     updated_at: '2026-07-07T00:00:00Z',
     status: 'running',
     status_reason: null,
-    agent: { config: BARE_CONFIG, config_id: null, override: null, source: 'platform_default' },
+    config: BARE_SESSION_CONFIG,
+    automation: { id: null, config: BARE_CONFIG },
     source: 'api',
     harness: 'claude_code',
     prompting: { enabled: true },
@@ -1191,23 +1193,36 @@ describe('start request shaping', () => {
     expect(() => parseRepo('a/b/c')).toThrow(/must be "name" or "owner\/name"/)
   })
 
-  // Only the keys POST /v1/sessions accepts as per-session patches; a file's
-  // trigger/input/ellipsis blocks describe a saved agent, not a run.
-  it('maps an inline config onto the start request keys', () => {
+  // Only the keys POST /v1/sessions accepts; an automation file's
+  // trigger/input/ellipsis blocks describe a saved automation, not a run, and
+  // its session keys live under `session:`.
+  it('maps an automation file onto the start request keys', () => {
     expect(
       startRequestFromConfig({
         ellipsis: { name: 'my-agent' },
-        claude: { system: 'do it', model: 'claude-opus-5' },
-        environment: { repositories: [{ name: 'api' }] },
-        budget: { session: 5 },
         trigger: { type: 'cron', schedule: '* * * * *' },
         input: { json_schema: {} },
+        session: {
+          claude: { system: 'do it', model: 'claude-opus-5' },
+          environment: { repositories: [{ name: 'api' }] },
+          budget: { session: 5 },
+        },
       }),
     ).toEqual({
       claude: { system: 'do it', model: 'claude-opus-5' },
       environment: { repositories: [{ name: 'api' }] },
       budget: 5,
     })
+  })
+
+  it('accepts a bare session config too', () => {
+    expect(
+      startRequestFromConfig({
+        claude: { system: 'do it' },
+        budget: { session: 2 },
+        trigger: { type: 'cron', schedule: '* * * * *' },
+      }),
+    ).toEqual({ claude: { system: 'do it' }, budget: 2 })
   })
 
   it('adds the detected repo to an environment override only when absent', () => {
