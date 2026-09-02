@@ -570,21 +570,20 @@ describe('composerPickerRows', () => {
 })
 
 describe('applyComposerChoices', () => {
-  const untouched = { environment: { kind: 'default' } as const, model: null }
-
-  // Nothing picked: the base request (with the context repository the entry
-  // point added) is the whole message, and the server resolves the default.
-  it('leaves the base request alone when nothing was picked', () => {
-    const base = { prompt: 'hi', repositories: ['acme/api'] }
-    expect(applyComposerChoices(base, untouched)).toEqual(base)
-  })
+  // The launcher always names an environment; `empty` is its bare-sandbox
+  // stand-in when nothing else is checked.
+  const untouched = { environment: { kind: 'empty' } as const, model: null }
 
   it('keeps the context repo and patches the model as a claude block', () => {
     const req = applyComposerChoices(
       { repositories: ['acme/api'] },
       { ...untouched, model: 'claude-opus-5' },
     )
-    expect(req).toEqual({ repositories: ['acme/api'], claude: { model: 'claude-opus-5' } })
+    expect(req).toEqual({
+      repositories: ['acme/api'],
+      environment: {},
+      claude: { model: 'claude-opus-5' },
+    })
   })
 
   // A named environment ships as the string, which re-picks it wholesale; the
@@ -609,8 +608,7 @@ describe('applyComposerChoices', () => {
     })
   })
 
-  // `empty` is the bare sandbox: `{}` on the wire, since omitting the key
-  // would let the server pick the account default.
+  // `empty` is the bare sandbox: `{}` on the wire, said outright.
   it('sends an empty object for the empty preset', () => {
     const req = applyComposerChoices(
       { repositories: ['acme/api'] },
@@ -1095,55 +1093,37 @@ describe('environmentPresets', () => {
     { id: 'env_2', name: 'web-e2e' },
   ]
 
-  // The account default leads (it is what an untouched start runs in), the
-  // built-in `empty` closes the row.
-  it('leads with the account default and ends with empty', () => {
-    const presets = environmentPresets(environments, 'web-e2e')
-    expect(presets.map((p) => p.name)).toEqual(['web-e2e', 'backend', 'empty'])
-    expect(presets[0]).toMatchObject({ id: 'env_2', isDefault: true, note: 'account default' })
-    expect(presets[1].note).toBeNull()
-    expect(presets[2].id).toBe(EMPTY_ENVIRONMENT_ID)
+  // The API's order, then the built-in `empty` closes the row. No
+  // organization default leads: the server has none.
+  it('keeps the API order and ends with empty', () => {
+    const presets = environmentPresets(environments)
+    expect(presets.map((p) => p.id)).toEqual(['env_1', 'env_2', EMPTY_ENVIRONMENT_ID])
+    expect(presets[0].note).toBeNull()
   })
 
-  it('matches the default by id as well as by name', () => {
-    expect(environmentPresets(environments, 'env_1')[0].id).toBe('env_1')
-  })
-
-  it('keeps the API order when there is no default', () => {
-    expect(environmentPresets(environments, null).map((p) => p.id)).toEqual([
-      'env_1',
-      'env_2',
-      EMPTY_ENVIRONMENT_ID,
-    ])
-  })
-
-  // A synced environment's note says where its definition lives, after the
-  // default marker when both apply.
+  // A synced environment's note says where its definition lives.
   it('notes the source file a synced environment came from', () => {
     const presets = environmentPresets(
       environments,
-      'backend',
       new Map([['env_1', 'acme/api/e.yaml @ abcdef1']]),
     )
-    expect(presets[0].note).toBe('account default · acme/api/e.yaml @ abcdef1')
+    expect(presets[0].note).toBe('acme/api/e.yaml @ abcdef1')
   })
 })
 
 describe('restingPresetIndex', () => {
-  const presets = environmentPresets([{ id: 'env_1', name: 'backend' }], null)
-
-  // Unknown default: nothing is checked, so the request claims nothing.
-  it('is undefined while the default is unknown', () => {
-    expect(restingPresetIndex(presets, undefined)).toBeUndefined()
+  // Still loading: nothing is checked, so the request claims nothing.
+  it('is undefined while the list is loading', () => {
+    expect(restingPresetIndex(environmentPresets([]), false)).toBeUndefined()
   })
 
-  it('is empty when the organization has no default', () => {
-    expect(restingPresetIndex(presets, null)).toBe(presets.length - 1)
+  it('is the first saved environment', () => {
+    expect(restingPresetIndex(environmentPresets([{ id: 'env_1', name: 'backend' }]), true)).toBe(0)
   })
 
-  it('is the default when there is one', () => {
-    const withDefault = environmentPresets([{ id: 'env_1', name: 'backend' }], 'backend')
-    expect(restingPresetIndex(withDefault, 'backend')).toBe(0)
+  it('is empty when the account has no saved environment', () => {
+    const presets = environmentPresets([])
+    expect(presets[restingPresetIndex(presets, true)!].id).toBe(EMPTY_ENVIRONMENT_ID)
   })
 })
 
