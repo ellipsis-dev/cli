@@ -28,26 +28,27 @@ import {
   CUSTOM_ENVIRONMENT_LABEL,
   EMPTY_ENVIRONMENT_ID,
   EMPTY_PANE,
-  environmentOptions,
   environmentPane,
+  environmentPaneWalk,
+  environmentPresets,
   environmentSectionAt,
-  environmentSectionCount,
   environmentSectionRows,
-  environmentSectionSummary,
   environmentSourceLabel,
   PANE_SECTION_LABELS,
-  PANE_SECTIONS,
   paneEquals,
+  restingPresetIndex,
   parseVariableEntry,
   repositoryRefLabel,
   scriptRowLines,
   variableRowLabel,
   type ComposerChoices,
+  type ComposerEnvironment,
   type ComposerModel,
   type CustomMcpServer,
   type CustomVariable,
   type EnvironmentPaneState,
   type PaneSection,
+  type PaneWalkStep,
   validateMcpServer,
   rowDescription,
   rowGlyph,
@@ -312,6 +313,12 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
   // server without GET /models) leaves the list empty and the launcher falls
   // back to its built-in set.
   const [environments, setEnvironments] = useState<SavedEnvironment[] | null>(null)
+  // The organization's default environment: what an untouched start runs in,
+  // so the launcher can show it checked. undefined until the settings land
+  // (or if they never do), null when the organization has none.
+  const [defaultEnvironment, setDefaultEnvironment] = useState<string | null | undefined>(
+    undefined,
+  )
   const [secretNames, setSecretNames] = useState<string[] | null>(null)
   const [repos, setRepos] = useState<RepositorySummary[] | null>(null)
   const [models, setModels] = useState<SupportedModel[] | null>(null)
@@ -328,6 +335,12 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       .catch((err) => {
         setEnvironments([])
         reportApiError('environments', err)
+      })
+    void api.settings.organization
+      .get()
+      .then((r) => setDefaultEnvironment(r.default_environment ?? null))
+      .catch((err) => {
+        reportApiError('settings', err)
       })
     void api.secrets
       .list()
@@ -469,6 +482,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       error={startError ?? apiError}
       armed={armed}
       environments={environments}
+      defaultEnvironment={defaultEnvironment}
       secretNames={secretNames}
       repos={repos}
       builtInServers={builtInServers}
@@ -505,30 +519,22 @@ function EscOnlyInput({
   return null
 }
 
-// One row of the launcher's configuration block: a label + its value, opened
-// in place with →/enter. The two picker rows open an option list and pick one;
-// a section row opens its slice of the run's sandbox for editing.
-type PickerKey = 'environment' | 'model'
-type LauncherRow =
-  | { kind: 'picker'; key: PickerKey; label: string }
-  | { kind: 'section'; key: PaneSection; label: string }
-const LAUNCHER_ROWS: readonly LauncherRow[] = [
-  { kind: 'picker', key: 'environment', label: 'Environment' },
-  ...PANE_SECTIONS.map(
-    (key): LauncherRow => ({ kind: 'section', key, label: PANE_SECTION_LABELS[key] }),
-  ),
-  { kind: 'picker', key: 'model', label: 'Model' },
-]
-
-// The environment.* section rows sit indented under ENVIRONMENT, mirroring
-// where they land in the POST /v1/sessions body — the launcher IS the request
-// body, so its rows nest the way the request's keys do.
-const SECTION_INDENT = '    '
-
 // The prompt row's persistent label, upper-cased in render like every other
 // row's, and what its empty input says: enter is a real start.
 const PROMPT_LABEL = 'Prompt'
 const PROMPT_HINT = 'Enter to start a cloud session...'
+
+// The two configuration headers under the prompt box, and the column their
+// values (the preset row, the model pick) start in.
+const ENVIRONMENT_LABEL = 'Environment'
+const MODEL_LABEL = 'Model'
+const HEADER_LABEL_WIDTH = ENVIRONMENT_LABEL.length + 3
+
+// The environment field rows sit two columns in from the headers, each with
+// its section's label in a column of its own, so the values read down one
+// edge whatever section they belong to.
+const FIELD_INDENT = '  '
+const FIELD_LABEL_WIDTH = Math.max(...Object.values(PANE_SECTION_LABELS).map((l) => l.length)) + 3
 
 // The variable form's placeholders, each stating what leaving that field empty
 // means, in the field it applies to.
@@ -538,12 +544,15 @@ const VALUE_PLACEHOLDER = 'leave empty to pull from secrets'
 // The prompt box's interior padding, matching the chat composer's.
 const PROMPT_PAD_X = 2
 
-// Where the launcher's cursor is: the prompt row, one of the configuration rows
-// (by LAUNCHER_ROWS index), or a session row (by id, so the poll re-sorting
-// under the cursor doesn't move the highlight).
+// Where the launcher's cursor is, top to bottom: the prompt row, the
+// environment preset row, one of the environment field rows (by its index in
+// the flat walk), the model row, or a session row (by id, so the poll
+// re-sorting under the cursor doesn't move the highlight).
 type LauncherCursor =
   | { kind: 'prompt' }
-  | { kind: 'option'; at: number }
+  | { kind: 'presets' }
+  | { kind: 'pane'; at: number }
+  | { kind: 'model' }
   | { kind: 'list'; id: string }
 
 // Adding a variable in the custom section: a two-field form, name over value,
@@ -580,69 +589,69 @@ type ScriptEditor = {
 }
 
 
-// The launcher: one painted box holding everything about the next session —
-// the configuration rows on top, the prompt row last — with history below —
+// The launcher: the prompt box on top, the next session's configuration under
+// it, history under that —
 //
-//    | ▶ AGENT: none
-//    |   ENVIRONMENT: backend-sandbox
-//    |       REPOSITORIES: acme/api
-//    |       MCP SERVERS: linear
-//    |       VARIABLES: API_TOKEN
-//    |       IMAGE:
-//    |       HOOKS:
-//    |       COMPUTE: cpu 4
-//    |   MODEL: claude-opus-5
-//    |
-//    |   PROMPT: Enter to start a cloud session...
+//    | ▶ PROMPT: Enter to start a cloud session...
 //
-//    Recent sessions:                                    @me in account
-//    ● latest session                               $0.20, 2m ago
-//    ● …                                   (LIST_ROWS rows; scrolls)
+//      ENVIRONMENT   ▸staging◂   ci   empty
+//                    account default · acme/api/envs/staging.yaml @ abc1234
+//        repositories   [x] acme/api
+//                           branch: main
+//                       [ ] acme/web
+//        mcp servers    [x] linear
+//                       [ ] slack
+//                       + new
+//        variables      [x] API_TOKEN
+//                       + new
+//        image          dockerfile_append:
+//                       setup: |
+//                         npm ci
+//        hooks          post_start:
+//                       post_clone:
+//        compute        cpu: 4
+//                       memory: 16GB
+//                       timeout:
+//      MODEL         claude-opus-5
+//
+//     RECENT SESSIONS:                                    @me in account
+//     ● latest session                               $0.20, 2m ago
+//     ● …                                   (LIST_ROWS rows; scrolls)
 //
 // ONE input, two readings: what you type into the prompt row is the next
 // session's prompt AND a live filter over the list below, so finding old work
 // and starting new work are the same gesture. Enter starts a session with the
-// text (empty text starts it idle). ↑ walks up into the configuration rows,
-// where enter (or →) opens that row in place — inside the box, growing it
-// downward, so nothing swaps out and the session list stays. ↓ walks down into
-// the list, where enter opens a session.
+// text (empty text starts it idle). ↓ walks down through the configuration —
+// the preset row, every environment field, the model row — and on into the
+// list, where enter opens a session. ↑ walks back up.
 //
-// The Agent, Environment and Model rows open an option list and pick one —
+// The ENVIRONMENT row is the saved environments, laid out as presets: ←/→ on
+// that row moves the pick, and the field rows under it are what the picked
+// one resolves to — every section open, nothing behind a dropdown. Together
+// the field rows are the whole truth about the sandbox. Editing any of them
+// is what makes the run custom: no preset is checked, a `custom` preset
+// appears at the end of the row and takes the check, and from then on the
+// fields' own lists are what ship. Picking a preset again reseeds them and
+// `custom` goes away. That is why unchecking a repository the preset brought
+// in actually drops it: the fields replace the resolved lists rather than
+// adding to them (see applyComposerChoices).
 //
-//    |   ENVIRONMENT: backend-sandbox
-//    |     ▶ [x] backend-sandbox
-//    |       [ ] web-e2e
-//    |       [ ] [empty]
+// The account default leads the presets and is what an untouched launcher
+// stands on; `empty` (the bare sandbox) closes the row. The repository the
+// CLI is standing in shows checked under every preset, since the request adds
+// it to whichever environment resolves.
 //
-// A section row opens its slice of the sandbox for editing —
+// A checkbox row toggles with enter (or →/space). The branch and compute rows
+// are one-line inputs edited by typing on them; blank = whatever the server
+// resolves. A script field (image, hooks) prints as a YAML block scalar over
+// its own lines, capped at SCRIPT_ROW_LINES with a count of what is hidden.
+// Enter opens it into a real multi-line editor — arrows move within the text,
+// enter is a newline, esc commits — because a Dockerfile is written in lines,
+// not on one.
 //
-//    |   REPOSITORIES: acme/api
-//    |     ▶ [x] acme/api
-//    |            branch: main
-//    |       [ ] acme/web
-//
-// The row's own ▶ goes away while it is open — the caret is on whichever row
-// under it the cursor is on, and two carets would say the cursor is in two
-// places. ↑/↓ walk the opened rows (↑ off the first closes back to the row);
-// esc or ← closes.
-//
-// Together the section rows are the whole truth about the sandbox. Picking an
-// environment seeds every one of them. Editing any row is what makes the run
-// custom: every saved environment unchecks, a `custom` row appears at the
-// bottom of the Environment list and takes the check, and from then on the
-// sections' own lists are what ship. Checking a saved environment again reseeds
-// them and the `custom` row goes away. That is why unchecking a repository the
-// environment brought in actually drops it: the sections replace the resolved
-// lists rather than adding to them (see applyComposerChoices).
-//
-// A script field (image, hooks) prints as a YAML block scalar over its own lines,
-// capped at SCRIPT_ROW_LINES with a count of what is hidden. Enter opens it into
-// a real multi-line editor — arrows move within the text, enter is a newline, esc
-// commits — because a Dockerfile is written in lines, not on one.
-//
-// The rows share one glyph gutter, so the ▶ moves down a single left edge; the
-// box's accent bar stays lit throughout, marking the block rather than any one
-// row. Typing anywhere outside an input row returns the cursor to the prompt.
+// The MODEL row still opens a dropdown: a model is a name, not a thing to
+// read out. Typing anywhere outside an input row returns the cursor to the
+// prompt.
 //
 // A saved automation is not a launcher pick: an automation runs exactly as
 // defined and takes no prompt (`agent automation run`), while the launcher is
@@ -656,6 +665,7 @@ function Launcher({
   error,
   armed,
   environments,
+  defaultEnvironment,
   secretNames,
   repos,
   builtInServers,
@@ -677,15 +687,18 @@ function Launcher({
   armed: boolean
   // null while loading; [] when the account has none / the fetch failed.
   environments: SavedEnvironment[] | null
+  // The organization's default environment (a name or id), null when it has
+  // none, undefined while unknown (loading, or the settings fetch failed).
+  defaultEnvironment: string | null | undefined
   models: SupportedModel[] | null
-  // The account's stored variable names, checkable in the custom section.
+  // The account's stored variable names, checkable in the variables section.
   secretNames: string[] | null
-  // The account's connected repositories, checkable in the custom section.
+  // The account's connected repositories, checkable in the repositories section.
   repos: RepositorySummary[] | null
   // The built-in MCP server names available on this account.
   builtInServers: string[]
-  // The cwd's repo ("owner/name") — merged into an unnamed start's checkout
-  // set, so the resting basic-sandbox pane shows it checked.
+  // The cwd's repo ("owner/name") — added to every start's checkout set, so it
+  // shows checked under every preset.
   detectedRepo: string | null
   sessions: readonly AgentSession[]
   polledOnce: boolean
@@ -698,45 +711,31 @@ function Launcher({
   const [text, setText] = useState('')
   const [textCursor, setTextCursor] = useState(0)
   const [cursor, setCursor] = useState<LauncherCursor>({ kind: 'prompt' })
-  // null = the environment row is untouched: the resting basic sandbox (or
-  // the organization's default environment, server-side). The list arrives
-  // async, so there is no index to seed this with at mount.
-  const [environmentPick, setEnvironmentPick] = useState<number | null>(null)
+  // null = the preset row is untouched: the account default (or `empty`) is
+  // checked and the request names nothing. The list arrives async, so there
+  // is no index to seed this with at mount.
+  const [presetPick, setPresetPick] = useState<number | null>(null)
   // null = the model row is untouched, so it tracks whichever row carries the
   // server-resolved pick (see modelIdx). The list arrives async, so there is no
   // index to seed this with at mount.
   const [modelPick, setModelPick] = useState<number | null>(null)
-  // The open picker row's dropdown state: which one is open and where its
-  // highlight sits (an option index). null = no dropdown open.
-  const [openPicker, setOpenPicker] = useState<{
-    key: PickerKey
-    hover: number
-  } | null>(null)
-  // The open section row, and which of its rows the cursor is on. null = every
-  // section is closed. At most one of openPicker/openSection is non-null: each
-  // is opened from the row cursor, which neither reaches while the other is up.
-  const [openSection, setOpenSection] = useState<{
-    key: PaneSection
-    hover: number
-  } | null>(null)
-  // The section rows' backing state: this run's sandbox, whole. null =
-  // untouched, so the sections show (and send) whatever the picked environment
+  // The model dropdown's state: where its highlight sits (an option index).
+  // null = closed.
+  const [openModel, setOpenModel] = useState<{ hover: number } | null>(null)
+  // The field rows' backing state: this run's sandbox, whole. null =
+  // untouched, so the rows show (and send) whatever the picked preset
   // resolves to; the first edit seeds it and from then on it is the truth.
   const [pane, setPane] = useState<EnvironmentPaneState | null>(null)
   // The "+ new server" form's state, or null while closed.
   const [serverEditor, setServerEditor] = useState<ServerEditor | null>(null)
-  // The open custom key's editor, or null. `field` is which of the two steps is
+  // The open variable form, or null. `field` is which of the two steps is
   // being typed; `name`/`value` hold what has been typed so far.
   const [editor, setEditor] = useState<VariableEditor | null>(null)
   // The open script field's editor, or null while every script row is collapsed.
   const [scriptEditor, setScriptEditor] = useState<ScriptEditor | null>(null)
 
-  // Both pickers deal in the same option shape (ComposerModel), so the
-  // renderer can ask either of them for a group heading or a subtext; only the
-  // model list fills those in.
-  //
-  // Each synced environment's option row names the file it came from — only
-  // when the API already gave us the pieces (source_details + the repo list).
+  // Each synced environment's note names the file it came from — only when
+  // the API already gave us the pieces (source_details + the repo list).
   const environmentSources = useMemo(() => {
     const byId = new Map((repos ?? []).map((r) => [r.id, r.full_name]))
     const labels = new Map<string, string>()
@@ -746,49 +745,56 @@ function Launcher({
     }
     return labels
   }, [environments, repos])
-  const environmentOptionList = useMemo(
-    () => environmentOptions(environments ?? [], environmentSources),
-    [environments, environmentSources],
+  const presets = useMemo(
+    () => environmentPresets(environments ?? [], defaultEnvironment, environmentSources),
+    [environments, defaultEnvironment, environmentSources],
   )
-  // The saved environments between the resting "basic sandbox" and the
-  // built-in [empty]. The `custom` row the list grows once the pane diverges
-  // is NOT here: it names no environment, so it would have nothing to seed the
-  // pane from (see environmentRowsWithCustom).
-  const environmentOptionRows = useMemo<ComposerModel[]>(
-    () => environmentOptionList.map((o) => ({ id: o.id as string | null, label: o.label })),
-    [environmentOptionList],
-  )
-  const environmentIdx =
-    environmentPick !== null ? Math.min(environmentPick, environmentOptionRows.length - 1) : 0
-  const pickedEnvironment = environmentOptionRows[environmentIdx]
-  // What the picked environment resolves to, as pane rows. This is what the pane
-  // shows until it is edited, and what "custom" is measured against.
+  // The checked preset: the explicit pick, else the resting one — undefined
+  // while the default is unknown, so nothing is checked that the request
+  // would not send.
+  const presetIdx =
+    presetPick !== null
+      ? Math.min(presetPick, presets.length - 1)
+      : restingPresetIndex(presets, defaultEnvironment)
+  const pickedPreset = presetIdx === undefined ? undefined : presets[presetIdx]
+  // What the picked preset resolves to, as field rows, with the detected
+  // repository checked in (the request adds it to every environment). This is
+  // what the rows show until edited, and what "custom" is measured against.
   const connectedRepoNames = useMemo(() => (repos ?? []).map((r) => r.full_name), [repos])
   const seededPane = useMemo<EnvironmentPaneState>(() => {
-    const id = pickedEnvironment?.id
-    if (id === EMPTY_ENVIRONMENT_ID) return EMPTY_PANE
-    if (id) {
-      return environmentPane(
-        (environments ?? []).find((e) => e.id === id)?.environment,
-        connectedRepoNames,
-      )
-    }
-    // The null-id "basic sandbox" row: the detected repo shows checked, since
-    // the base request merges it into the checkout set (see
-    // applyComposerChoices).
-    return paneWithRepository(EMPTY_PANE, detectedRepo)
-  }, [
-    environments,
-    pickedEnvironment,
-    connectedRepoNames,
-    detectedRepo,
-  ])
-  // The pane as the run would use it: the edits if there are any, else the
-  // picked environment's own values.
+    const id = pickedPreset?.id
+    const base =
+      id === undefined || id === EMPTY_ENVIRONMENT_ID
+        ? EMPTY_PANE
+        : environmentPane(
+            (environments ?? []).find((e) => e.id === id)?.environment,
+            connectedRepoNames,
+          )
+    return paneWithRepository(base, detectedRepo)
+  }, [environments, pickedPreset, connectedRepoNames, detectedRepo])
+  // The rows as the run would use them: the edits if there are any, else the
+  // picked preset's own values.
   const shownPane = pane ?? seededPane
-  // Once the pane no longer says what the environment it was seeded from says,
-  // no environment is checked and the pane is what ships.
+  // Once the rows no longer say what the preset they were seeded from says,
+  // no preset is checked and the rows are what ship.
   const isCustom = pane !== null && !paneEquals(pane, seededPane)
+  // The preset row as printed: the presets, plus `custom` at the end once the
+  // rows have diverged. `custom` is where the check sits then.
+  const presetRow = useMemo<{ id: string; name: string }[]>(
+    () =>
+      isCustom
+        ? [...presets, { id: CUSTOM_ENVIRONMENT_ID, name: CUSTOM_ENVIRONMENT_LABEL }]
+        : presets,
+    [presets, isCustom],
+  )
+  const checkedPresetIdx = isCustom ? presets.length : presetIdx
+  // Picking a preset drops the rows' edits, since the rows are a reading of
+  // whatever preset is checked.
+  const pickPreset = (at: number): void => {
+    if (presets.length === 0) return
+    setPresetPick(Math.min(Math.max(0, at), presets.length - 1))
+    setPane(null)
+  }
   // The server's selectable set (GET /models); before it lands — and on an
   // older server that has no such route — the built-in fallback list.
   const modelOptions = useMemo(() => composerModelOptions(models ?? []), [models])
@@ -799,42 +805,6 @@ function Launcher({
     const at = modelOptions.findIndex((o) => o.id === null)
     return at === -1 ? 0 : at
   }, [modelPick, modelOptions])
-  // What the open Environment list shows: the saved environments, plus the
-  // `custom` row that appears at the bottom and takes the check once the pane
-  // has diverged. A real row, so ↓ reaches it — and picking it is a no-op that
-  // just closes the list, since the pane already says what it names.
-  const environmentRowsWithCustom = useMemo<ComposerModel[]>(
-    () =>
-      isCustom
-        ? [...environmentOptionRows, { id: CUSTOM_ENVIRONMENT_ID, label: CUSTOM_ENVIRONMENT_LABEL }]
-        : environmentOptionRows,
-    [environmentOptionRows, isCustom],
-  )
-  const optionsFor = (key: PickerKey) =>
-    key === 'environment' ? environmentRowsWithCustom : modelOptions
-  const pickedIdx = (key: PickerKey): number =>
-    key === 'environment'
-      ? isCustom
-        ? environmentOptionRows.length
-        : environmentIdx
-      : modelIdx
-  const isPicked = (key: PickerKey, at: number): boolean =>
-    at === Math.min(pickedIdx(key), optionsFor(key).length - 1)
-  // Checking an environment drops the pane's edits, since the pane is a reading of
-  // whatever environment is checked. The `custom` row names no environment, so
-  // landing on it keeps the edits it stands for.
-  const pickEnvironment = (at: number): void => {
-    const id = optionsFor('environment')[at]?.id
-    if (id === CUSTOM_ENVIRONMENT_ID) return
-    setEnvironmentPick(at)
-    setPane(null)
-  }
-  // Every picker row single-picks, so activating an option closes the dropdown.
-  const activate = (key: PickerKey, at: number): void => {
-    if (key === 'environment') pickEnvironment(at)
-    else setModelPick(at)
-    setOpenPicker(null)
-  }
   // Editing any row seeds the pane from what is on screen, so the first
   // keystroke doesn't silently drop the rest of the environment.
   const editPane = (edit: (p: EnvironmentPaneState) => EnvironmentPaneState): void => {
@@ -843,12 +813,12 @@ function Launcher({
   // Whether a repository is in the run, and at which ref.
   const repositoryFor = (fullName: string) =>
     shownPane.repositories.find((r) => r.fullName === fullName)
-  // The pane's shape, shared by its navigation and its renderer.
+  // The rows' shape, shared by their navigation and their renderer.
   const paneInput = useMemo(
     () => ({
-      // The connected repositories, plus any the picked environment named that
-      // aren't among them — the pane is the whole truth, so a repo that will be
-      // cloned has to be visible (and uncheckable) even if it is no longer
+      // The connected repositories, plus any the picked preset named that
+      // aren't among them — the rows are the whole truth, so a repo that will
+      // be cloned has to be visible (and uncheckable) even if it is no longer
       // connected.
       repoNames: [
         ...connectedRepoNames,
@@ -865,15 +835,17 @@ function Launcher({
     }),
     [connectedRepoNames, secretNames, shownPane, builtInServers],
   )
+  // Every field row, top to bottom, as ↑/↓ walk them.
+  const walk = useMemo(() => environmentPaneWalk(paneInput), [paneInput])
   // Whether a variable of this name is in the run, and at which value.
   const variableFor = (name: string): CustomVariable | undefined =>
     shownPane.variables.find((v) => v.name === name)
-  // Enter (or →) on an open section's row: a repo, server or variable toggles;
-  // a variable already in the run re-opens for editing; the add buttons open a
+  // Enter (or →) on a field row: a repo, server or variable toggles; a
+  // variable already in the run re-opens for editing; the add buttons open a
   // form; a script field opens its multi-line editor. The branch and compute
   // rows are one-line inputs — enter there is a no-op, typing is what edits
   // them.
-  const activateSectionRow = (section: PaneSection, hover: number): void => {
+  const activateRow = (section: PaneSection, hover: number): void => {
     const row = environmentSectionAt(paneInput, section, hover)
     if (row.kind === 'image' || row.kind === 'hook') {
       const scripts = row.kind === 'image' ? 'image' : 'hooks'
@@ -967,17 +939,18 @@ function Launcher({
   // waits for the first message, so you can open a sandbox before you know
   // what to ask it.
   //
-  // A checked environment ships by name and the pane stays home; once the pane
-  // has diverged (or [empty] is checked, which is the pane emptied) it ships
-  // instead, and the untouched resting row ships neither — the entry point's
-  // base request is what that row shows.
+  // What ships is what the screen says: the checked preset by name (or `{}`
+  // for `empty`), the rows whole once they have diverged, and nothing at all
+  // while no preset is checked because the default is still unknown.
   const submit = (): void => {
-    const named = !isCustom && pickedEnvironment?.id !== EMPTY_ENVIRONMENT_ID
-    onSubmit(text.trim(), {
-      environment: named ? (pickedEnvironment?.id ?? null) : null,
-      model: modelOptions[modelIdx]?.id ?? null,
-      pane: named && pickedEnvironment?.id === null ? null : shownPane,
-    })
+    const environment: ComposerEnvironment = isCustom
+      ? { kind: 'custom', pane: shownPane }
+      : pickedPreset === undefined
+        ? { kind: 'default' }
+        : pickedPreset.id === EMPTY_ENVIRONMENT_ID
+          ? { kind: 'empty' }
+          : { kind: 'named', id: pickedPreset.id }
+    onSubmit(text.trim(), { environment, model: modelOptions[modelIdx]?.id ?? null })
   }
 
   // The rows below the prompt: the typed text filters the list live, so the
@@ -994,6 +967,12 @@ function Launcher({
     setText((t) => t.slice(0, textCursor) + ch + t.slice(textCursor))
     setTextCursor((c) => c + ch.length)
   }
+  // The row above the model row, and the row below the preset row: the field
+  // walk when it has rows, else each other.
+  const lastPaneCursor = (): LauncherCursor =>
+    walk.length > 0 ? { kind: 'pane', at: walk.length - 1 } : { kind: 'presets' }
+  const firstPaneCursor = (): LauncherCursor =>
+    walk.length > 0 ? { kind: 'pane', at: 0 } : { kind: 'model' }
 
   useInput(
     (ch, key) => {
@@ -1137,51 +1116,93 @@ function Launcher({
         }
         return
       }
-      // An open dropdown is a modal subtree: ↑/↓ walk its options,
+      // The open model dropdown is a modal subtree: ↑/↓ walk its options,
       // → (or enter/space) activates the highlighted one, ← (or esc) backs out.
-      if (openPicker !== null) {
-        const optionCount = optionsFor(openPicker.key).length
+      if (openModel !== null) {
+        const optionCount = modelOptions.length
         if (key.escape || key.leftArrow) {
-          setOpenPicker(null)
+          setOpenModel(null)
           return
         }
         if (key.upArrow) {
-          setOpenPicker((p) => p && { ...p, hover: Math.max(0, p.hover - 1) })
+          setOpenModel((p) => p && { hover: Math.max(0, p.hover - 1) })
           return
         }
         if (key.downArrow) {
-          setOpenPicker((p) => p && { ...p, hover: Math.min(optionCount - 1, p.hover + 1) })
+          setOpenModel((p) => p && { hover: Math.min(optionCount - 1, p.hover + 1) })
           return
         }
         if (key.rightArrow || key.return || ch === ' ') {
-          activate(openPicker.key, Math.min(openPicker.hover, optionCount - 1))
+          setModelPick(Math.min(openModel.hover, optionCount - 1))
+          setOpenModel(null)
           return
         }
         return
       }
-      // An open section is the same kind of subtree over its own rows. The
-      // branch and compute rows are one-line inputs edited by typing, blank =
-      // whatever the server resolves.
-      if (openSection !== null) {
-        const rowCount = environmentSectionCount(paneInput, openSection.key)
-        // A section emptied under the cursor (the repo list, refetched) has
-        // nothing to walk.
-        if (rowCount === 0 || key.escape || key.leftArrow) {
-          setOpenSection(null)
+      if (starting) return
+      // Word/line jumps and kills (option+←/→, ctrl+a/e/w/u/k, …) act on the
+      // prompt from anywhere in the launcher, dropping the cursor back onto it.
+      const edited = applyEditShortcut({ text, cursor: textCursor }, ch, key)
+      if (edited) {
+        setCursor({ kind: 'prompt' })
+        setText(edited.text)
+        setTextCursor(edited.cursor)
+        return
+      }
+      // The preset row: ←/→ move the pick, ↑ returns to the prompt, ↓ walks
+      // into the field rows, esc returns to the prompt, typing does too.
+      if (cursor.kind === 'presets') {
+        if (key.leftArrow) {
+          pickPreset((checkedPresetIdx ?? presets.length) - 1)
+          return
+        }
+        if (key.rightArrow) {
+          if (checkedPresetIdx === undefined) pickPreset(0)
+          else if (!isCustom) pickPreset(checkedPresetIdx + 1)
           return
         }
         if (key.upArrow) {
-          // ↑ off the first row closes the section, back onto its own row.
-          if (openSection.hover === 0) setOpenSection(null)
-          else setOpenSection({ ...openSection, hover: openSection.hover - 1 })
+          setCursor({ kind: 'prompt' })
           return
         }
         if (key.downArrow) {
-          setOpenSection({ ...openSection, hover: Math.min(rowCount - 1, openSection.hover + 1) })
+          setCursor(firstPaneCursor())
           return
         }
-        const hover = Math.min(openSection.hover, rowCount - 1)
-        const target = environmentSectionAt(paneInput, openSection.key, hover)
+        if (key.escape) {
+          setCursor({ kind: 'prompt' })
+          return
+        }
+        if (ch && ch !== ' ' && !key.ctrl && !key.meta && !key.return) toPromptWith(ch)
+        return
+      }
+      // A field row: ↑ off the first climbs to the preset row, ↓ off the last
+      // lands on the model row. The branch and compute rows are one-line
+      // inputs edited by typing, blank = whatever the server resolves.
+      if (cursor.kind === 'pane') {
+        // The walk shrank under the cursor (the repo list refetched, a repo
+        // unchecked): fall back onto the nearest row.
+        if (walk.length === 0) {
+          setCursor({ kind: 'presets' })
+          return
+        }
+        const at = Math.min(cursor.at, walk.length - 1)
+        const step = walk[at]
+        if (key.upArrow) {
+          if (at === 0) setCursor({ kind: 'presets' })
+          else setCursor({ kind: 'pane', at: at - 1 })
+          return
+        }
+        if (key.downArrow) {
+          if (at >= walk.length - 1) setCursor({ kind: 'model' })
+          else setCursor({ kind: 'pane', at: at + 1 })
+          return
+        }
+        if (key.escape) {
+          setCursor({ kind: 'prompt' })
+          return
+        }
+        const target = environmentSectionAt(paneInput, step.section, step.hover)
         const typing =
           ch && ch !== ' ' && !key.ctrl && !key.meta && !key.return && !key.rightArrow
         if (target.kind === 'repoRef') {
@@ -1211,42 +1232,26 @@ function Launcher({
             return
           }
         }
-        if (key.return || key.rightArrow || ch === ' ')
-          activateSectionRow(openSection.key, hover)
+        if (key.return || key.rightArrow || ch === ' ') {
+          activateRow(step.section, step.hover)
+          return
+        }
+        if (typing) toPromptWith(ch)
         return
       }
-      if (starting) return
-      // Word/line jumps and kills (option+←/→, ctrl+a/e/w/u/k, …) act on the
-      // prompt from anywhere in the launcher, dropping the cursor back onto it.
-      const edited = applyEditShortcut({ text, cursor: textCursor }, ch, key)
-      if (edited) {
-        setCursor({ kind: 'prompt' })
-        setText(edited.text)
-        setTextCursor(edited.cursor)
-        return
-      }
-      if (cursor.kind === 'option') {
-        // The configuration rows: ↑ walks up them and stops at the first, ↓ off
-        // the last returns to the prompt, →/enter opens the row in place, esc
-        // returns to the prompt, typing does too.
+      // The model row: →/enter opens its list on the checked row, so the walk
+      // starts where the run currently stands rather than at the top.
+      if (cursor.kind === 'model') {
         if (key.upArrow) {
-          if (cursor.at > 0) setCursor({ kind: 'option', at: cursor.at - 1 })
+          setCursor(lastPaneCursor())
           return
         }
         if (key.downArrow) {
-          if (cursor.at < LAUNCHER_ROWS.length - 1) setCursor({ kind: 'option', at: cursor.at + 1 })
-          else setCursor({ kind: 'prompt' })
+          if (!hideList && shown.length > 0) setCursor({ kind: 'list', id: shown[0].id })
           return
         }
         if (key.return || key.rightArrow) {
-          const row = LAUNCHER_ROWS[cursor.at]
-          // A picker's list opens on the checked row, so the walk starts where
-          // the run currently stands rather than at the top.
-          if (row.kind === 'picker') setOpenPicker({ key: row.key, hover: pickedIdx(row.key) })
-          // An empty section (the repo list before the fetch lands) has nothing
-          // to open onto.
-          else if (environmentSectionCount(paneInput, row.key) > 0)
-            setOpenSection({ key: row.key, hover: 0 })
+          setOpenModel({ hover: modelIdx })
           return
         }
         if (key.escape) {
@@ -1258,9 +1263,9 @@ function Launcher({
       }
       if (cursor.kind === 'list') {
         // The session rows at the bottom: ↑/↓ walk them (↑ off the top climbs
-        // back to the prompt), enter opens the highlighted session.
+        // back to the model row), enter opens the highlighted session.
         if (key.upArrow) {
-          if (listIdx <= 0) setCursor({ kind: 'prompt' })
+          if (listIdx <= 0) setCursor({ kind: 'model' })
           else setCursor({ kind: 'list', id: shown[listIdx - 1].id })
           return
         }
@@ -1281,18 +1286,13 @@ function Launcher({
         if (ch && !key.ctrl && !key.meta) toPromptWith(ch)
         return
       }
-      // At the prompt box: ↑ lands on the LAST configuration row (the one just
-      // above it), ↓ on the first session row.
+      // At the prompt box: ↓ lands on the preset row just under it.
       if (key.return) {
         submit()
         return
       }
-      if (key.upArrow) {
-        setCursor({ kind: 'option', at: LAUNCHER_ROWS.length - 1 })
-        return
-      }
       if (key.downArrow) {
-        if (!hideList && shown.length > 0) setCursor({ kind: 'list', id: shown[0].id })
+        setCursor({ kind: 'presets' })
         return
       }
       if (key.leftArrow) {
@@ -1326,41 +1326,26 @@ function Launcher({
     { isActive: focused && rawMode },
   )
 
-  // The value shown on a configuration row: a picker's pick's label (or
-  // "custom" once the sections have diverged from it), a section's one-line
-  // summary of what it holds. Never "loading…": every resting value is known
-  // locally, so a pending fetch has nothing to do with what this run would use.
-  const rowValue = (row: LauncherRow): string => {
-    if (row.kind === 'section') return environmentSectionSummary(shownPane, row.key)
-    if (row.key === 'environment' && isCustom) return CUSTOM_ENVIRONMENT_LABEL
-    const options = optionsFor(row.key)
-    return options[Math.min(pickedIdx(row.key), options.length - 1)]?.label ?? 'Default'
-  }
-
   // Columns available inside the prompt box: the terminal minus its left accent
-  // bar and the interior padding on both sides. The configuration rows and the
-  // open dropdown live in there now, so it — not `width` — is what their layout
-  // has to fit.
+  // bar and the interior padding on both sides.
   const contentWidth = Math.max(1, width - 1 - PROMPT_PAD_X * 2)
-  const open = openPicker
-  const openOptions = open ? optionsFor(open.key) : []
-  const openHover = open ? Math.min(open.hover, openOptions.length - 1) : -1
-  // Every option plus its group heading — an open dropdown prints the whole
+  const modelHover = openModel ? Math.min(openModel.hover, modelOptions.length - 1) : -1
+  // Every option plus its group heading — the open dropdown prints the whole
   // list, so a long model list grows the block and the terminal scrolls rather
   // than hiding rows behind a window.
-  const visibleRows = open ? composerPickerRows(openOptions) : []
+  const modelRows = openModel ? composerPickerRows(modelOptions) : []
   // The price table's column widths: the label column, then one numeric column
   // per lane, each as wide as its widest cell (its heading included) so the
   // dollars read down a right-aligned column. null when there is no price to
   // quote, or when the terminal is too narrow to hold the whole table — a
   // padded row would push the last column off the right edge.
   const rateTable = (() => {
-    if (!openOptions.some((o) => o.rate)) return null
-    const label = Math.max(...openOptions.map((o) => o.label.length))
-    const input = Math.max(2, ...openOptions.map((o) => (o.rate?.input ?? '').length))
-    const output = Math.max(3, ...openOptions.map((o) => (o.rate?.output ?? '').length))
+    if (!openModel || !modelOptions.some((o) => o.rate)) return null
+    const label = Math.max(...modelOptions.map((o) => o.label.length))
+    const input = Math.max(2, ...modelOptions.map((o) => (o.rate?.input ?? '').length))
+    const output = Math.max(3, ...modelOptions.map((o) => (o.rate?.output ?? '').length))
     const total = OPTION_GUTTER + label + 2 + input + 2 + output + RATE_UNIT.length
-    return total <= contentWidth ? { label, input, output } : null
+    return total <= width ? { label, input, output } : null
   })()
   // A row's price cells, right-aligned into the table's columns. A model the
   // server quoted no card for prints blank cells rather than shifting the ones
@@ -1373,317 +1358,289 @@ function Launcher({
         (rate?.output ?? '').padStart(rateTable.output)
       : ''
 
-  // An open section's rows, under the row that names it.
-  const renderSection = (section: PaneSection): React.ReactNode =>
-    environmentSectionRows(paneInput, section).map((paneRow) => {
-      // A form owns the caret while it is open, so the section's own highlight
-      // goes dark rather than showing a second one.
-      const hovered =
-        focused &&
-        openSection?.key === section &&
-        openSection.hover === paneRow.hover &&
-        editor === null &&
-        serverEditor === null &&
-        scriptEditor === null
-      const glyph = (
-        <Text>
-          {SECTION_INDENT}
-          <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>
-        </Text>
+  // The gutter every row under the prompt box shares: the ▶ moves down one
+  // left edge, one column in from the terminal's.
+  const gutter = (on: boolean): React.ReactNode => (
+    <Text>
+      {' '}
+      <Text color={theme.cursor}>{on ? SELECTION_GLYPH : ' '}</Text>{' '}
+    </Text>
+  )
+  // The blank a continuation line prints under a field row's label column.
+  const fieldContinuation = ' '.repeat(3 + FIELD_INDENT.length + FIELD_LABEL_WIDTH)
+
+  // A field row's content, after its label column. The label prints on the
+  // section's first row only; the rest of the section's rows leave the column
+  // blank so the values read as one list.
+  const renderField = (step: PaneWalkStep, at: number): React.ReactNode => {
+    const paneRow = environmentSectionRows(paneInput, step.section)[step.hover]
+    if (!paneRow) return null
+    // A form owns the caret while it is open, so the row's own highlight goes
+    // dark rather than showing a second one.
+    const hovered =
+      focused &&
+      cursor.kind === 'pane' &&
+      Math.min(cursor.at, walk.length - 1) === at &&
+      editor === null &&
+      serverEditor === null &&
+      scriptEditor === null
+    const label = step.first ? PANE_SECTION_LABELS[step.section] : ''
+    const prefix = (
+      <Text>
+        {gutter(hovered)}
+        {FIELD_INDENT}
+        <Text color={theme.muted}>{label.padEnd(FIELD_LABEL_WIDTH)}</Text>
+      </Text>
+    )
+    const key = `${step.section}:${step.hover}`
+    if (paneRow.kind === 'repo') {
+      const checked = repositoryFor(paneRow.fullName) !== undefined
+      return (
+        <Box key={key} width={width}>
+          <Text wrap="truncate">
+            {prefix}
+            <Text color={hovered || checked ? theme.foreground : theme.muted}>
+              {`[${checked ? 'x' : ' '}] ${paneRow.fullName}`}
+            </Text>
+          </Text>
+        </Box>
       )
-      if (paneRow.kind === 'repo') {
-        const checked = repositoryFor(paneRow.fullName) !== undefined
-        return (
-          <Box key={`repo:${paneRow.fullName}`} width={contentWidth}>
-            <Text wrap="truncate">
-              {glyph}{' '}
-              <Text color={hovered || checked ? theme.foreground : theme.muted}>
-                {`  [${checked ? 'x' : ' '}] ${paneRow.fullName}`}
-              </Text>
-            </Text>
-          </Box>
-        )
-      }
-      // A checked repo's branch input: typing edits the ref in place; empty rests
-      // on the repo's default branch.
-      if (paneRow.kind === 'repoRef') {
-        const ref = repositoryFor(paneRow.fullName)?.ref ?? null
-        const resting = repositoryRefLabel(
-          ref,
-          (repos ?? []).find((r) => r.full_name === paneRow.fullName)?.default_branch ?? null,
-        )
-        return (
-          <Box key={`repoRef:${paneRow.fullName}`} width={contentWidth}>
-            <Text wrap="truncate">
-              {glyph}{' '}
-              {/* Aligned under the repo name, past its checkbox. */}
-              <Text color={theme.muted}>{'      branch: '}</Text>
-              {ref !== null ? (
-                <Text color={theme.foreground}>
-                  {ref}
-                  {hovered && <Text inverse> </Text>}
-                </Text>
-              ) : (
-                // The default branch as a placeholder: it is what an untouched
-                // row clones, and typing replaces it.
-                <Text color={theme.muted}>
-                  {hovered && resting ? (
-                    <Text>
-                      <Text inverse>{resting[0]}</Text>
-                      {resting.slice(1)}
-                    </Text>
-                  ) : (
-                    (resting ?? '')
-                  )}
-                </Text>
-              )}
-            </Text>
-          </Box>
-        )
-      }
-      // A compute field: a one-line input like a branch row, blank meaning
-      // whatever the server resolves.
-      if (paneRow.kind === 'compute') {
-        const held = shownPane.compute[paneRow.field]
-        return (
-          <Box key={`compute:${paneRow.field}`} width={contentWidth}>
-            <Text wrap="truncate">
-              {glyph} <Text color={theme.muted}>{`  ${paneRow.field}: `}</Text>
+    }
+    // A checked repo's branch input: typing edits the ref in place; empty rests
+    // on the repo's default branch.
+    if (paneRow.kind === 'repoRef') {
+      const ref = repositoryFor(paneRow.fullName)?.ref ?? null
+      const resting = repositoryRefLabel(
+        ref,
+        (repos ?? []).find((r) => r.full_name === paneRow.fullName)?.default_branch ?? null,
+      )
+      return (
+        <Box key={key} width={width}>
+          <Text wrap="truncate">
+            {prefix}
+            {/* Aligned under the repo name, past its checkbox. */}
+            <Text color={theme.muted}>{'    branch: '}</Text>
+            {ref !== null ? (
               <Text color={theme.foreground}>
-                {held}
+                {ref}
                 {hovered && <Text inverse> </Text>}
               </Text>
-            </Text>
-          </Box>
-        )
-      }
-      // An image or hook field: a script, so it prints as a YAML block scalar
-      // over its own lines rather than crushed onto the label's line. Long ones
-      // are capped and say how many lines they are hiding, since a hidden line
-      // is a hidden instruction to the sandbox. Enter opens it (scriptEditor),
-      // which prints every line and puts a real caret in the text.
-      if (paneRow.kind === 'image' || paneRow.kind === 'hook') {
-        const section = paneRow.kind === 'image' ? 'image' : 'hooks'
-        const editing =
-          scriptEditor?.section === section && scriptEditor.field === paneRow.field
-        const held = editing
-          ? scriptEditor.text
-          : (shownPane[section][paneRow.field as never] as string)
-        const { lines, hidden } = scriptRowLines(held, editing)
-        return (
-          <Box key={`${paneRow.kind}:${paneRow.field}`} flexDirection="column" width={contentWidth}>
-            <Box width={contentWidth}>
-              <Text wrap="truncate">
-                {glyph}{' '}
-                <Text color={theme.muted}>{`  ${paneRow.field}:`}</Text>
-                {/* The block-scalar marker, so a multi-line value reads the way
-                    it would in the environment YAML. */}
-                <Text color={theme.muted}>{held === '' ? '' : ' |'}</Text>
-                {held === '' && (hovered || editing) && <Text inverse> </Text>}
-              </Text>
-            </Box>
-            {held !== '' &&
-              lines.map((line, at) => {
-                // The caret sits in the open editor's text, at the line and
-                // column it is actually on.
-                const before = lines.slice(0, at).reduce((n, l) => n + l.length + 1, 0)
-                const column = editing ? scriptEditor.cursor - before : -1
-                const here = editing && column >= 0 && column <= line.length
-                return (
-                  <Box key={at} width={contentWidth}>
-                    <Text wrap="truncate">
-                      {SECTION_INDENT}
-                      {'    '}
-                      <Text color={theme.foreground}>
-                        {here ? (
-                          <Text>
-                            {line.slice(0, column)}
-                            <Text inverse>{line[column] ?? ' '}</Text>
-                            {line.slice(column + 1)}
-                          </Text>
-                        ) : (
-                          line
-                        )}
-                      </Text>
-                    </Text>
-                  </Box>
-                )
-              })}
-            {hidden > 0 && (
-              <Box width={contentWidth}>
-                <Text wrap="truncate" color={theme.muted}>
-                  {SECTION_INDENT}
-                  {`    … ${hidden} more line${hidden === 1 ? '' : 's'}`}
-                </Text>
-              </Box>
-            )}
-          </Box>
-        )
-      }
-      if (paneRow.kind === 'mcpServer') {
-        const checked = shownPane.mcpServers.some((s) => s.name === paneRow.name)
-        return (
-          <Box key={`mcp:${paneRow.name}`} width={contentWidth}>
-            <Text wrap="truncate">
-              {glyph}{' '}
-              <Text color={hovered || checked ? theme.foreground : theme.muted}>
-                {`  [${checked ? 'x' : ' '}] ${paneRow.name}`}
-              </Text>
-            </Text>
-          </Box>
-        )
-      }
-      if (paneRow.kind === 'variable') {
-        const held = variableFor(paneRow.name)
-        return (
-          <Box key={`variable:${paneRow.name}`} width={contentWidth}>
-            <Text wrap="truncate">
-              {glyph}{' '}
-              <Text color={hovered || held !== undefined ? theme.foreground : theme.muted}>
-                {`  [${held !== undefined ? 'x' : ' '}] ${variableRowLabel(paneRow.name, held?.value)}`}
-              </Text>
-            </Text>
-          </Box>
-        )
-      }
-      if (paneRow.kind === 'addMcpServer') {
-        return (
-          <Box key="addMcpServer" flexDirection="column" width={contentWidth}>
-            <Box width={contentWidth}>
-              <Text wrap="truncate">
-                {glyph}{' '}
-                <Text color={hovered ? theme.foreground : theme.muted}>
-                  {'  '}
-                  {ADD_MCP_SERVER_LABEL}
-                </Text>
-              </Text>
-            </Box>
-            {serverEditor !== null && (
-              <Box flexDirection="column" width={contentWidth}>
-                {SERVER_EDITOR_FIELDS.map((field) => {
-                  const here = serverEditor.field === field
-                  const typed = serverEditor[field]
-                  // name is required; command/url pick the type, so their
-                  // placeholders say the either/or.
-                  const ghost =
-                    typed !== ''
-                      ? null
-                      : field === 'name'
-                        ? 'my-tools'
-                        : field === 'command'
-                          ? 'stdio: npx -y my-tools-mcp'
-                          : 'remote: https://mcp.example.com'
-                  return (
-                    <Box key={field} width={contentWidth}>
-                      <Text wrap="truncate">
-                        {SECTION_INDENT}
-                        <Text color={theme.cursor}>{here ? SELECTION_GLYPH : ' '}</Text>{' '}
-                        {/* Aligned under the button text, past its "+ ". */}
-                        <Text color={theme.muted}>{`    ${field}: `}</Text>
-                        <Text color={theme.foreground}>{typed}</Text>
-                        {ghost ? (
-                          <Text>
-                            {here ? (
-                              <Text inverse>{ghost[0]}</Text>
-                            ) : (
-                              <Text color={theme.muted}>{ghost[0]}</Text>
-                            )}
-                            <Text color={theme.muted}>{ghost.slice(1)}</Text>
-                          </Text>
-                        ) : (
-                          here && <Text inverse> </Text>
-                        )}
-                      </Text>
-                    </Box>
-                  )
-                })}
-                {serverEditor.error !== null && (
-                  <Box width={contentWidth}>
-                    <Text wrap="truncate" color={theme.muted}>
-                      {SECTION_INDENT}
-                      {'         '}
-                      {serverEditor.error}
-                    </Text>
-                  </Box>
+            ) : (
+              // The default branch as a placeholder: it is what an untouched
+              // row clones, and typing replaces it.
+              <Text color={theme.muted}>
+                {hovered && resting ? (
+                  <Text>
+                    <Text inverse>{resting[0]}</Text>
+                    {resting.slice(1)}
+                  </Text>
+                ) : (
+                  (resting ?? '')
                 )}
-              </Box>
-            )}
-          </Box>
-        )
-      }
-      return (
-        <Box key="addVariable" flexDirection="column" width={contentWidth}>
-          <Box width={contentWidth}>
-            <Text wrap="truncate">
-              {glyph}{' '}
-              <Text color={hovered ? theme.foreground : theme.muted}>
-                {'  '}
-                {ADD_VARIABLE_LABEL}
               </Text>
+            )}
+          </Text>
+        </Box>
+      )
+    }
+    // A compute field: a one-line input like a branch row, blank meaning
+    // whatever the server resolves.
+    if (paneRow.kind === 'compute') {
+      const held = shownPane.compute[paneRow.field]
+      return (
+        <Box key={key} width={width}>
+          <Text wrap="truncate">
+            {prefix}
+            <Text color={theme.muted}>{`${paneRow.field}: `}</Text>
+            <Text color={theme.foreground}>
+              {held}
+              {hovered && <Text inverse> </Text>}
+            </Text>
+          </Text>
+        </Box>
+      )
+    }
+    // An image or hook field: a script, so it prints as a YAML block scalar
+    // over its own lines rather than crushed onto the label's line. Long ones
+    // are capped and say how many lines they are hiding, since a hidden line
+    // is a hidden instruction to the sandbox. Enter opens it (scriptEditor),
+    // which prints every line and puts a real caret in the text.
+    if (paneRow.kind === 'image' || paneRow.kind === 'hook') {
+      const section = paneRow.kind === 'image' ? 'image' : 'hooks'
+      const editing = scriptEditor?.section === section && scriptEditor.field === paneRow.field
+      const held = editing
+        ? scriptEditor.text
+        : (shownPane[section][paneRow.field as never] as string)
+      const { lines, hidden } = scriptRowLines(held, editing)
+      return (
+        <Box key={key} flexDirection="column" width={width}>
+          <Box width={width}>
+            <Text wrap="truncate">
+              {prefix}
+              <Text color={theme.muted}>{`${paneRow.field}:`}</Text>
+              {/* The block-scalar marker, so a multi-line value reads the way
+                  it would in the environment YAML. */}
+              <Text color={theme.muted}>{held === '' ? '' : ' |'}</Text>
+              {held === '' && (hovered || editing) && <Text inverse> </Text>}
             </Text>
           </Box>
-          {editor !== null && (
-            <Box flexDirection="column" width={contentWidth}>
-              {(['name', 'value'] as const).map((field) => {
-                const here = editor.field === field
-                const typed = editor[field]
-                const ghost =
-                  typed !== '' ? null : field === 'name' ? NAME_PLACEHOLDER : VALUE_PLACEHOLDER
-                return (
-                  <Box key={field} width={contentWidth}>
-                    <Text wrap="truncate">
-                      {SECTION_INDENT}
-                      <Text color={theme.cursor}>{here ? SELECTION_GLYPH : ' '}</Text>{' '}
-                      <Text color={theme.muted}>{`    ${field}: `}</Text>
-                      <Text color={theme.foreground}>{typed}</Text>
-                      {ghost ? (
+          {held !== '' &&
+            lines.map((line, i) => {
+              // The caret sits in the open editor's text, at the line and
+              // column it is actually on.
+              const before = lines.slice(0, i).reduce((n, l) => n + l.length + 1, 0)
+              const column = editing ? scriptEditor.cursor - before : -1
+              const here = editing && column >= 0 && column <= line.length
+              return (
+                <Box key={i} width={width}>
+                  <Text wrap="truncate">
+                    {fieldContinuation}
+                    {'  '}
+                    <Text color={theme.foreground}>
+                      {here ? (
                         <Text>
-                          {here ? (
-                            <Text inverse>{ghost[0]}</Text>
-                          ) : (
-                            <Text color={theme.muted}>{ghost[0]}</Text>
-                          )}
-                          <Text color={theme.muted}>{ghost.slice(1)}</Text>
+                          {line.slice(0, column)}
+                          <Text inverse>{line[column] ?? ' '}</Text>
+                          {line.slice(column + 1)}
                         </Text>
                       ) : (
-                        here && <Text inverse> </Text>
+                        line
                       )}
                     </Text>
-                  </Box>
-                )
-              })}
-              {editor.error !== null && (
-                <Box width={contentWidth}>
-                  <Text wrap="truncate" color={theme.muted}>
-                    {SECTION_INDENT}
-                    {'         '}
-                    {editor.error}
                   </Text>
                 </Box>
-              )}
+              )
+            })}
+          {hidden > 0 && (
+            <Box width={width}>
+              <Text wrap="truncate" color={theme.muted}>
+                {fieldContinuation}
+                {`  … ${hidden} more line${hidden === 1 ? '' : 's'}`}
+              </Text>
             </Box>
           )}
         </Box>
       )
-    })
+    }
+    if (paneRow.kind === 'mcpServer') {
+      const checked = shownPane.mcpServers.some((s) => s.name === paneRow.name)
+      return (
+        <Box key={key} width={width}>
+          <Text wrap="truncate">
+            {prefix}
+            <Text color={hovered || checked ? theme.foreground : theme.muted}>
+              {`[${checked ? 'x' : ' '}] ${paneRow.name}`}
+            </Text>
+          </Text>
+        </Box>
+      )
+    }
+    if (paneRow.kind === 'variable') {
+      const held = variableFor(paneRow.name)
+      return (
+        <Box key={key} width={width}>
+          <Text wrap="truncate">
+            {prefix}
+            <Text color={hovered || held !== undefined ? theme.foreground : theme.muted}>
+              {`[${held !== undefined ? 'x' : ' '}] ${variableRowLabel(paneRow.name, held?.value)}`}
+            </Text>
+          </Text>
+        </Box>
+      )
+    }
+    // The two "+ new" buttons, each growing its form under itself while open.
+    // A form's fields sit indented under the button text, the caret on the
+    // field being typed.
+    const isServer = paneRow.kind === 'addMcpServer'
+    const form = isServer ? serverEditor : editor
+    const fields: readonly string[] = isServer ? SERVER_EDITOR_FIELDS : ['name', 'value']
+    const ghostFor = (field: string): string => {
+      if (!isServer) return field === 'name' ? NAME_PLACEHOLDER : VALUE_PLACEHOLDER
+      // name is required; command/url pick the type, so their placeholders
+      // say the either/or.
+      return field === 'name'
+        ? 'my-tools'
+        : field === 'command'
+          ? 'stdio: npx -y my-tools-mcp'
+          : 'remote: https://mcp.example.com'
+    }
+    return (
+      <Box key={key} flexDirection="column" width={width}>
+        <Box width={width}>
+          <Text wrap="truncate">
+            {prefix}
+            <Text color={hovered ? theme.foreground : theme.muted}>
+              {isServer ? ADD_MCP_SERVER_LABEL : ADD_VARIABLE_LABEL}
+            </Text>
+          </Text>
+        </Box>
+        {form !== null && (
+          <Box flexDirection="column" width={width}>
+            {fields.map((field) => {
+              const here = form.field === field
+              const typed = (form as unknown as Record<string, string>)[field]
+              const ghost = typed !== '' ? null : ghostFor(field)
+              return (
+                <Box key={field} width={width}>
+                  <Text wrap="truncate">
+                    {gutter(here)}
+                    {FIELD_INDENT}
+                    {' '.repeat(FIELD_LABEL_WIDTH)}
+                    <Text color={theme.muted}>{`  ${field}: `}</Text>
+                    <Text color={theme.foreground}>{typed}</Text>
+                    {ghost ? (
+                      <Text>
+                        {here ? (
+                          <Text inverse>{ghost[0]}</Text>
+                        ) : (
+                          <Text color={theme.muted}>{ghost[0]}</Text>
+                        )}
+                        <Text color={theme.muted}>{ghost.slice(1)}</Text>
+                      </Text>
+                    ) : (
+                      here && <Text inverse> </Text>
+                    )}
+                  </Text>
+                </Box>
+              )
+            })}
+            {form.error !== null && (
+              <Box width={width}>
+                <Text wrap="truncate" color={theme.muted}>
+                  {fieldContinuation}
+                  {'  '}
+                  {form.error}
+                </Text>
+              </Box>
+            )}
+          </Box>
+        )}
+      </Box>
+    )
+  }
 
-  const caretVisible =
-    focused && cursor.kind === 'prompt' && !starting && openPicker === null && openSection === null
+  const caretVisible = focused && cursor.kind === 'prompt' && !starting && openModel === null
   const listWin = navSlice(shown.length, LIST_ROWS, listIdx)
   const showList = !hideList
   // The bottom line is for news only — the prompt box's hint already carries the
   // key map, so there is nothing routine to print here.
   const statusLine = armed ? CTRL_C_QUIT_HINT : starting ? '✻ Starting session…' : null
+  const presetsActive = focused && cursor.kind === 'presets'
+  const modelActive = focused && cursor.kind === 'model' && openModel === null
+  // What the row under the presets says about the checked one: the account
+  // default and/or where its file lives; for `custom`, which preset it was
+  // edited from. Nothing while the default is still unknown.
+  const presetNote = isCustom
+    ? pickedPreset
+      ? `edited from ${pickedPreset.name}`
+      : null
+    : (pickedPreset?.note ?? null)
 
   return (
     <Box flexDirection="column" width={width}>
       {/* The prompt box: the chat composer's painted slab, with an accent bar
-          down its left edge and a blank row of padding above and below its
-          contents — the configuration rows first, the prompt row last.
-
-          The bar stays the cursor color throughout: it marks the whole block
-          rather than any one row, and the ▶ in the shared gutter is what says
-          which row you are on. */}
+          down its left edge and a blank row of padding above and below the
+          prompt row. */}
       <Box
         width={width}
         flexDirection="column"
@@ -1696,89 +1653,6 @@ function Launcher({
         paddingY={1}
         paddingX={PROMPT_PAD_X}
       >
-        {/* What the next run will use: the configuration rows, walked with ↑
-            from the prompt row below, each opening in place. */}
-        {LAUNCHER_ROWS.map((r, i) => {
-          const isOpen = r.kind === 'picker' ? open?.key === r.key : openSection?.key === r.key
-          // The row's own caret only while it is CLOSED: once open, the caret
-          // belongs to whichever row under it the cursor is on, and two carets
-          // would say the cursor is in two places.
-          const active = focused && cursor.kind === 'option' && cursor.at === i && !isOpen
-          return (
-            <Box key={r.key} flexDirection="column" width={contentWidth}>
-              <Box width={contentWidth}>
-                <Box width={2} flexShrink={0}>
-                  <Text color={theme.cursor}>{active ? SELECTION_GLYPH : ' '}</Text>
-                </Box>
-                <Text wrap="truncate">
-                  {/* Upper-cased, so the whole configuration block reads with
-                      one kind of label; environment.* sections indent under
-                      the ENVIRONMENT row they belong to. */}
-                  {r.kind === 'section' ? SECTION_INDENT : ''}
-                  <Text color={theme.muted}>{r.label.toUpperCase()}: </Text>
-                  <Text color={active || isOpen ? theme.foreground : theme.muted}>
-                    {rowValue(r)}
-                  </Text>
-                </Text>
-              </Box>
-              {/* The price table's column heads, over the numeric columns they
-                  name, with the unit stated once here instead of on every row. */}
-              {r.kind === 'picker' && isOpen && rateTable && (
-                <Box width={contentWidth}>
-                  <Text wrap="truncate" color={theme.muted}>
-                    {' '.repeat(OPTION_GUTTER + rateTable.label)}
-                    {rateCells({ input: 'IN', output: 'OUT' })}
-                    {RATE_UNIT}
-                  </Text>
-                </Box>
-              )}
-              {r.kind === 'picker' &&
-                isOpen &&
-                visibleRows.map((pickerRow) => {
-                  // A group heading: the vendor that built the models under it,
-                  // upper-cased into an eyebrow the way the dashboard's
-                  // rate-card table sets its own, and muted so it reads as
-                  // structure rather than as another pickable row.
-                  if (pickerRow.kind === 'group') {
-                    return (
-                      <Box key={`group:${pickerRow.label}`} width={contentWidth}>
-                        <Text wrap="truncate" color={theme.muted}>
-                          {'    '}
-                          {pickerRow.label.toUpperCase()}
-                        </Text>
-                      </Box>
-                    )
-                  }
-                  const at = pickerRow.at
-                  const opt = openOptions[at]
-                  if (!opt) return null
-                  const hovered = at === openHover
-                  const picked = isPicked(r.key, at)
-                  return (
-                    <Box key={opt.id ?? 'default'} width={contentWidth}>
-                      <Text wrap="truncate">
-                        {'   '}
-                        <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
-                        <Text color={hovered || picked ? theme.foreground : theme.muted}>
-                          {`[${picked ? 'x' : ' '}] ${rateTable ? opt.label.padEnd(rateTable.label) : opt.label}`}
-                        </Text>
-                        {/* The prices, always muted — the table's numbers next
-                            to the id whether or not the row is the highlighted
-                            one, so walking the list never moves the eye off the
-                            name. */}
-                        <Text color={theme.muted}>{rateCells(opt.rate)}</Text>
-                      </Text>
-                    </Box>
-                  )
-                })}
-              {r.kind === 'section' && isOpen && renderSection(r.key)}
-            </Box>
-          )
-        })}
-        {/* One blank row between the config rows and the prompt, so the input
-            reads as its own thing; same glyph gutter, so every row still reads
-            down one left edge and the ▶ moves between them. */}
-        <Box height={1} />
         <Box width={contentWidth}>
           <Box width={2} flexShrink={0}>
             <Text color={theme.cursor}>
@@ -1815,6 +1689,97 @@ function Launcher({
             </Text>
           </Box>
         </Box>
+      </Box>
+      <Text> </Text>
+      {/* The preset row: the saved environments laid out side by side, the
+          checked one bracketed. Presets wrap onto further lines when the row
+          runs out of width, so every one stays reachable. */}
+      <Box width={width} flexDirection="row" flexWrap="wrap">
+        <Box flexShrink={0}>
+          <Text>
+            {gutter(presetsActive)}
+            <Text color={theme.muted}>
+              {ENVIRONMENT_LABEL.toUpperCase().padEnd(HEADER_LABEL_WIDTH)}
+            </Text>
+          </Text>
+        </Box>
+        {presetRow.map((p, at) => {
+          const checked = at === checkedPresetIdx
+          return (
+            <Box key={p.id} flexShrink={0} marginRight={2}>
+              <Text color={checked ? theme.foreground : theme.muted} bold={checked}>
+                {checked ? `▸${p.name}◂` : ` ${p.name} `}
+              </Text>
+            </Box>
+          )
+        })}
+      </Box>
+      {presetNote && (
+        <Box width={width}>
+          <Text wrap="truncate" color={theme.muted}>
+            {' '.repeat(3 + HEADER_LABEL_WIDTH)}
+            {presetNote}
+          </Text>
+        </Box>
+      )}
+      {/* The field rows: what the checked preset resolves to, every section
+          open, edited in place. */}
+      {walk.map((step, at) => renderField(step, at))}
+      {/* The model row, opening its dropdown under itself. */}
+      <Box width={width} flexDirection="column">
+        <Box width={width}>
+          <Text wrap="truncate">
+            {gutter(modelActive)}
+            <Text color={theme.muted}>{MODEL_LABEL.toUpperCase().padEnd(HEADER_LABEL_WIDTH)}</Text>
+            <Text color={modelActive || openModel !== null ? theme.foreground : theme.muted}>
+              {modelOptions[modelIdx]?.label ?? 'Default'}
+            </Text>
+          </Text>
+        </Box>
+        {/* The price table's column heads, over the numeric columns they
+            name, with the unit stated once here instead of on every row. */}
+        {openModel !== null && rateTable && (
+          <Box width={width}>
+            <Text wrap="truncate" color={theme.muted}>
+              {' '.repeat(OPTION_GUTTER + rateTable.label)}
+              {rateCells({ input: 'IN', output: 'OUT' })}
+              {RATE_UNIT}
+            </Text>
+          </Box>
+        )}
+        {openModel !== null &&
+          modelRows.map((pickerRow) => {
+            if (pickerRow.kind === 'group') {
+              return (
+                <Box key={`group:${pickerRow.label}`} width={width}>
+                  <Text wrap="truncate" color={theme.muted}>
+                    {'    '}
+                    {pickerRow.label.toUpperCase()}
+                  </Text>
+                </Box>
+              )
+            }
+            const at = pickerRow.at
+            const opt = modelOptions[at]
+            if (!opt) return null
+            const hovered = at === modelHover
+            const picked = at === modelIdx
+            return (
+              <Box key={opt.id ?? 'default'} width={width}>
+                <Text wrap="truncate">
+                  {'   '}
+                  <Text color={theme.cursor}>{hovered ? SELECTION_GLYPH : ' '}</Text>{' '}
+                  <Text color={hovered || picked ? theme.foreground : theme.muted}>
+                    {`[${picked ? 'x' : ' '}] ${rateTable ? opt.label.padEnd(rateTable.label) : opt.label}`}
+                  </Text>
+                  {/* The prices, always muted — the table's numbers next to
+                      the id whether or not the row is the highlighted one, so
+                      walking the list never moves the eye off the name. */}
+                  <Text color={theme.muted}>{rateCells(opt.rate)}</Text>
+                </Text>
+              </Box>
+            )
+          })}
       </Box>
       {/* Two blank rows splitting what you are about to start from what you have
           already run. */}

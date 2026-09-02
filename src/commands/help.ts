@@ -4,7 +4,7 @@ import { api, APIError } from '../lib/api'
 import { apiRoutes } from '../lib/help'
 import { runAction } from '../lib/output'
 import { repoFromCwd } from '../lib/git'
-import { startConnect, startRequestFromConfig, withRepository } from './session'
+import { startConnect, startRequestFromConfig, withContextRepository } from './session'
 import type { StartAgentSessionRequest } from '../lib/types'
 
 // The template behind `agent help --interactive`. Kebab-case like every other
@@ -66,17 +66,13 @@ export function resolveCommandPath(program: Command, path: string[]): Command | 
 
 async function startHelperSession(): Promise<void> {
   const template = await api().templates.get(HELPER_TEMPLATE_SLUG)
-  const req: StartAgentSessionRequest = startRequestFromConfig(
+  let req: StartAgentSessionRequest = startRequestFromConfig(
     parseYaml(template.yaml) as Record<string, unknown>,
   )
-  // Same as `session start`: merge the repo we're standing in into the
-  // sandbox checkout set so the helper can answer questions about this
-  // checkout. A template whose environment is a name reference can't take the
-  // merge, so it is skipped there.
+  // Same as `session start`: add the repo we're standing in to the sandbox
+  // checkout set so the helper can answer questions about this checkout.
   const contextRepo = repoFromCwd(process.cwd())
-  if (contextRepo && typeof req.environment !== 'string') {
-    req.environment = withRepository(req.environment, contextRepo)
-  }
+  if (contextRepo) req = withContextRepository(req, contextRepo)
   // No prompt: the helper opens idle and waits for the question (a promptless
   // start is idle by definition since #6394).
 

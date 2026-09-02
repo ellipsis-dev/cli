@@ -52,12 +52,12 @@ import {
   parseRepo,
   sessionConfigName,
   startRequestFromConfig,
-  withRepository,
+  withContextRepository,
 } from '../lib/sessions'
 
 // Re-exported for existing importers (help.ts starts the helper template
 // through the same mapping).
-export { startRequestFromConfig, withRepository }
+export { startRequestFromConfig, withContextRepository }
 
 // Poll cadence for the `--watch` REST fallback (used only when live WebSocket
 // streaming is unavailable). Not user-configurable — the fallback is rare.
@@ -117,7 +117,7 @@ export function registerSession(program: Command): void {
     .option('--system <text>', 'override claude.system, the agent system prompt')
     .option(
       '-r, --repo <owner/name>',
-      'check out a repository in the sandbox (repeatable; a bare name means your account)',
+      'also check out a repository, in whichever environment the session runs (repeatable; a bare name means your account)',
       collect,
       [] as string[],
     )
@@ -235,21 +235,17 @@ export function registerSession(program: Command): void {
           if (opts.environment) {
             if (isPlainObject(req.environment) && Object.keys(req.environment).length > 0) {
               throw new Error(
-                '--environment names a saved environment wholesale; it cannot be combined with environment overrides (--repo/--cpu/--memory/--timeout or an override\'s environment block)',
+                '--environment names a saved environment wholesale; it cannot be combined with environment overrides (--cpu/--memory/--timeout or an override\'s environment block)',
               )
             }
             req.environment = opts.environment
-          } else {
-            // The repo we're standing in (origin remote), merged into the
-            // sandbox checkout set: an environment OBJECT deep-merges onto the
-            // resolved one and repositories merge by identity, so this only
-            // ever adds. Outside a git repo (or with no usable remote), and
-            // when a saved environment is named, nothing is added.
-            const contextRepo = repoFromCwd(process.cwd())
-            if (contextRepo && typeof req.environment !== 'string') {
-              req.environment = withRepository(req.environment, contextRepo)
-            }
           }
+          // The repo we're standing in (origin remote), added to whichever
+          // environment the session resolves to — the request's top-level
+          // `repositories` key joins the checkout set without replacing it.
+          // Outside a git repo (or with no usable remote) nothing is added.
+          const contextRepo = repoFromCwd(process.cwd())
+          if (contextRepo) req = withContextRepository(req, contextRepo)
           // Appended to the initial user query at build time; gives this
           // session instructions on top of the config's shared system prompt.
           if (promptText) req.prompt = promptText
@@ -823,8 +819,14 @@ export function buildStartOverride(opts: {
   if (opts.timeout !== undefined) compute.timeout = opts.timeout
   const environment: Record<string, unknown> = {}
   if (Object.keys(compute).length) environment.compute = compute
-  if (opts.repo && opts.repo.length) environment.repositories = opts.repo.map(parseRepo)
   if (Object.keys(environment).length) sugar.environment = environment
+  // --repo adds checkouts to whichever environment resolves (the request's
+  // additive `repositories` key), so it composes with -e. Validated here so a
+  // malformed value fails before the request is built.
+  if (opts.repo && opts.repo.length) {
+    opts.repo.forEach(parseRepo)
+    sugar.repositories = opts.repo
+  }
 
   if (opts.budget !== undefined) sugar.budget = opts.budget
 

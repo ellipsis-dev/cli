@@ -319,30 +319,20 @@ export function startRequestFromConfig(
   return req as StartAgentSessionRequest
 }
 
-// An environment override with `repo` ("owner/name" or a bare name) in its
-// repositories, added only when absent. An environment OBJECT deep-merges onto
-// the resolved one and repositories merge by identity, so this only ever adds
-// a checkout. Bare names compare by name alone, the way the server resolves
-// them.
-export function withRepository(
-  environment: StartAgentSessionRequest['environment'],
+// The request with `repo` ("owner/name" or a bare name) in its top-level
+// `repositories` key, added only when absent. That key is additive on the
+// server: each entry joins the resolved environment's checkouts when it is not
+// already there, whatever the environment (named, inline, or the default). The
+// environment block itself is never touched — an environment OBJECT is the
+// whole sandbox, so putting the repo there would drop the default.
+export function withContextRepository(
+  req: StartAgentSessionRequest,
   repo: string,
-): NonNullable<StartAgentSessionRequest['environment']> {
-  const entry = parseRepo(repo)
-  const base: Record<string, unknown> =
-    typeof environment === 'object' && environment !== null ? { ...environment } : {}
-  const repositories = Array.isArray(base.repositories) ? base.repositories : []
-  const has = repositories.some(
-    (r: unknown) =>
-      typeof r === 'object' &&
-      r !== null &&
-      (r as { name?: string }).name === entry.name &&
-      (entry.owner === undefined ||
-        (r as { owner?: string }).owner === undefined ||
-        (r as { owner?: string }).owner === entry.owner),
-  )
-  if (!has) base.repositories = [...repositories, entry]
-  return base as NonNullable<StartAgentSessionRequest['environment']>
+): StartAgentSessionRequest {
+  parseRepo(repo)
+  const repositories = req.repositories ?? []
+  if (repositories.includes(repo)) return req
+  return { ...req, repositories: [...repositories, repo] }
 }
 
 // --------------------------- new-session picker ---------------------------
@@ -602,21 +592,21 @@ export function computeOverride(compute: CustomCompute): Record<string, unknown>
   return out
 }
 
-// The built-in "no environment at all" option's id. A sentinel, never sent: the
-// launcher translates it into the cleared-list override, since the wire has no
-// name for "empty" (omitting the environment would let the ladder resolve one).
+// The built-in bare-sandbox preset's id. A sentinel, never sent: the launcher
+// translates it into `environment: {}` (omitting the environment would let
+// the server resolve the account default instead).
 export const EMPTY_ENVIRONMENT_ID = 'empty:builtin'
-export const EMPTY_ENVIRONMENT_LABEL = '[empty]'
+export const EMPTY_ENVIRONMENT_LABEL = 'empty'
 
-// The row that appears at the bottom of the list, checked, once the pane no
+// The preset that appears at the end of the row, checked, once the pane no
 // longer matches any saved environment. Also a sentinel: it names no
 // environment on the wire — the pane's own lists are the whole message.
 export const CUSTOM_ENVIRONMENT_ID = 'custom:builtin'
 export const CUSTOM_ENVIRONMENT_LABEL = 'custom'
 
-// The launcher's configuration sections, each a top-level row of its own:
-// the connected repositories, the MCP servers, the variables, then the image,
-// hook and compute fields. Enter on a section row opens its rows in place.
+// The launcher's configuration sections, printed open one after another
+// under the preset row: the connected repositories, the MCP servers, the
+// variables, then the image, hook and compute fields.
 //
 // Together the sections are the whole truth about the sandbox. Picking an
 // environment seeds them (see environmentPane); editing any row is what makes
@@ -750,56 +740,23 @@ export function environmentSectionAt(
   return target as EnvironmentPaneTarget
 }
 
-export function environmentSectionCount(input: EnvironmentPaneInput, section: PaneSection): number {
-  return environmentSectionRows(input, section).length
+// Every section's rows in one flat walk, in PANE_SECTIONS order: the launcher
+// prints every section open, so ↑/↓ move down one list rather than opening
+// sections one at a time. `first` marks a section's first row, where its label
+// prints.
+export interface PaneWalkStep {
+  section: PaneSection
+  hover: number
+  first: boolean
 }
 
-// A closed section row's value: what of the section is in the run, on one
-// line — the checked names, or the fields holding a value. Empty when nothing
-// is, so the row reads "REPOSITORIES:" the way an unset field does.
-// "N set" for the sections that summarize by count; empty when nothing is.
-function setCount(n: number): string {
-  return n === 0 ? '' : `${n} set`
-}
-
-// A memory value the way humans quote it — "16GB" prints as "16 GiB" (the
-// sandbox allocates binary units); anything unparseable prints as written.
-function memoryLabel(value: string): string {
-  const m = /^(\d+(?:\.\d+)?)\s*(gib|gb|mib|mb)$/i.exec(value.trim())
-  if (!m) return value
-  return `${m[1]} ${m[2].toLowerCase().startsWith('g') ? 'GiB' : 'MiB'}`
-}
-
-export function environmentSectionSummary(
-  pane: EnvironmentPaneState,
-  section: PaneSection,
-): string {
-  // Bare repo names: the owner is almost always the account itself, so
-  // repeating it on every entry buys width and no information. A pinned ref
-  // stays, since it changes what is cloned.
-  if (section === 'repositories')
-    return pane.repositories
-      .map((r) => {
-        const name = r.fullName.slice(r.fullName.indexOf('/') + 1)
-        return r.ref === null ? name : `${name}@${r.ref}`
-      })
-      .join(', ')
-  if (section === 'mcpServers') return pane.mcpServers.map((s) => s.name).join(', ')
-  // Values are secrets and names are noise at a glance, so just how many.
-  if (section === 'variables') return setCount(pane.variables.length)
-  if (section === 'image')
-    return setCount(IMAGE_FIELDS.filter((f) => pane.image[f] !== '').length)
-  if (section === 'hooks')
-    return setCount(HOOK_FIELDS.filter((f) => pane.hooks[f] !== '').length)
-  return COMPUTE_FIELDS.filter((f) => pane.compute[f] !== '')
-    .map((f) =>
-      f === 'cpu'
-        ? `${pane.compute[f]} vCPU`
-        : f === 'memory'
-          ? memoryLabel(pane.compute[f])
-          : `${f} ${pane.compute[f]}`,
-    )
-    .join(', ')
+export function environmentPaneWalk(input: EnvironmentPaneInput): PaneWalkStep[] {
+  const walk: PaneWalkStep[] = []
+  for (const section of PANE_SECTIONS) {
+    const rows = environmentSectionRows(input, section)
+    rows.forEach((row) => walk.push({ section, hover: row.hover, first: row.hover === 0 }))
+  }
+  return walk
 }
 
 // What the pane holds: the next run's sandbox, whole. Seeded from the picked
@@ -826,8 +783,8 @@ export const EMPTY_PANE: EnvironmentPaneState = {
 }
 
 // The pane with `repo` ("owner/name") checked, added only when absent — how
-// the resting basic-sandbox pane shows the checkout the entry point's base
-// request merges in (see withRepository).
+// the pane shows the checkout the entry point's base request adds to every
+// environment (see withContextRepository).
 export function paneWithRepository(
   pane: EnvironmentPaneState,
   repo: string | null,
@@ -994,20 +951,25 @@ export function repositoryRefLabel(
 // The composer's picks, as the launcher reports them. `model` null = that row
 // was never touched, so the server resolves it (the account's default model).
 //
-// `environment` is the saved environment the pane still matches. When it is
-// null the pane is what says the sandbox, and it ships in full — every list in
-// an override replaces the resolved one, so nothing the pane doesn't show can
-// reach the run.
-//
-// `pane` null is the third case: nothing about the environment is stated
-// beyond what the entry point's base request already says (the detected
-// repository) — the right thing to send when the pane was never touched and
-// an agent config's own environment should rule.
-//
+// `environment` is one of the four things POST /v1/sessions can be told:
+// - `default`: nothing. The server runs the organization's default
+//   environment, else the bare sandbox. Sent while the launcher does not yet
+//   know which that is, so the request never claims more than the screen.
+// - `named`: a saved environment, by id, substituted wholesale. The pane still
+//   matches it, so re-stating its lists could only say them worse.
+// - `empty`: `{}`, the bare sandbox.
+// - `custom`: the pane, shipped whole as the environment object. Every list
+//   in it replaces the resolved one, so nothing the pane doesn't show can
+//   reach the run.
+export type ComposerEnvironment =
+  | { kind: 'default' }
+  | { kind: 'named'; id: string }
+  | { kind: 'empty' }
+  | { kind: 'custom'; pane: EnvironmentPaneState }
+
 export interface ComposerChoices {
-  environment: string | null
+  environment: ComposerEnvironment
   model: string | null
-  pane: EnvironmentPaneState | null
 }
 
 // A variable in the shape an environment override takes: `value` omitted (not
@@ -1030,14 +992,32 @@ function repositoryEntry(r: CustomRepository): { owner?: string; name: string; r
   return entry
 }
 
+// The pane as the environment object POST /v1/sessions takes: the lists
+// always (empty included — an absent list would read as "unset" where the
+// pane means "none"), the scalar blocks only when a field is set.
+export function paneEnvironment(pane: EnvironmentPaneState): Record<string, unknown> {
+  const environment: Record<string, unknown> = {
+    repositories: pane.repositories.map(repositoryEntry),
+    variables: pane.variables.map(variableEntry),
+    mcp_servers: pane.mcpServers.map(mcpServerEntry),
+  }
+  const compute = computeOverride(pane.compute)
+  if (Object.keys(compute).length > 0) environment.compute = compute
+  const image = fieldsOverride(pane.image)
+  if (Object.keys(image).length > 0) environment.image = image
+  const hooks = fieldsOverride(pane.hooks)
+  if (Object.keys(hooks).length > 0) environment.hooks = hooks
+  return environment
+}
+
 // The entry point's base request with the launcher's picks layered on. The
-// request body IS the config patch, so the picks land as its own keys.
+// request body IS the session config, so the picks land as its own keys.
 //
-// A named environment ships as the string, which re-picks it wholesale: the
-// pane still matches it, so re-stating its lists would only risk saying it
-// worse. Without a name the pane ships as the environment object, lists
-// included even when empty — over the bare ad-hoc base that object is the
-// whole sandbox, which is exactly what the pane means.
+// The base's `repositories` (the checkout the CLI is standing in) rides along
+// with a default, named or empty environment: the server adds it to whichever
+// resolves. A custom pane already shows that repository as a checked row (or
+// an unchecked one, which is the point), so the key is dropped and the pane
+// alone says what is cloned.
 export function applyComposerChoices(
   base: StartAgentSessionRequest,
   choices: ComposerChoices,
@@ -1048,22 +1028,12 @@ export function applyComposerChoices(
   if (choices.model) {
     req.claude = { model: choices.model } as StartAgentSessionRequest['claude']
   }
-  if (choices.environment) {
-    req.environment = choices.environment
-  } else if (choices.pane) {
-    const pane = choices.pane
-    const environment: Record<string, unknown> = {
-      repositories: pane.repositories.map(repositoryEntry),
-      variables: pane.variables.map(variableEntry),
-      mcp_servers: pane.mcpServers.map(mcpServerEntry),
-    }
-    const compute = computeOverride(pane.compute)
-    if (Object.keys(compute).length > 0) environment.compute = compute
-    const image = fieldsOverride(pane.image)
-    if (Object.keys(image).length > 0) environment.image = image
-    const hooks = fieldsOverride(pane.hooks)
-    if (Object.keys(hooks).length > 0) environment.hooks = hooks
-    req.environment = environment as StartAgentSessionRequest['environment']
+  const env = choices.environment
+  if (env.kind === 'named') req.environment = env.id
+  else if (env.kind === 'empty') req.environment = {} as StartAgentSessionRequest['environment']
+  else if (env.kind === 'custom') {
+    req.environment = paneEnvironment(env.pane) as StartAgentSessionRequest['environment']
+    delete req.repositories
   }
   return req
 }
@@ -1105,27 +1075,54 @@ export function environmentSourceLabel(
   return `${repo}/${src.path}${sha}`
 }
 
-// The label of the resting null-id row: what an unnamed start resolves to —
-// the built-in basic sandbox (with the detected repository merged into its
-// checkout set, which the pane shows checked).
-export const BASIC_ENVIRONMENT_LABEL = 'basic sandbox'
+// One preset in the launcher's ENVIRONMENT row: a saved environment, or the
+// built-in empty sandbox. `note` is what the row under the presets says about
+// the picked one — "account default" and/or the file it syncs from.
+export interface EnvironmentPreset {
+  id: string
+  name: string
+  note: string | null
+  isDefault: boolean
+}
 
-// The Environment row's options: the resting "basic sandbox" first, then
-// every saved environment (each labelled with the file it syncs from), then
-// the built-in "[empty]". Index 0 is the untouched pick.
-export function environmentOptions(
+// The presets, in the order the row prints them: the organization's default
+// environment first (it is what an untouched start runs in), the other saved
+// environments in the order the API lists them, then `empty`. The default is
+// matched by id or name, since the setting accepts either.
+export function environmentPresets(
   environments: readonly { id: string; name: string }[],
+  defaultEnvironment: string | null | undefined,
   sourceLabels: ReadonlyMap<string, string> = new Map(),
-): { id: string | null; label: string }[] {
-  const listed = environments.map((e) => ({
-    id: e.id as string | null,
-    label: sourceLabels.has(e.id) ? `${e.name} (${sourceLabels.get(e.id)})` : e.name,
-  }))
+): EnvironmentPreset[] {
+  const isDefault = (e: { id: string; name: string }): boolean =>
+    defaultEnvironment != null && (e.id === defaultEnvironment || e.name === defaultEnvironment)
+  const listed = environments.map((e) => {
+    const parts = [isDefault(e) ? 'account default' : null, sourceLabels.get(e.id) ?? null]
+    return {
+      id: e.id,
+      name: e.name,
+      note: parts.filter(Boolean).join(' · ') || null,
+      isDefault: isDefault(e),
+    }
+  })
   return [
-    { id: null, label: BASIC_ENVIRONMENT_LABEL },
-    ...listed,
-    { id: EMPTY_ENVIRONMENT_ID, label: EMPTY_ENVIRONMENT_LABEL },
+    ...listed.filter((p) => p.isDefault),
+    ...listed.filter((p) => !p.isDefault),
+    { id: EMPTY_ENVIRONMENT_ID, name: EMPTY_ENVIRONMENT_LABEL, note: null, isDefault: false },
   ]
+}
+
+// Which preset an untouched launcher stands on: the account default when
+// there is one, else `empty` — what the server runs when the request names
+// nothing. Undefined while the setting is unknown (still loading, or the
+// fetch failed): no preset is checked and the request says nothing either.
+export function restingPresetIndex(
+  presets: readonly EnvironmentPreset[],
+  defaultEnvironment: string | null | undefined,
+): number | undefined {
+  if (defaultEnvironment === undefined) return undefined
+  const at = presets.findIndex((p) => p.isDefault)
+  return at === -1 ? presets.length - 1 : at
 }
 
 // ------------------------------- layout ---------------------------------
