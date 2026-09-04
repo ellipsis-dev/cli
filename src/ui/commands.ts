@@ -6,7 +6,7 @@
 // forwarded. Silently sending "/stpo" to the agent as prose is the failure mode
 // that rule exists to prevent.
 
-export type CommandId = 'stop' | 'sessions' | 'exit'
+export type CommandId = 'stop' | 'image' | 'sessions' | 'exit'
 
 export type SlashCommand = {
   id: CommandId
@@ -16,12 +16,21 @@ export type SlashCommand = {
   aliases?: readonly string[]
   // The one-line description in the menu, lowercase and imperative.
   detail: string
+  // Whether the rest of the line after the name is the command's argument
+  // (`/image shot.png`). Without it, anything after the name is a typo.
+  takesArgument?: boolean
 }
 
 // Every command, in menu order: the one that acts on the session first, then the
 // screen, then the way out.
 export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { id: 'stop', name: 'stop', detail: 'interrupt the agent, keeping the conversation' },
+  {
+    id: 'image',
+    name: 'image',
+    detail: 'attach an image file to your next message: /image <path>',
+    takesArgument: true,
+  },
   { id: 'sessions', name: 'sessions', detail: 'switch sessions (esc)' },
   { id: 'exit', name: 'exit', aliases: ['quit'], detail: 'leave the CLI; the session keeps running' },
 ]
@@ -58,10 +67,21 @@ export function matchCommands(text: string): SlashCommand[] {
 // wrong command is worse than being told to finish typing. Pure, for tests.
 export function resolveCommand(text: string): SlashCommand | null {
   if (!isCommandInput(text)) return null
-  const typed = text.slice(1).trim().toLowerCase()
-  return (
+  const trimmed = text.slice(1).trim()
+  const [word, ...rest] = trimmed.split(/\s+/)
+  const typed = (word ?? '').toLowerCase()
+  const command =
     SLASH_COMMANDS.find((c) => [c.name, ...(c.aliases ?? [])].includes(typed)) ?? null
-  )
+  if (command === null) return null
+  // Trailing words are only meaningful to a command that takes an argument.
+  if (rest.length > 0 && !command.takesArgument) return null
+  return command
+}
+
+// The argument after a command's name (`/image shot.png` → `shot.png`), or
+// '' when there is none. Pure, for tests.
+export function commandArgument(text: string): string {
+  return text.slice(1).trim().replace(/^\S+\s*/, '')
 }
 
 // The text the composer holds after tab/enter completes `highlighted`: the whole

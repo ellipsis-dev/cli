@@ -35,6 +35,7 @@ export type ListAgentSessionsResponse = S['SessionsListResponse']
 export type StartAgentSessionRequest = NonNullable<Parameters<Ellipsis['sessions']['start']>[0]>
 export type SessionResponse = S['SessionResponse']
 export type SendSessionMessageRequest = S['SendSessionMessageRequest']
+export type ImageAttachment = S['ImageAttachment']
 export type SessionLogSegment = S['SessionLogSegment']
 export type GetSessionLogResponse = S['GetSessionLogResponse']
 

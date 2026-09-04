@@ -56,6 +56,7 @@ agent session start -e backend "..."   # run a prompt in a saved environment
 agent session start --config-file f.json   # ...or from an inline config
 agent session start --template ellipsis-helper   # ...or from a maintained template
 agent session start --budget 5 "..."   # cap this session's spend, in dollars
+agent session start --image shot.png "..."   # the agent sees the picture on its first turn
 agent session start --watch "..."      # start and immediately stream it
 agent session list --limit 20         # list recent sessions (filter by --source, --author, --since, …)
 agent session get <session-id>        # inspect one session (prints a dashboard link)
