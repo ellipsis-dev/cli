@@ -338,7 +338,7 @@ export function withContextRepository(
 // --------------------------- new-session picker ---------------------------
 
 // One row of a composer picker. `group` and `rate` are what the model list
-// uses and the other two pickers leave unset: repositories and agent configs
+// uses and the other two pickers leave unset: repositories and automations
 // are flat lists of names with no vendor to group under and no price to quote.
 export type ComposerModel = {
   id: string | null

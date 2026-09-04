@@ -123,7 +123,7 @@ export interface ConnectAppProps {
   // The session's model (backend tokens_model, fixed at creation), shown in
   // the footer meta line.
   model?: string | null
-  // The session's agent config (resolved name, falling back to the config
+  // The session's automation (resolved name, falling back to the config
   // id), shown in the footer meta line when the session has one.
   configName?: string | null
   // Written (not read) by the app: set true when the app exits because the
@@ -1121,7 +1121,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   )
 
   // The persistent footer status line: status, running spend, model,
-  // session id (the dashboard link), agent config (when the session has
+  // session id (the dashboard link), automation (when the session has
   // one), CLI version. Per-step costs live on the transcript's metadata
   // column, so the footer carries the total alone. Command hints live in
   // --help. The total prefers the server's ledger figure (live via the

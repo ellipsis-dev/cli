@@ -87,7 +87,7 @@ export async function runConnect(
   // An extra opening notice from the caller — shown in the app instead of
   // printed beforehand, which would land in scrollback behind the app.
   startupNotice?: string,
-  // The agent config name from the caller (e.g. `start --connect`); when
+  // The automation name from the caller (e.g. `start --connect`); when
   // absent it is derived from the fetched session. Shown in the footer meta
   // line.
   configName?: string,

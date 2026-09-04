@@ -193,7 +193,7 @@ export interface ListAgentSessionsQuery {
   // attributed to that developer. The CLI resolves it from a --author login.
   author_id?: number
   // "owner/name" or a bare repository name. Sessions that name their
-  // repository only inside their agent config — dashboard starts, cron runs,
+  // repository only inside their automation — dashboard starts, cron runs,
   // handoffs — do not match.
   repo?: string
   // Keep only the conversations still going (live or sleeping), dropping the

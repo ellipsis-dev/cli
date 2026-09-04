@@ -173,10 +173,10 @@ export function registerReview(program: Command): void {
   registerReviewInit(review)
 }
 
-// `agent review init`: the code review twin of `agent config init`. Scaffolds a
+// `agent review init`: the code review twin of `agent automation init`. Scaffolds a
 // starter pipeline YAML locally; you commit it and Ellipsis syncs it from
-// GitHub. No API call and no pull request, because `agent config create` posts
-// an agent config and a pipeline is a different kind of file.
+// GitHub. No API call and no pull request, because `agent automation create` posts
+// an automation and a pipeline is a different kind of file.
 function registerReviewInit(review: Command): void {
   review
     .command('init [path]')

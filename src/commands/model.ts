@@ -14,7 +14,7 @@ export function registerModel(program: Command): void {
       model
         .command('list')
         .description(
-          'List the models an agent config can select (the account default is marked)',
+          'List the models an automation can select (the account default is marked)',
         ),
       'ls',
     ),
@@ -36,7 +36,7 @@ export function registerModel(program: Command): void {
           ['ID', 'NAME', 'DEFAULT'],
           models.map((m) => [m.id, m.display_name, m.is_default_agent_model ? 'yes' : '']),
         )
-        console.log('\nSelect one by setting `model:` under `claude:` in your agent config YAML.')
+        console.log('\nSelect one by setting `model:` under `claude:` in your automation YAML.')
       })
     })
 }
