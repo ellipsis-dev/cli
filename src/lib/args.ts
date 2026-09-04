@@ -35,7 +35,7 @@ export function toNumber(value: string): number {
 // fails fast with the full list instead of a server-side 422.
 export const SESSION_SOURCES = [
   'react',
-  'manual',
+  'web',
   'api',
   'cli',
   'mention',

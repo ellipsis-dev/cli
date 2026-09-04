@@ -44,7 +44,7 @@ export interface SessionBarConfig {
   // "unfinished" drops the sessions that completed, errored, or were stopped,
   // leaving the conversations still going. "all" keeps them.
   statuses?: 'all' | 'unfinished'
-  // Only sessions started these ways, e.g. ["cli", "manual"]. An empty list
+  // Only sessions started these ways, e.g. ["cli", "web"]. An empty list
   // means every source. Laptop sessions never appear whatever this says: there
   // is nothing in the cloud to open.
   sources?: string[]
@@ -243,12 +243,12 @@ export const SESSION_BAR_DEFAULTS: Required<Omit<SessionBarConfig, 'sources'>> &
   days: 7,
   repo: 'cwd',
   statuses: 'all',
-  sources: ['manual', 'cli', 'mention'],
+  sources: ['web', 'cli', 'mention'],
 }
 
 export type ResolvedSessionBar = typeof SESSION_BAR_DEFAULTS
 
-const SESSION_SOURCES = ['react', 'manual', 'api', 'cli', 'mention', 'cron']
+const SESSION_SOURCES = ['react', 'web', 'api', 'cli', 'mention', 'cron']
 
 // The session bar's settings, defaults filled in — set them under
 // `"sessionBar"` in ~/.ellipsis/config.json. A value of the wrong type or

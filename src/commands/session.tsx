@@ -333,7 +333,7 @@ export function registerSession(program: Command): void {
       'ls',
     ).addHelpText(
       'after',
-      '\nSources: react, manual, api, cli, mention, cron. ' +
+      '\nSources: react, web, api, cli, mention, cron. ' +
         '--since/--until accept ISO 8601 or "today", "yesterday", "N days ago".',
     ),
     'GET /v1/sessions',

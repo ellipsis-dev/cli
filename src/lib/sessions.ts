@@ -216,7 +216,7 @@ export const SESSION_BAR_FETCH = 50
 
 // The picker header's description of the bar's active filters — the answer to
 // "where are the rest of my sessions?". Mirrors sessionBarQuery, with one
-// exception: the default sources are not named, since "manual/cli/mention" is
+// exception: the default sources are not named, since "web/cli/mention" is
 // what everyone sees and answers no question. null when there is nothing to say.
 export function sessionBarFilterLabel(
   bar: {
