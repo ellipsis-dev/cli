@@ -35,17 +35,20 @@ import type { Ellipsis, SdkRecord } from '@ellipsis-dev/sdk'
 import { hyperlink } from '../lib/urls'
 import { usdNumberFromMillicents } from '../lib/output'
 import { applyEditShortcut } from '../lib/editing'
+import { readImageAttachment, withImagePlaceholders, type StagedImage } from '../lib/images'
 import { CTRL_C_QUIT_HINT, useCtrlCQuit } from './ctrlC'
 import { fitLines, visibleWidth } from '../lib/markdown'
 import { SELECTION_GLYPH } from '../lib/sessions'
 import { inputSurface, theme } from '../lib/theme'
 import {
+  commandArgument,
   completedText,
   isCommandInput,
   matchCommands,
   resolveCommand,
   type SlashCommand,
 } from './commands'
+import { MAX_IMAGES_PER_MESSAGE } from '../lib/images'
 import { VERSION } from '../lib/constants'
 import {
   activityRows,
@@ -53,8 +56,6 @@ import {
   BRANCH_TEXT_PAD,
   contentWidth,
   GUTTER_COLS,
-  isAgentSpeech,
-  isToolActivity,
   itemRows,
   layOutItems,
   LIVE_GLYPH,
@@ -286,6 +287,10 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // and once the agent consumes the message its echo record lands as the
   // real (full-colour) transcript row.
   const [queued, setQueued] = useState<QueuedSend[]>([])
+  // Images attached with /image, waiting for the next send — the Claude Code
+  // paste model, minus the paste (a terminal cannot carry image bytes, so the
+  // file path stands in). Sent inline on that message and cleared with it.
+  const [staged, setStaged] = useState<StagedImage[]>([])
 
   // Whether the sandbox ever reached a connectable state, so a terminal status
   // *before* that (a preflight/budget gate) is reported as a failure, not idle.
@@ -595,7 +600,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
     (raw: string): void => {
       const text = raw.trim()
       setComposer({ text: '', cursor: 0 })
-      if (!text) return
+      // An empty line sends nothing — unless pictures are waiting, in which
+      // case the message is the pictures (an image-only paste).
+      if (!text && staged.length === 0) return
       setUndisplayedSeen(undisplayed)
       // A leading slash claims the line for the CLI. An unknown one is REFUSED,
       // not forwarded: a typo'd command sent on as prose is a message you did
@@ -613,6 +620,28 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         if (command.id === 'sessions') {
           if (props.onFocusNav) props.onFocusNav()
           else setNotice('no other sessions here, this is a single-session connect')
+          return
+        }
+        if (command.id === 'image') {
+          const path = commandArgument(text)
+          if (!path) {
+            setNotice('usage: /image <path> — attaches the file to your next message')
+            return
+          }
+          if (staged.length >= MAX_IMAGES_PER_MESSAGE) {
+            setNotice(`✗ at most ${MAX_IMAGES_PER_MESSAGE} images per message`)
+            return
+          }
+          try {
+            const image = readImageAttachment(path)
+            const next = [...staged, image]
+            setStaged(next)
+            setNotice(
+              `${next.map((s, i) => `[Image #${i + 1}] ${s.name}`).join(', ')} — sends with your next message`,
+            )
+          } catch (err) {
+            setNotice(`✗ ${err instanceof Error ? err.message : String(err)}`)
+          }
           return
         }
       }
@@ -636,14 +665,22 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           // Show the message as queued, then post it. The POST returns the
           // created SessionMessage (protocol v2 §4.2): stamp the chip with its
           // id so the first messages frame / user-echo record carrying that id
-          // retires it in favour of the server's own row.
-          setQueued((prev) => [...prev, { text, messageId: null }])
+          // retires it in favour of the server's own row. The chip reads as
+          // the server stores it — the text, then one `[Image #N]` placeholder
+          // per attached image — so it reconciles with that row by text.
+          const images = staged.map((s) => s.attachment)
+          const shown = withImagePlaceholders(text, images.length)
+          setStaged([])
+          setQueued((prev) => [...prev, { text: shown, messageId: null }])
           setNotice(null)
-          const { message: created } = await api.sessions.sendMessage(sessionId, { message: text })
+          const { message: created } = await api.sessions.sendMessage(sessionId, {
+            message: text,
+            images,
+          })
           setQueued((prev) => {
             let stamped = false
             return prev.map((q) => {
-              if (!stamped && q.text === text && q.messageId === null) {
+              if (!stamped && q.text === shown && q.messageId === null) {
                 stamped = true
                 return { text: q.text, messageId: created.id }
               }
@@ -654,14 +691,14 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
           pump()
         } catch (err) {
           setQueued((prev) => {
-            const j = prev.findIndex((q) => q.text === text && q.messageId === null)
+            const j = prev.findIndex((q) => q.messageId === null)
             return j < 0 ? prev : [...prev.slice(0, j), ...prev.slice(j + 1)]
           })
           setNotice(`✗ ${errorDetail(err)}`)
         }
       })()
     },
-    [api, exit, pump, sessionId, undisplayed, props.onFocusNav],
+    [api, exit, pump, sessionId, staged, undisplayed, props.onFocusNav],
   )
 
   // The composer renders whenever sending is possible.
@@ -805,18 +842,16 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         pendingTools.length === 1
           ? `Running ${pendingTools[0].text}${pendingTools[0].detail ?? ''}…`
           : `Running ${pendingTools.length} tool calls (${[...new Set(pendingTools.map((t) => t.text))].join(', ')})…`
-      // A running tool call nests under the message that made it, in the same
-      // place its ⎿ result will land — so it takes the SAME predicate
-      // layOutItems uses for that result. Any disagreement here shows up as the
-      // live line sitting flat and then jumping a level when the result lands.
-      const said = visible.filter((i) => !isToolActivity(i)).pop()
+      // A running tool call sits flat, exactly where its ⎿ result will land:
+      // every row stands on its own (layOutItems), so the live line never
+      // jumps a level when the result arrives.
       return {
         text: '',
         label,
         tick: 'tool' as const,
         suffix: '',
         hug,
-        nested: said != null && isAgentSpeech(said),
+        nested: false,
       }
     }
     if (working && !infraActivity && (awaitingAgent !== null || sendPending)) {

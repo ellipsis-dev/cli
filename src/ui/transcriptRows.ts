@@ -17,7 +17,6 @@ import {
 export {
   BRANCH_GLYPH,
   gutterFor,
-  isAgentSpeech,
   isToolActivity,
   layOutItems,
   LIVE_GLYPH,

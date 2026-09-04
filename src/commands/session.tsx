@@ -47,6 +47,7 @@ import { repoFromCwd } from '../lib/git'
 import { openBrowser } from '../lib/auth'
 import { registerConnect, runConnect } from './connect'
 import { canHostSessionsUi, defaultStartRequest, runSessionsUi } from '../ui/launch'
+import { readImageAttachment } from '../lib/images'
 import { formatStepLine, oneLine, recordText } from '../lib/steps'
 import {
   parseRepo,
@@ -134,6 +135,12 @@ export function registerSession(program: Command): void {
       "the session prompt, appended to the agent's initial user query (or pass it positionally)",
     )
     .option(
+      '--image <path>',
+      'attach an image (PNG, JPEG, GIF, or WebP, up to 5 MiB) to the prompt; the agent sees it on its first turn (repeatable)',
+      collect,
+      [] as string[],
+    )
+    .option(
       '-m, --metadata <key=value>',
       'attach metadata (repeatable)',
       collectKeyValue,
@@ -171,6 +178,7 @@ export function registerSession(program: Command): void {
           rebuild?: boolean
           budget?: number
           prompt?: string
+          image: string[]
           metadata: Record<string, string>
           detach?: boolean
           watch?: boolean
@@ -249,6 +257,12 @@ export function registerSession(program: Command): void {
           // Appended to the initial user query at build time; gives this
           // session instructions on top of the config's shared system prompt.
           if (promptText) req.prompt = promptText
+          // Pictures ride the first message inline, the way a paste into a
+          // local `claude` does: the prompt gains an `[Image #N]` placeholder
+          // per file and the model sees each as a content block on turn 0.
+          if (opts.image.length > 0) {
+            req.images = opts.image.map((path) => readImageAttachment(path).attachment)
+          }
           // Run settings ride top-level: --rebuild skips the image cache for
           // the initial provision (wakes cache as usual; the fresh build's
           // snapshot refreshes the cache).

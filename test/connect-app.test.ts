@@ -61,7 +61,6 @@ describe('deriveSandboxState comma wording', () => {
       0,
     )
     expect(texts(state)).toEqual([
-      'Starting sandbox…',
       'Preparing image, cached image, 1.2s',
       'Sandbox ready, cached image, 29s',
     ])
@@ -141,7 +140,7 @@ describe('chatTurnsToItems', () => {
     expect(waking.map((i) => i.text)).toEqual([
       'done for now',
       'Session asleep',
-      'Waking the session…',
+      'Session waking',
     ])
     const awake = items([...records, rec('session_resumed'), assistant('back')])
     expect(awake.map((i) => i.text)).toEqual([
@@ -236,55 +235,14 @@ describe('layOutItems', () => {
   const res = (key: string): TranscriptItem => ({ key, kind: 'tool_result', text: 'ok' })
   const fold = (key: string): TranscriptItem => ({ key: `grp:${key}`, kind: 'notice', text: 'Ran 2' })
 
-  it('nests a call and its result under the message that made them', () => {
-    const out = layOutItems([prose('a'), call('t1'), res('r1')])
-    expect(out.map((p) => [p.item.key, p.nested])).toEqual([
-      ['a', false],
-      ['t1', true],
-      ['r1', true],
-    ])
-  })
-
-  it('attaches nested lines, so no blank row detaches them from the parent', () => {
-    const out = layOutItems([prose('a'), call('t1'), res('r1')])
-    expect(out.map((p) => p.attach)).toEqual([false, true, true])
-  })
-
-  it('nests a collapsed fold too — it stands in for the run', () => {
-    const out = layOutItems([prose('a'), fold('t1')])
-    expect(out[1]).toMatchObject({ nested: true })
-  })
-
-  it('leaves a turn-opening tool call flat, never branching off YOUR message', () => {
-    // Your message is a lifted box; a ⎿ branch under it would read as work you
-    // did rather than work the agent did.
-    const out = layOutItems([user('u'), call('t1'), res('r1')])
-    expect(out.map((p) => [p.item.key, p.nested])).toEqual([
-      ['u', false],
-      ['t1', false],
-      ['r1', false],
-    ])
-  })
-
-  it('nests under a ✻ thinking block too — thinking is the agent speaking', () => {
-    // With extended thinking on, thinking → tool_use → tool_result is the usual
-    // turn shape, so treating thinking as not-the-agent would flatten almost
-    // every run in the transcript.
+  it('lays every row out flat, tool runs included — the SDK contract since 0.27', () => {
+    // A run is never indented under the message before it: an indented run
+    // under a message that has scrolled by reads as if the message were the
+    // subject, when the run is the agent's own next step in the turn.
     const think: TranscriptItem = { key: 'th', kind: 'thinking', text: 'hmm', gutter: '✻' }
-    const out = layOutItems([think, fold('t1')])
-    expect(out[1]).toMatchObject({ nested: true, attach: true })
-  })
-
-  it('leaves a run with no parent above it flat', () => {
-    // Replayed history can start mid-burst; there is nothing to hang off.
-    const out = layOutItems([call('t1'), res('r1'), prose('a')])
-    expect(out.map((p) => p.nested)).toEqual([false, false, false])
-  })
-
-  it('keeps prose, user messages and notices flat', () => {
-    const notice: TranscriptItem = { key: 'n', kind: 'notice', text: 'Session asleep' }
-    const out = layOutItems([prose('a'), user('u'), notice])
-    expect(out.every((p) => !p.nested)).toBe(true)
+    const out = layOutItems([prose('a'), call('t1'), res('r1'), think, fold('t2'), user('u')])
+    expect(out.map((p) => p.item.key)).toEqual(['a', 't1', 'r1', 'th', 'grp:t2', 'u'])
+    expect(out.every((p) => !p.nested && !p.attach)).toBe(true)
   })
 })
 

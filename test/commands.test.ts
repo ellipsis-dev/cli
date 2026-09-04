@@ -5,6 +5,7 @@ import {
   matchCommands,
   resolveCommand,
   SLASH_COMMANDS,
+  commandArgument,
 } from '../src/ui/commands'
 
 describe('isCommandInput', () => {
@@ -99,5 +100,19 @@ describe('the command list itself', () => {
       expect(command.detail, command.name).toMatch(/^[a-z]/)
       expect(command.detail.length, command.name).toBeGreaterThan(8)
     }
+  })
+})
+
+describe('commands with an argument', () => {
+  it('resolves /image with its path, and refuses trailing words elsewhere', () => {
+    expect(resolveCommand('/image shot.png')?.id).toBe('image')
+    expect(resolveCommand('/image')?.id).toBe('image')
+    expect(resolveCommand('/stop now')).toBeNull()
+  })
+
+  it('returns the argument after the name', () => {
+    expect(commandArgument('/image ~/Desktop/shot.png')).toBe('~/Desktop/shot.png')
+    expect(commandArgument('/image')).toBe('')
+    expect(commandArgument('/image   a b.png')).toBe('a b.png')
   })
 })
