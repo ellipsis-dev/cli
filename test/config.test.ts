@@ -224,7 +224,7 @@ describe('sessionBar', () => {
         days: 30,
         repo: 'any',
         statuses: 'unfinished',
-        sources: ['cli', 'manual'],
+        sources: ['cli', 'web'],
       },
     })
     expect(sessionBar()).toEqual({
@@ -232,7 +232,7 @@ describe('sessionBar', () => {
       days: 30,
       repo: 'any',
       statuses: 'unfinished',
-      sources: ['cli', 'manual'],
+      sources: ['cli', 'web'],
     })
   })
 
@@ -262,7 +262,7 @@ describe('sessionBar', () => {
 
   it('defaults to the human-started sources when the key is absent', () => {
     writeConfig({ version: 2, hosts: {}, sessionBar: { days: 3 } })
-    expect(sessionBar().sources).toEqual(['manual', 'cli', 'mention'])
+    expect(sessionBar().sources).toEqual(['web', 'cli', 'mention'])
   })
 
   it('takes days 0 as "no age cutoff", not as a missing value', () => {

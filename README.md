@@ -172,7 +172,7 @@ list, which the interactive UI opens as a full screen with `esc`:
     "days": 7,
     "repo": "cwd",
     "statuses": "all",
-    "sources": ["cli", "manual"]
+    "sources": ["cli", "web"]
   }
 }
 ```
@@ -182,7 +182,7 @@ hides sessions that have not moved in that long; `0` means no age cutoff. `repo`
 list only sessions on the repository your shell is in, or `"any"` for all of
 them. `statuses` is `"unfinished"` to leave out the sessions that finished,
 errored, or were stopped, or `"all"` to keep them. `sources` lists only sessions
-started those ways (`react`, `manual`, `api`, `cli`, `mention`, `cron`); leave it
+started those ways (`react`, `web`, `api`, `cli`, `mention`, `cron`); leave it
 out for all of them.
 
 Every field is optional and the defaults above are what you get with no
