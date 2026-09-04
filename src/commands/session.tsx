@@ -267,10 +267,14 @@ export function registerSession(program: Command): void {
           // UI shows it in its footer meta line (anything printed before the
           // app would land in scrollback); every other mode prints this note.
           let configNote: string | undefined
-          const environmentSource = session.environment?.source
+          // Widened to string: `automation` replaced `agent_config` on the wire
+          // (SDK 0.28.0); the pinned SDK's enum predates it.
+          const environmentSource: string | null | undefined = session.environment?.source
           if (session.environment?.environment_id && environmentSource !== 'request') {
             const label =
-              environmentSource === 'agent_config' ? 'from the agent config' : environmentSource
+              environmentSource === 'automation' || environmentSource === 'agent_config'
+                ? 'from the automation'
+                : environmentSource
             const note = `using environment ${session.environment.environment_id} (${label})`
             configNote = configNote ? `${configNote}; ${note}` : note
           }
@@ -846,7 +850,7 @@ function deepMerge(
   return out
 }
 
-// Parse an inline agent config from disk, choosing the parser by file
+// Parse an inline automation config from disk, choosing the parser by file
 // extension: .yaml/.yml as YAML, .json as JSON. (YAML is a JSON superset, so
 // unknown extensions fall back to YAML, which still accepts JSON input.)
 export function readConfigFile(path: string): Record<string, unknown> {

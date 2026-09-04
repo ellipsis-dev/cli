@@ -82,7 +82,7 @@ export function registerEnvironment(program: Command): void {
         const e = created.environment
         console.log(`✓ created "${e.name}" (${e.id}) — live now`)
         console.log(
-          'Reference it from agent configs (`environment: ' +
+          'Reference it from automations (`environment: ' +
             e.name +
             '`) or start a session in it: `agent session start -e ' +
             e.name +
