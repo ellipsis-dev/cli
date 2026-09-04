@@ -56,8 +56,6 @@ import {
   BRANCH_TEXT_PAD,
   contentWidth,
   GUTTER_COLS,
-  isAgentSpeech,
-  isToolActivity,
   itemRows,
   layOutItems,
   LIVE_GLYPH,
@@ -844,18 +842,16 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         pendingTools.length === 1
           ? `Running ${pendingTools[0].text}${pendingTools[0].detail ?? ''}…`
           : `Running ${pendingTools.length} tool calls (${[...new Set(pendingTools.map((t) => t.text))].join(', ')})…`
-      // A running tool call nests under the message that made it, in the same
-      // place its ⎿ result will land — so it takes the SAME predicate
-      // layOutItems uses for that result. Any disagreement here shows up as the
-      // live line sitting flat and then jumping a level when the result lands.
-      const said = visible.filter((i) => !isToolActivity(i)).pop()
+      // A running tool call sits flat, exactly where its ⎿ result will land:
+      // every row stands on its own (layOutItems), so the live line never
+      // jumps a level when the result arrives.
       return {
         text: '',
         label,
         tick: 'tool' as const,
         suffix: '',
         hug,
-        nested: said != null && isAgentSpeech(said),
+        nested: false,
       }
     }
     if (working && !infraActivity && (awaitingAgent !== null || sendPending)) {
