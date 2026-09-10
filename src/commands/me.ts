@@ -18,7 +18,7 @@ export function renderMe(me: WhoAmI): void {
 export function registerMe(program: Command): void {
   apiRoutes(
     program.command('me').description('Show the identity behind the current credential'),
-    'GET /v1/me',
+    'GET /v1/identity',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
@@ -27,7 +27,7 @@ export function registerMe(program: Command): void {
         // without this the request would go out unauthenticated and come back
         // as a 401.
         requireToken()
-        const me = await api().me()
+        const me = await api().identity()
         if (opts.json) {
           printJson(me)
           return

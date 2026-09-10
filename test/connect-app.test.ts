@@ -18,9 +18,7 @@ import { theme } from '../src/lib/theme'
 import type { TranscriptItem } from '@ellipsis-dev/sdk/store'
 
 let seq = 0
-// `record_format` is what recordToItems and groupRecordsToChatTurns switch on,
-// so a fixture carries the same token the wire does: claude_sdk@1 for agent
-// records, ellipsis_lifecycle@1 for platform ones.
+// SDK 0.28 narrows records by kind, including archived Claude SDK payloads.
 function rec(recordType: string, payload: Record<string, unknown> = {}, source = 'lifecycle') {
   const feed = ++seq
   return {
@@ -28,6 +26,7 @@ function rec(recordType: string, payload: Record<string, unknown> = {}, source =
     created_at: '2026-01-01T00:00:00Z',
     feed_seq: feed,
     source,
+    kind: source === 'lifecycle' ? 'platform' : source === 'claude_code' ? 'claude_sdk' : 'unknown',
     record_type: recordType,
     record_format: source === 'lifecycle' ? 'ellipsis_lifecycle@1' : 'claude_sdk@1',
     payload,
@@ -202,7 +201,7 @@ describe('undisplayedRecordCount', () => {
       'claude_code',
     )
     expect(count([assistant('fine'), result])).toBe(0)
-    expect(count([rec('system', { type: 'system', subtype: 'init' }, 'claude_code')])).toBe(0)
+    expect(count([rec('system', { kind: 'system', subtype: 'init' }, 'claude_code')])).toBe(0)
     expect(count([rec('session_idle')])).toBe(0)
   })
 

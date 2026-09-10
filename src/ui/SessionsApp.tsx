@@ -22,6 +22,7 @@ import {
   attentionFlip,
   paneWithRepository,
   composerModelOptions,
+  composerModelChoice,
   composerPickerRows,
   connectability,
   CUSTOM_ENVIRONMENT_ID,
@@ -350,7 +351,7 @@ export function SessionsApp(props: SessionsAppProps): React.ReactElement {
       .catch((err) => {
         reportApiError('integrations', err)
       })
-    void api.models
+    void api.account.models
       .list()
       .then((r) => setModels(r.models))
       .catch((err) => {
@@ -933,7 +934,10 @@ function Launcher({
       : pickedPreset!.id === EMPTY_ENVIRONMENT_ID
         ? { kind: 'empty' }
         : { kind: 'named', id: pickedPreset!.id }
-    onSubmit(text.trim(), { environment, model: modelOptions[modelIdx]?.id ?? null })
+    onSubmit(text.trim(), {
+      environment,
+      ...composerModelChoice(modelOptions[modelIdx]),
+    })
   }
 
   // The rows below the prompt: the typed text filters the list live, so the

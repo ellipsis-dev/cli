@@ -106,13 +106,14 @@ trigger:
   schedule: "0 9 * * 1"
 
 session:
-  claude:
+  harness:
+    type: claude_code
     model: claude-haiku-4-5-20251001
-    system: |
-      Summarize the pull requests merged in api and web over the last 7
-      days. Group them by theme, lead with user-facing changes, and return
-      the summary as your answer. Ground every line in a real PR. Never
-      invent activity.
+  instructions: |
+    Summarize the pull requests merged in api and web over the last 7
+    days. Group them by theme, lead with user-facing changes, and return
+    the summary as your answer. Ground every line in a real PR. Never
+    invent activity.
 
   environment:
     repositories:
@@ -194,13 +195,14 @@ trigger:
     paths: ["migrations/**"]
 
 session:
-  claude:
-    system: |
-      Review the database migrations in this pull request for production
-      safety: locking that blocks writes on large tables, missing backfills
-      for new non-null columns, and rollout ordering that breaks if the
-      migration and the code deploy out of order. Comment on the pull
-      request with what you find.
+  harness:
+    type: claude_code
+  instructions: |
+    Review the database migrations in this pull request for production
+    safety: locking that blocks writes on large tables, missing backfills
+    for new non-null columns, and rollout ordering that breaks if the
+    migration and the code deploy out of order. Comment on the pull
+    request with what you find.
 
   environment:
     repositories:
@@ -304,21 +306,23 @@ pull_requests:
 
 review:
   - name: migration-safety
-    claude:
-      system: |
-        Review database migrations for production safety. Check for
-        locking that blocks writes on large tables, missing backfills for
-        new non-null columns, and rollout ordering that breaks if the
-        migration and the code deploy out of order.
+    harness:
+      type: claude_code
+    instructions: |
+      Review database migrations for production safety. Check for
+      locking that blocks writes on large tables, missing backfills for
+      new non-null columns, and rollout ordering that breaks if the
+      migration and the code deploy out of order.
     pull_requests:
       paths: ["**/migrations/**"]
 
 filter:
   name: strict-gate
-  claude:
-    system: |
-      Approve only findings a staff engineer would raise in review.
-      Reject style opinions and anything a linter catches.
+  harness:
+    type: claude_code
+  instructions: |
+    Approve only findings a staff engineer would raise in review.
+    Reject style opinions and anything a linter catches.
 
 budget:
   run: 15.00
@@ -450,7 +454,7 @@ agent automation delete <id>                 # delete it; it stops and frees its
 agent automation link <id> --repo api        # move it into a repo, via a pull request
 agent automation unlink <id>                 # take it over from its file
 agent template list                          # built-in templates and their slugs
-agent model list                             # the model ids valid under claude.model
+agent model list                             # model ids and their supported harnesses
 ```
 
 An agent is owned by one of two writers, and that is what these verbs move.
@@ -492,8 +496,8 @@ Under `session`:
 
 | Key | Purpose |
 | --- | --- |
-| `claude` | `system`, `model`, `effort`, `fallback_model`, `max_turns`, `settings`. |
-| `codex` | Run on OpenAI's Codex CLI instead. Declaring the block selects the harness. |
+| `harness` | Required: `type: claude_code` or `type: codex`, plus that harness's native `model` and `effort` options. Claude Code also accepts `fallback_model`, `max_turns`, and `settings`. |
+| `instructions` | Text or repository file references appended to the harness prompt. |
 | `environment` | A saved environment by name, or an inline block: `repositories`, `variables`, `ports`, `compute`, `image`, `hooks`, `mcp_servers`. |
 | `permissions` | What it may do: `github` scopes its GitHub token, `ellipsis` its API token. |
 | `skills` | Claude Code skills beyond what the cloned repositories provide. |
@@ -503,11 +507,12 @@ Under `session`:
 The schema is strict, so an unknown or misplaced key fails validation rather
 than being silently dropped. Points that decide whether a config works:
 
-- `session.claude.system` takes inline text, a `{file: path}` reference to a repository
+- `session.instructions` takes inline text, a `{file: path}` reference to a repository
   file, or an ordered list of both, joined at session start. It is appended to
-  Claude Code's default prompt. 64 KiB per file.
-- `session.claude.model` defaults to `claude-opus-5`. Claude, GPT, and GLM models are
-  available, and `agent model list` is the authoritative list of ids. Digest and
+  the selected harness's default prompt. 64 KiB per file.
+- `session.harness.model` selects a model for the chosen harness. Claude Code
+  inherits the organization default when omitted. `agent model list` reports
+  the available ids and the harness certified for each. Digest and
   summary jobs run well on `claude-haiku-4-5-20251001`; judgment jobs earn the
   frontier model.
 - `session.budget.session` defaults to $250, which is also the platform maximum, so it

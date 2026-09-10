@@ -2,25 +2,38 @@ import type { Command } from 'commander'
 import { api } from '../lib/api'
 import { apiRoutes } from '../lib/help'
 import { printJson, runAction, usd, usdFromMillicents } from '../lib/output'
+import type { BudgetSummary } from '../lib/types'
+
+export function budgetLines(budget: BudgetSummary): string[] {
+  return [
+    `credit:     ${usd(budget.credit_balance_usd)}${budget.credit_exhausted ? ' (exhausted)' : ''}`,
+    `as of:      ${budget.as_of}`,
+    '',
+    ...budget.windows.map((window) => {
+      const period = `trailing ${window.window_days} ${window.window_days === 1 ? 'day' : 'days'}`
+      const used = `${(window.fraction_used * 100).toFixed(1)}%`
+      const exhausted = window.exhausted ? ' (exhausted)' : ''
+      return `${period}: ${usd(window.spent_usd)} of ${usd(window.limit_usd)} (${used}), ${usd(window.remaining_usd)} remaining${exhausted}`
+    }),
+  ]
+}
 
 export function registerUsage(program: Command): void {
   apiRoutes(
-    program.command('budget').description("Show this period's spend against the account budget"),
-    'GET /v1/budget',
+    program
+      .command('budget')
+      .description('Show prepaid credit and trailing account budgets'),
+    'GET /v1/account/budget',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
-        const b = await api().budget()
+        const b = await api().account.budget()
         if (opts.json) {
           printJson(b)
           return
         }
-        const pct = (b.fraction_used * 100).toFixed(1)
-        console.log(`period:     ${b.period}`)
-        console.log(`spent:      ${usd(b.spent_usd)} of ${usd(b.budget_usd)} (${pct}%)`)
-        console.log(`remaining:  ${usd(b.remaining_usd)}`)
-        console.log(`pause at limit: ${b.pause_at_limit ? 'yes' : 'no'}`)
+        for (const line of budgetLines(b)) console.log(line)
       })
     })
 
@@ -28,12 +41,12 @@ export function registerUsage(program: Command): void {
     program
       .command('usage')
       .description("Show this period's tokens and cost, broken down by model"),
-    'GET /v1/usage',
+    'GET /v1/account/usage',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
-        const u = await api().usage()
+        const u = await api().account.usage()
         if (opts.json) {
           printJson(u)
           return
@@ -50,7 +63,9 @@ export function registerUsage(program: Command): void {
                 m.cost_sandbox_memory_millicents +
                 m.cost_fee_millicents,
             )
-            console.log(`  ${m.model_id.padEnd(28)} ${m.tokens.toLocaleString().padStart(14)}  ${cost}`)
+            console.log(
+              `  ${m.model_id.padEnd(28)} ${m.tokens.toLocaleString().padStart(14)}  ${cost}`,
+            )
           }
         }
       })

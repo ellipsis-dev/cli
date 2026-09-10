@@ -43,7 +43,7 @@ export function canHostSessionsUi(): boolean {
 export function defaultStartRequest(prompt: string): StartAgentSessionRequest {
   // A promptless start opens idle by definition (the server-side contract
   // since #6394): Claude Code waits at its prompt for the first message.
-  let req: StartAgentSessionRequest = {}
+  let req: StartAgentSessionRequest = { harness: { type: 'claude_code' } }
   if (prompt) req.prompt = prompt
   const contextRepo = repoFromCwd(process.cwd())
   if (contextRepo) req = withContextRepository(req, contextRepo)
@@ -55,7 +55,7 @@ export async function runSessionsUi(options: SessionsUiOptions): Promise<void> {
   const token = requireToken()
   const openSocket = makeOpenSocket(token, resolveWsBase(resolveApiBase()))
   // Pick the palette for this terminal's background before the first frame.
-  const [me] = await Promise.all([client.me(), applyDetectedThemeMode()])
+  const [me] = await Promise.all([client.identity(), applyDetectedThemeMode()])
 
   // No screen-clearing dance: the chat prints its settled transcript into THIS
   // terminal's scrollback (see ConnectApp), so the conversation grows down the

@@ -94,14 +94,15 @@ describe('recordText / formatStepLine', () => {
     overrides: Partial<SessionRecord> = {},
   ): SessionRecord => ({
     id: 'rec_1',
-    agent_session_id: 'session_1',
+    session_id: 'session_1',
+    kind: overrides.source === 'lifecycle' ? 'platform' : 'claude_sdk',
     session_execution_id: 'exec_1',
     created_at: '2026-07-03T12:00:00+00:00',
     feed_seq: 3,
     stream_seq: 3,
     source: 'claude_code',
     record_type: (payload.kind as string) ?? 'assistant',
-    record_format: 'claude_stream_json@2.0',
+    record_format: overrides.source === 'lifecycle' ? 'ellipsis_lifecycle@1' : 'claude_sdk@1',
     payload,
     ...overrides,
   })

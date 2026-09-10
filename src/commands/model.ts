@@ -18,12 +18,12 @@ export function registerModel(program: Command): void {
         ),
       'ls',
     ),
-    'GET /v1/models',
+    'GET /v1/account/models',
   )
     .option('--json', 'output raw JSON')
     .action(async (opts: { json?: boolean }) => {
       await runAction(async () => {
-        const { models } = await api().models.list()
+        const { models } = await api().account.models.list()
         if (opts.json) {
           printJson(models)
           return
@@ -33,10 +33,10 @@ export function registerModel(program: Command): void {
           return
         }
         printTable(
-          ['ID', 'NAME', 'DEFAULT'],
-          models.map((m) => [m.id, m.display_name, m.is_default_agent_model ? 'yes' : '']),
+          ['ID', 'NAME', 'HARNESS', 'DEFAULT'],
+          models.map((m) => [m.id, m.display_name, m.harness, m.is_default_agent_model ? 'yes' : '']),
         )
-        console.log('\nSelect one by setting `model:` under `claude:` in your automation YAML.')
+        console.log('\nSet `session.harness.type` and `session.harness.model` in your automation YAML, or use `agent session start --harness <type> --model <id>`.')
       })
     })
 }

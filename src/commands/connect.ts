@@ -98,7 +98,7 @@ export async function runConnect(
 
   const [{ session }, me] = await Promise.all([
     client.sessions.get(sessionId),
-    client.me(),
+    client.identity(),
     // Pick the palette for this terminal's background before the first frame.
     applyDetectedThemeMode(),
   ])

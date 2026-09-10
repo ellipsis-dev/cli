@@ -75,7 +75,7 @@ export function registerAutomation(program: Command): void {
         // goes to stderr so the YAML on stdout stays clean for piping.
         const [{ automation: a }, me] = await Promise.all([
           client.automations.get(automationId),
-          client.me(),
+          client.identity(),
         ])
         printYaml(a)
         console.error(`\nview: ${automationUrl(resolveAppBase(), me.customer_login, automationId)}`)
@@ -176,7 +176,7 @@ export function registerAutomation(program: Command): void {
             printJson(session)
             return
           }
-          const me = await client.me()
+          const me = await client.identity()
           console.log(`✓ started ${session.id}`)
           console.log(`  ${sessionUrl(resolveAppBase(), me.customer_login, session.id)}`)
           console.log(`  follow with: agent session get ${session.id} --watch`)
@@ -445,8 +445,8 @@ function automationName(a: Automation): string {
   return a.config.ellipsis.name ?? a.id
 }
 
-// A minimal valid automation. `session.claude.system` is the only required
-// field; everything else has a server-side default. Roots Ellipsis syncs from:
+// A minimal automation with an explicit harness and task instructions.
+// Roots Ellipsis syncs from:
 // agents/, .agents/, ellipsis/, .ellipsis/ (any depth), as .yaml/.yml.
 function starterConfig(name: string): string {
   return `# Ellipsis automation. Commit this to your default branch; Ellipsis syncs it
@@ -463,11 +463,11 @@ ellipsis:
 
 # What each session runs on.
 session:
-  claude:
-    # System prompt defining the agent's behavior (required).
-    system: |
-      You are an Ellipsis agent. Describe the task you want it to perform here.
+  harness:
+    type: claude_code
     # model: claude-opus-5   # optional; defaults to the organization default
+  instructions: |
+    You are an Ellipsis agent. Describe the task you want it to perform here.
   # environment: backend      # a saved environment, by name
 `
 }

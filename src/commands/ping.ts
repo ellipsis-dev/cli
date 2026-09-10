@@ -7,14 +7,14 @@ export function registerPing(program: Command): void {
     program
       .command('ping')
       .description('Check that the API is reachable and the credential is valid'),
-    'GET /v1/me',
+    'GET /v1/identity',
   )
     .action(async () => {
       // There's no unauthenticated health route on the public API, so we probe
       // the lightest authenticated endpoint (/me): a 200 proves the API is
       // reachable AND the stored token is valid.
       try {
-        const me = await api().me()
+        const me = await api().identity()
         console.log(`ok: ${me.customer_login} (${me.customer_id})`)
       } catch (err) {
         if (err instanceof APIError && err.status === 401) {
