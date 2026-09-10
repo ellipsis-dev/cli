@@ -107,11 +107,11 @@ export type PutSandboxVariablesRequest = S['PutSecretsRequest']
 
 // ----------------------------- usage / budget -----------------------------
 
-export type BudgetWindow = S['BudgetWindow']
+export type BudgetWindow = S['AccountBudgetWindow']
 export type BudgetSummary = S['BudgetSummary']
 export type UsageDailyPoint = S['UsageDailyPoint']
 export type ModelUsageBreakdown = S['ModelUsageBreakdown']
-export type UsageDashboard = S['GetUsageDashboardResponse']
+export type UsageDashboard = S['GetUsageOverTimeResponse']
 
 // ------------------------------- analytics --------------------------------
 
@@ -153,7 +153,7 @@ export type ListSentryOrganizationsResponse = S['SentryOrganizationsListResponse
 
 // -------------------------------- identity --------------------------------
 
-export type WhoAmI = S['WhoAmIResponse']
+export type WhoAmI = S['Identity']
 
 // The GitHub user behind a user_id. Loosely typed on purpose: the CLI only
 // reads `login`, and this shape is also what it caches to disk, where an older

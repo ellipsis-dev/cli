@@ -61,6 +61,10 @@ function oneOf(kind: string, allowed: readonly string[], value: string): string 
   return value
 }
 
+export function toHarness(value: string): 'claude_code' | 'codex' {
+  return oneOf('harness', ['claude_code', 'codex'], value) as 'claude_code' | 'codex'
+}
+
 // Repeatable, validated variants of `collect` for the list facets.
 export function collectSource(value: string, previous: string[]): string[] {
   return [...previous, oneOf('source', SESSION_SOURCES, value)]

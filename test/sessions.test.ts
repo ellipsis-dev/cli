@@ -574,7 +574,7 @@ describe('applyComposerChoices', () => {
   // stand-in when nothing else is checked.
   const untouched = { environment: { kind: 'empty' } as const, model: null }
 
-  it('keeps the context repo and patches the model as a claude block', () => {
+  it('keeps the context repo and patches the selected harness model', () => {
     const req = applyComposerChoices(
       { repositories: ['acme/api'] },
       { ...untouched, model: 'claude-opus-5' },
@@ -582,7 +582,7 @@ describe('applyComposerChoices', () => {
     expect(req).toEqual({
       repositories: ['acme/api'],
       environment: {},
-      claude: { model: 'claude-opus-5' },
+      harness: { type: 'claude_code', model: 'claude-opus-5' },
     })
   })
 
@@ -604,7 +604,7 @@ describe('applyComposerChoices', () => {
     expect(req).toEqual({
       prompt: 'ship it',
       environment: 'env_1',
-      claude: { model: 'claude-fable-5' },
+      harness: { type: 'claude_code', model: 'claude-fable-5' },
     })
   })
 
@@ -1202,13 +1202,15 @@ describe('start request shaping', () => {
         trigger: { type: 'cron', schedule: '* * * * *' },
         input: { json_schema: {} },
         session: {
-          claude: { system: 'do it', model: 'claude-opus-5' },
+          harness: { type: 'claude_code', model: 'claude-opus-5' },
+          instructions: 'do it',
           environment: { repositories: [{ name: 'api' }] },
           budget: { session: 5 },
         },
       }),
     ).toEqual({
-      claude: { system: 'do it', model: 'claude-opus-5' },
+      harness: { type: 'claude_code', model: 'claude-opus-5' },
+          instructions: 'do it',
       environment: { repositories: [{ name: 'api' }] },
       budget: 5,
     })
@@ -1217,11 +1219,11 @@ describe('start request shaping', () => {
   it('accepts a bare session config too', () => {
     expect(
       startRequestFromConfig({
-        claude: { system: 'do it' },
+        harness: { type: 'claude_code' }, instructions: 'do it',
         budget: { session: 2 },
         trigger: { type: 'cron', schedule: '* * * * *' },
       }),
-    ).toEqual({ claude: { system: 'do it' }, budget: 2 })
+    ).toEqual({ harness: { type: 'claude_code' }, instructions: 'do it', budget: 2 })
   })
 
   // The context repo rides the request's additive `repositories` key and

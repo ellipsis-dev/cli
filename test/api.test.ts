@@ -38,10 +38,10 @@ function stubOk(body: unknown = { ok: true }): ReturnType<typeof vi.fn> {
 describe('api', () => {
   it('sends the resolved bearer token and hits the resolved base', async () => {
     const fetchMock = stubOk({ customer_login: 'acme' })
-    await api('http://api.test', 'tok_123').me()
+    await api('http://api.test', 'tok_123').identity()
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('http://api.test/v1/me')
+    expect(url).toBe('http://api.test/v1/identity')
     expect(init.headers).toMatchObject({ Authorization: 'Bearer tok_123' })
   })
 
@@ -49,16 +49,16 @@ describe('api', () => {
     process.env.ELLIPSIS_API_TOKEN = 'env_tok'
     process.env.ELLIPSIS_API_BASE_URL = 'http://env.test'
     const fetchMock = stubOk()
-    await api().budget()
+    await api().account.budget()
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('http://env.test/v1/budget')
+    expect(url).toBe('http://env.test/v1/account/budget')
     expect(init.headers).toMatchObject({ Authorization: 'Bearer env_tok' })
   })
 
   it('stamps the CLI user agent on every request, so calls stay attributable', async () => {
     const fetchMock = stubOk()
-    await api('http://api.test', 't').usage()
+    await api('http://api.test', 't').account.usage()
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(init.headers).toMatchObject({ 'user-agent': USER_AGENT })

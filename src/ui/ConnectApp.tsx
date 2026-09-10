@@ -17,7 +17,6 @@ import {
   awaitingAgentPhase,
   collapseToolRuns,
   deliveredUnechoedSends,
-  foldCosts,
   groupRecordsToChatTurns,
   humanDuration,
   lastLines,
@@ -29,9 +28,9 @@ import {
   type SessionTranscriptStore,
 } from '@ellipsis-dev/sdk/store'
 import { deriveSandboxState } from '../lib/steps'
-import { chatTurnsToItems, undisplayedRecordCount } from '../lib/chatItems'
+import { chatTurnsToItems, foldRecordCosts, undisplayedRecordCount } from '../lib/chatItems'
 import { errorDetail } from '../lib/api'
-import type { Ellipsis, SdkRecord } from '@ellipsis-dev/sdk'
+import type { Ellipsis, Session, SessionRecord } from '@ellipsis-dev/sdk'
 import { hyperlink } from '../lib/urls'
 import { usdNumberFromMillicents } from '../lib/output'
 import { applyEditShortcut } from '../lib/editing'
@@ -339,12 +338,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   // CC-result fold as the last-turn readout and older-backend fallback (§6:
   // record folding is display-only).
   const cost = useMemo(
-    () =>
-      foldCosts(
-        snapshot.records
-          .filter((r) => r.source === 'claude_code')
-          .map((r) => r.payload as SdkRecord),
-      ),
+    () => foldRecordCosts(snapshot.records),
     [snapshot.records],
   )
   const serverCostUsd = snapshot.session
@@ -413,10 +407,11 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
         ])
         if (page.records.length) {
           // Inbox state (message_received/delivered/requeued) rides the record
-          // feed now (protocol v3) — the store folds it as records land.
-          store.ingest({ type: 'records_append', records: page.records })
+          // feed: the store folds it as records land. REST and frame types
+          // differ in optional defaults but carry the same serialized values.
+          store.ingest({ type: 'records_append', records: page.records as SessionRecord[] })
         }
-        store.ingest({ type: 'session', session })
+        store.ingest({ type: 'session', session: session as Session })
       } catch {
         // Transient fetch failure — the next tick retries.
       }

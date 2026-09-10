@@ -250,9 +250,10 @@ ellipsis:
 #
 # review:
 #   - name: migration-safety
-#     claude:
-#       system: |
-#         Review SQL migrations for locks that block writes on a large table.
+#     harness:
+#       type: claude_code
+#     instructions: |
+#       Review SQL migrations for locks that block writes on a large table.
 #     pull_requests:
 #       paths: ["sql/migrations/**"]
 #
@@ -261,9 +262,10 @@ ellipsis:
 #
 # filter:
 #   name: gatekeeper
-#   claude:
-#     system: |
-#       Drop any finding that is not worth the author's time.
+#   harness:
+#     type: claude_code
+#   instructions: |
+#     Drop any finding that is not worth the author's time.
 
 budget:
   run: 2.00

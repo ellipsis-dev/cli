@@ -21,6 +21,7 @@ import {
   parseWhen,
   toInt,
   toNumber,
+  toHarness,
 } from '../lib/args'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { sessionUrl } from '../lib/urls'
@@ -51,6 +52,7 @@ import { readImageAttachment } from '../lib/images'
 import { formatStepLine, oneLine, recordText } from '../lib/steps'
 import {
   parseRepo,
+  assertCurrentHarnessKeys,
   sessionConfigName,
   startRequestFromConfig,
   withContextRepository,
@@ -105,7 +107,7 @@ export function registerSession(program: Command): void {
     )
     .option(
       '--override <yaml>',
-      'partial patch (YAML/JSON) of session config keys merged onto the inline config, e.g. "claude:\\n  effort: high"',
+      'partial patch (YAML/JSON) of session config keys merged onto the inline config, e.g. "harness:\\n  effort: high"',
     )
     .option(
       '--override-file <path>',
@@ -113,9 +115,10 @@ export function registerSession(program: Command): void {
     )
     .option(
       '--model <model-id>',
-      'override claude.model for this session (see `agent model list`)',
+      'override harness.model for this session (see `agent model list`)',
     )
-    .option('--system <text>', 'override claude.system, the agent system prompt')
+    .option('--harness <type>', 'select claude_code or codex (default: claude_code)', toHarness)
+    .option('--system <text>', 'override the instructions appended to the harness prompt')
     .option(
       '-r, --repo <owner/name>',
       'also check out a repository, in whichever environment the session runs (repeatable; a bare name means your account)',
@@ -170,6 +173,7 @@ export function registerSession(program: Command): void {
           override?: string
           overrideFile?: string
           model?: string
+          harness?: 'claude_code' | 'codex'
           system?: string
           repo: string[]
           cpu?: number
@@ -223,7 +227,7 @@ export function registerSession(program: Command): void {
           // The flat raw-session body: a SessionConfig plus run settings;
           // there is no base config to merge onto (a saved automation is
           // invoked with `agent automation run` instead).
-          let req: StartAgentSessionRequest = {}
+          let req: StartAgentSessionRequest = { harness: { type: 'claude_code' } }
           if (opts.configFile) {
             req = { ...req, ...startRequestFromConfig(readConfigFile(opts.configFile)) }
           }
@@ -281,12 +285,10 @@ export function registerSession(program: Command): void {
           // UI shows it in its footer meta line (anything printed before the
           // app would land in scrollback); every other mode prints this note.
           let configNote: string | undefined
-          // Widened to string: `automation` replaced `agent_config` on the wire
-          // (SDK 0.28.0); the pinned SDK's enum predates it.
-          const environmentSource: string | null | undefined = session.environment?.source
+          const environmentSource = session.environment?.source
           if (session.environment?.environment_id && environmentSource !== 'request') {
             const label =
-              environmentSource === 'automation' || environmentSource === 'agent_config'
+              environmentSource === 'automation'
                 ? 'from the automation'
                 : environmentSource
             const note = `using environment ${session.environment.environment_id} (${label})`
@@ -577,7 +579,7 @@ export function registerSession(program: Command): void {
         // Fetch the session and the login (for the link) together — no added latency.
         const [{ session: s }, me] = await Promise.all([
           client.sessions.get(sessionId),
-          client.me(),
+          client.identity(),
         ])
         printSessionSummary(s)
         console.log(`url:       ${sessionUrl(resolveAppBase(), me.customer_login, sessionId)}`)
@@ -781,9 +783,9 @@ function printSessionSummary(s: AgentSession): void {
 }
 
 // Print a clickable dashboard link for a session. The route is scoped by
-// account login, which isn't on the session object, so resolve it from /me.
+// account login, which isn't on the session object, so resolve it from /identity.
 async function printSessionUrl(client: Ellipsis, sessionId: string): Promise<void> {
-  const me = await client.me()
+  const me = await client.identity()
   console.log(`  ${sessionUrl(resolveAppBase(), me.customer_login, sessionId)}`)
 }
 
@@ -798,6 +800,7 @@ export function buildStartOverride(opts: {
   override?: string
   overrideFile?: string
   model?: string
+  harness?: 'claude_code' | 'codex'
   system?: string
   repo?: string[]
   cpu?: number
@@ -819,11 +822,13 @@ export function buildStartOverride(opts: {
     base = parsed as Record<string, unknown>
   }
 
+  assertCurrentHarnessKeys(base)
   const sugar: Record<string, unknown> = {}
-  const claude: Record<string, unknown> = {}
-  if (opts.model !== undefined) claude.model = opts.model
-  if (opts.system !== undefined) claude.system = opts.system
-  if (Object.keys(claude).length) sugar.claude = claude
+  const harness: Record<string, unknown> = {}
+  if (opts.harness !== undefined) harness.type = opts.harness
+  if (opts.model !== undefined) harness.model = opts.model
+  if (Object.keys(harness).length) sugar.harness = harness
+  if (opts.system !== undefined) sugar.instructions = opts.system
 
   const compute: Record<string, unknown> = {}
   if (opts.cpu !== undefined) compute.cpu = opts.cpu
@@ -859,7 +864,12 @@ function deepMerge(
   const out: Record<string, unknown> = { ...base }
   for (const [k, v] of Object.entries(over)) {
     const b = out[k]
-    out[k] = isPlainObject(b) && isPlainObject(v) ? deepMerge(b, v) : v
+    // Native options from another harness must not leak across a switch.
+    const changesHarness =
+      k === 'harness' && isPlainObject(b) && isPlainObject(v) &&
+      b.type !== undefined && v.type !== undefined && b.type !== v.type
+    out[k] =
+      isPlainObject(b) && isPlainObject(v) && !changesHarness ? deepMerge(b, v) : v
   }
   return out
 }

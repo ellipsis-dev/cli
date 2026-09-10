@@ -287,13 +287,22 @@ export function parseRepo(value: string): { name: string; owner?: string } {
 // dollar number on the request where the file has a `budget.session`, so it
 // is lifted.
 const START_CONFIG_KEYS = [
-  'claude',
-  'codex',
+  'harness',
+  'instructions',
   'environment',
   'output',
   'permissions',
   'skills',
 ] as const
+
+export function assertCurrentHarnessKeys(config: Record<string, unknown>): void {
+  if ('claude' in config || 'codex' in config) {
+    throw new Error(
+      'replace the legacy claude/codex block with harness: {type: claude_code or codex, ...}, ' +
+      'and move system to instructions',
+    )
+  }
+}
 
 // An inline config file (`session start -f/-t`) as a start request. The file
 // is either an automation document (session keys under `session:`, as every
@@ -307,6 +316,14 @@ export function startRequestFromConfig(
     nested && typeof nested === 'object' && !Array.isArray(nested)
       ? (nested as Record<string, unknown>)
       : document
+  assertCurrentHarnessKeys(config)
+  const harness = config.harness
+  if (
+    !harness || typeof harness !== 'object' || !('type' in harness) ||
+    (harness.type !== 'claude_code' && harness.type !== 'codex')
+  ) {
+    throw new Error('session config must include harness.type: claude_code or codex')
+  }
   const req: Record<string, unknown> = {}
   for (const key of START_CONFIG_KEYS) {
     if (config[key] !== undefined) req[key] = config[key]
@@ -341,6 +358,8 @@ export function withContextRepository(
 // uses and the other two pickers leave unset: repositories and automations
 // are flat lists of names with no vendor to group under and no price to quote.
 export type ComposerModel = {
+  harness?: StartAgentSessionRequest['harness']['type']
+  modelId?: string
   id: string | null
   label: string
   // The heading this row sits under. Consecutive rows sharing a group print
@@ -448,10 +467,23 @@ export function composerModelOptions(models: readonly SupportedModel[]): Compose
     .map((m) => ({
       id: (m.is_default_agent_model ? null : m.id) as string | null,
       label: m.id,
+      harness: m.harness,
+      modelId: m.id,
       group: manufacturerLabel(m.manufacturer),
       rate: modelRate(m.rate_card),
     }))
   return hasDefault ? rows : [{ id: null, label: 'Default', group: null }, ...rows]
+}
+
+// The default row inherits the account model for Claude. Codex's request
+// requires a concrete model, so retain the catalog id even on its default row.
+export function composerModelChoice(
+  option: ComposerModel | undefined,
+): Pick<ComposerChoices, 'model' | 'harness'> {
+  return {
+    model: option?.id ?? (option?.harness === 'codex' ? option.modelId ?? null : null),
+    harness: option?.harness,
+  }
 }
 
 // A picker's display rows: each group's heading, then the options under it.
@@ -965,6 +997,7 @@ export type ComposerEnvironment =
   | { kind: 'custom'; pane: EnvironmentPaneState }
 
 export interface ComposerChoices {
+  harness?: StartAgentSessionRequest['harness']['type']
   environment: ComposerEnvironment
   model: string | null
 }
@@ -1020,10 +1053,17 @@ export function applyComposerChoices(
   choices: ComposerChoices,
 ): StartAgentSessionRequest {
   const req: StartAgentSessionRequest = { ...base }
-  // Only the model: sending any sibling claude field would override the
-  // inline config's own (system especially).
+  // Keep native options when the harness is unchanged; a model certified for
+  // another harness starts with that harness's own options. Instructions stay.
+  const type = choices.harness ?? req.harness?.type ?? 'claude_code'
   if (choices.model) {
-    req.claude = { model: choices.model } as StartAgentSessionRequest['claude']
+    req.harness =
+      req.harness?.type === type
+        ? { ...req.harness, model: choices.model }
+        : { type, model: choices.model }
+  } else if (choices.harness && req.harness?.type !== type) {
+    if (type === 'codex') throw new Error('select a model for the Codex harness')
+    req.harness = { type: 'claude_code' }
   }
   const env = choices.environment
   if (env.kind === 'named') req.environment = env.id

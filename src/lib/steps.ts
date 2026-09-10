@@ -3,6 +3,8 @@ import {
   lifecycleText as sdkLifecycleText,
   sessionLogText as sdkSessionLogText,
   oneLine,
+  claudePayload,
+  recordToItems,
   type SandboxState,
 } from '@ellipsis-dev/sdk/store'
 import { formatTs } from './output'
@@ -57,12 +59,9 @@ interface StepContentBlock {
   content?: unknown
 }
 
-// The payload as a loose bag. Every read below is best-effort display text
-// across three harness formats (claude_sdk@1, codex_jsonl@1,
-// ellipsis_lifecycle@1), so narrowing the SDK's per-format union at each field
-// would buy nothing a `typeof` guard doesn't already give.
+// Display reads a derived Claude view; the stored native payload stays intact.
 function fields(record: SessionRecord): Record<string, unknown> {
-  return record.payload as Record<string, unknown>
+  return (claudePayload(record) ?? record.payload) as Record<string, unknown>
 }
 
 // One session_record as a single display line: index, timestamp, record type,
@@ -86,8 +85,16 @@ export function formatStepLine(record: SessionRecord): string {
 // Anything unrecognized falls back to its JSON.
 export function recordText(record: SessionRecord): string {
   const data = fields(record)
-  if (record.source === 'lifecycle') {
+  if (record.kind === 'platform') {
     return lifecycleText(record.record_type, data) ?? record.record_type
+  }
+  if (record.kind === 'codex' || record.kind === 'codex_app_server') {
+    const items = recordToItems(record, record.id)
+    if (items.length) {
+      return items
+        .map((item) => [item.text, item.detail].filter(Boolean).join(' '))
+        .join(' ')
+    }
   }
   if (typeof data.result === 'string') return data.result
   const text = contentText(data.content)

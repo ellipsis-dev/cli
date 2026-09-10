@@ -169,7 +169,8 @@ describe('buildStartOverride', () => {
         budget: 0.5,
       }),
     ).toEqual({
-      claude: { model: 'claude-opus-4-8', system: 'do the thing' },
+      harness: { model: 'claude-opus-4-8' },
+      instructions: 'do the thing',
       environment: {
         compute: { cpu: 2, memory: '8GB', timeout: '30m' },
       },
@@ -187,12 +188,12 @@ describe('buildStartOverride', () => {
   it('deep-merges sugar flags on top of a raw inline override (flags win)', () => {
     expect(
       buildStartOverride({
-        override: 'claude:\n  model: claude-haiku-4-5-20251001\n  system: base\nenabled: false',
+        override: 'harness:\n  type: claude_code\n  model: claude-haiku-4-5-20251001\n  effort: high\ninstructions: base',
         model: 'claude-opus-4-8',
       }),
     ).toEqual({
-      claude: { model: 'claude-opus-4-8', system: 'base' },
-      enabled: false,
+      harness: { type: 'claude_code', model: 'claude-opus-4-8', effort: 'high' },
+      instructions: 'base',
     })
   })
 
