@@ -20,9 +20,7 @@ type S = components['schemas']
 
 export type AgentSession = S['Session']
 export type AgentSessionSource = S['SessionSource']
-export type AgentSessionStatus = S['SessionStatus']
-export type SessionState = S['SessionState']
-export type SessionSurface = S['SessionSurface']
+export type AgentSessionStatus = S['SessionLifecycleStatus']
 export type SessionPrompting = S['SessionPrompting']
 // The frames flavor, not `S['SessionRecord']`: the spec marks defaulted fields
 // optional, but on the wire the server always serializes every field, and the
@@ -44,21 +42,21 @@ export type GithubAccountSnippet = S['GithubAccountSnippet']
 // ----------------------------- automations ---------------------------------
 
 // The automation file: identity + trigger + input + a `session:` block.
-export type AutomationConfig = S['AutomationConfig']
+export type AutomationConfig = S['AgentConfig-Input']
 // What one session runs on; the flat body of POST /v1/sessions.
-export type SessionConfig = S['SessionConfig']
-export type Automation = S['Automation']
-export type ListAutomationsResponse = S['AutomationsListResponse']
-export type CreateAutomationRequest = Parameters<Ellipsis['automations']['create']>[0]
-export type CreatedAutomation = S['AutomationResponse']
+export type SessionConfig = S['SessionConfig-Input']
+export type Automation = S['Agent']
+export type ListAutomationsResponse = S['AgentsListResponse']
+export type CreateAutomationRequest = Parameters<Ellipsis['agents']['create']>[0]
+export type CreatedAutomation = S['AgentResponse']
 export type ConfigManagedBy = S['ConfigManagedBy']
-export type LinkedAutomation = S['LinkAutomationResponse']
+export type LinkedAutomation = S['LinkAgentResponse']
 
 // ------------------------------ environments -------------------------------
 
 // The saved-environment file (identity + body); the inline session block is
 // S['EnvironmentConfig'].
-export type EnvironmentDocument = S['EnvironmentDocument']
+export type EnvironmentDocument = S['EnvironmentDocument-Input']
 export type SavedEnvironment = S['Environment']
 export type ListEnvironmentsResponse = S['EnvironmentsListResponse']
 
@@ -183,7 +181,7 @@ export type CliAuthPollStatus =
 
 export interface ListAgentSessionsQuery {
   // An automation id or name: only sessions that automation started.
-  automation?: string
+  agent?: string
   source?: AgentSessionSource[]
   days?: number
   start?: string

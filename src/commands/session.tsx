@@ -52,6 +52,7 @@ import { readImageAttachment } from '../lib/images'
 import { formatStepLine, oneLine, recordText } from '../lib/steps'
 import {
   parseRepo,
+  withSessionPrompt,
   assertCurrentHarnessKeys,
   sessionConfigName,
   startRequestFromConfig,
@@ -68,8 +69,9 @@ const FALLBACK_POLL_INTERVAL_SECONDS = 2
 
 // Statuses past which a session no longer changes — `--watch` stops here.
 const TERMINAL_STATUSES: ReadonlySet<AgentSessionStatus> = new Set<AgentSessionStatus>([
-  'completed',
-  'error',
+  'closed',
+  'idle',
+  'failed',
   'cancelled',
   'stopped',
 ])
@@ -107,7 +109,7 @@ export function registerSession(program: Command): void {
     )
     .option(
       '--override <yaml>',
-      'partial patch (YAML/JSON) of session config keys merged onto the inline config, e.g. "harness:\\n  effort: high"',
+      'partial patch (YAML/JSON) of session config keys merged onto the inline config, e.g. "claude_code:\\n  effort: high"',
     )
     .option(
       '--override-file <path>',
@@ -115,10 +117,10 @@ export function registerSession(program: Command): void {
     )
     .option(
       '--model <model-id>',
-      'override harness.model for this session (see `agent model list`)',
+      'override the selected harness model for this session (see `agent model list`)',
     )
     .option('--harness <type>', 'select claude_code or codex (default: claude_code)', toHarness)
-    .option('--system <text>', 'override the instructions appended to the harness prompt')
+    .option('--system <text>', 'retired; put instructions in the prompt or AGENTS.md')
     .option(
       '-r, --repo <owner/name>',
       'also check out a repository, in whichever environment the session runs (repeatable; a bare name means your account)',
@@ -227,20 +229,20 @@ export function registerSession(program: Command): void {
           // The flat raw-session body: a SessionConfig plus run settings;
           // there is no base config to merge onto (a saved automation is
           // invoked with `agent automation run` instead).
-          let req: StartAgentSessionRequest = { harness: { type: 'claude_code' } }
+          let req: StartAgentSessionRequest = { claude_code: {} }
           if (opts.configFile) {
-            req = { ...req, ...startRequestFromConfig(readConfigFile(opts.configFile)) }
+            req = startRequestFromConfig(readConfigFile(opts.configFile))
           }
           // Templates left the start request (#6394): resolve the slug to its
           // YAML via GET /v1/templates/{slug} and start inline.
           if (opts.template) {
             const template = await api().templates.get(opts.template)
-            req = { ...req, ...startRequestFromConfig(parseYaml(template.yaml)) }
+            req = startRequestFromConfig(parseYaml(template.yaml))
           }
           // Sugar flags (--model, --repo, --cpu, ...) and the raw --override
           // are one structured patch, deep-merged onto the inline config so an
           // explicit flag wins over the same field from -f/-t.
-          const override = buildStartOverride(opts)
+          const override = buildStartOverride(opts, req.codex ? 'codex' : 'claude_code')
           if (override) req = deepMerge(req, override) as StartAgentSessionRequest
           // A NAMED environment re-picks it wholesale, so there is nothing for
           // the environment fields of an override to merge into.
@@ -260,7 +262,7 @@ export function registerSession(program: Command): void {
           if (contextRepo) req = withContextRepository(req, contextRepo)
           // Appended to the initial user query at build time; gives this
           // session instructions on top of the config's shared system prompt.
-          if (promptText) req.prompt = promptText
+          if (promptText) req = withSessionPrompt(req, promptText)
           // Pictures ride the first message inline, the way a paste into a
           // local `claude` does: the prompt gains an `[Image #N]` placeholder
           // per file and the model sees each as a content block on turn 0.
@@ -286,12 +288,12 @@ export function registerSession(program: Command): void {
           // app would land in scrollback); every other mode prints this note.
           let configNote: string | undefined
           const environmentSource = session.environment?.source
-          if (session.environment?.environment_id && environmentSource !== 'request') {
+          if (session.environment?.id && environmentSource !== 'request') {
             const label =
-              environmentSource === 'automation'
+              environmentSource === 'agent'
                 ? 'from the automation'
                 : environmentSource
-            const note = `using environment ${session.environment.environment_id} (${label})`
+            const note = `using environment ${session.environment.id} (${label})`
             configNote = configNote ? `${configNote}; ${note}` : note
           }
 
@@ -300,7 +302,7 @@ export function registerSession(program: Command): void {
             // a connect would fail; degrade to watching the output instead.
             // The wire session carries no config blob, so interactivity comes
             // from the same projection POST /messages enforces.
-            if (!session.prompting.enabled) {
+            if (!session.lifecycle.prompting.enabled) {
               if (configNote) console.log(configNote)
               console.log(
                 'this agent is not interactive; watching output instead of connecting',
@@ -340,7 +342,7 @@ export function registerSession(program: Command): void {
             printJson(session)
             return
           }
-          console.log(`✓ started session ${session.id} (${session.status})`)
+          console.log(`✓ started session ${session.id} (${session.lifecycle.status})`)
           await printSessionUrl(client, session.id)
           console.log(`  follow with: agent session get ${session.id} --watch`)
         })
@@ -390,7 +392,7 @@ export function registerSession(program: Command): void {
           const client = api()
           const sessions = (
             await client.sessions.list({
-              automation: opts.automation,
+              agent: opts.automation,
               source: opts.source.length ? (opts.source as AgentSessionSource[]) : undefined,
               author_id: opts.author ? await resolveAuthorId(client, opts.author) : undefined,
               days: opts.days,
@@ -411,9 +413,9 @@ export function registerSession(program: Command): void {
             ['ID', 'STATUS', 'SOURCE', 'CREATED', 'COST'],
             sessions.map((s) => [
               s.id,
-              s.status,
+              s.lifecycle.status,
               s.source ?? '-',
-              formatTs(s.created_at),
+              formatTs(s.lifecycle.timestamps.created_at),
               usdFromMillicents(s.cost?.total ?? 0),
             ]),
           )
@@ -457,7 +459,7 @@ export function registerSession(program: Command): void {
       'log',
       'logs',
     ),
-    'GET /v1/sessions/{id}/export',
+    'GET /v1/sessions/{id}/download',
   )
     .option('-o, --output <path>', 'write to a file instead of stdout')
     .option('--gzip', 'keep the concatenated .jsonl.gz bytes as-is (skip gunzip)')
@@ -472,7 +474,7 @@ export function registerSession(program: Command): void {
         },
       ) => {
         await runAction(async () => {
-          const manifest = await api().sessions.export(sessionId)
+          const manifest = await api().sessions.download(sessionId)
           if (opts.json) {
             printJson(manifest)
             return
@@ -598,7 +600,7 @@ export function registerSession(program: Command): void {
           printJson(s)
           return
         }
-        console.log(`✓ stopped session ${sessionId} (${s.status})`)
+        console.log(`✓ stopped session ${sessionId} (${s.lifecycle.status})`)
       })
     })
 }
@@ -687,10 +689,10 @@ export async function watchSessionStreaming(
   }
   // Terminal `done` frame. Output already streamed live; print a one-line cap.
   if (!json) {
-    const mark = outcome.status === 'completed' ? '✓' : '✗'
+    const mark = exitCodeForStatus(outcome.exitStatus ?? outcome.status) === 0 ? '✓' : '✗'
     console.log(`\n${mark} session ${sessionId} ${outcome.status}`)
   }
-  if (exitCodeForStatus(outcome.status) !== 0) process.exitCode = 1
+  if (exitCodeForStatus(outcome.exitStatus ?? outcome.status) !== 0) process.exitCode = 1
 }
 
 function renderFrameHuman(frame: StreamFrame, statusWord?: string): void {
@@ -728,7 +730,7 @@ function renderFrameHuman(frame: StreamFrame, statusWord?: string): void {
 
 // Exit 0 for a successful terminal status, non-zero otherwise (spec §4.1).
 export function exitCodeForStatus(status: string): number {
-  return status === 'completed' ? 0 : 1
+  return ['completed', 'closed', 'idle'].includes(status) ? 0 : 1
 }
 
 // Poll a session until it reaches a terminal status, printing each status
@@ -744,21 +746,21 @@ export async function watchSession(
   let last: AgentSessionStatus | undefined
   for (;;) {
     const { session: s } = await client.sessions.get(sessionId)
-    if (s.status !== last) {
+    if (s.lifecycle.status !== last) {
       if (!json) {
-        const reason = s.status_reason ? `: ${s.status_reason}` : ''
-        console.log(`${nowClock()}  ${s.status}${reason}`)
+        const reason = s.lifecycle.detail ? `: ${s.lifecycle.detail}` : ''
+        console.log(`${nowClock()}  ${s.lifecycle.status}${reason}`)
       }
-      last = s.status
+      last = s.lifecycle.status
     }
-    if (TERMINAL_STATUSES.has(s.status)) {
+    if (TERMINAL_STATUSES.has(s.lifecycle.status)) {
       if (json) {
         printJson(s)
       } else {
         console.log('')
         printSessionSummary(s)
       }
-      if (exitCodeForStatus(s.status) !== 0) process.exitCode = 1
+      if (exitCodeForStatus(s.lifecycle.last_execution_result?.completion_reason ?? s.lifecycle.status) !== 0) process.exitCode = 1
       return
     }
     await sleep(intervalMs)
@@ -767,12 +769,12 @@ export async function watchSession(
 
 function printSessionSummary(s: AgentSession): void {
   console.log(`id:        ${s.id}`)
-  console.log(`status:    ${s.status}${s.status_reason ? ` (${s.status_reason})` : ''}`)
+  console.log(`status:    ${s.lifecycle.status}${s.lifecycle.detail ? ` (${s.lifecycle.detail})` : ''}`)
   if (s.source) console.log(`source:    ${s.source}`)
   const config = sessionConfigName(s)
   if (config) console.log(`config:    ${config}`)
-  console.log(`created:   ${s.created_at}`)
-  console.log(`updated:   ${s.updated_at}`)
+  console.log(`created:   ${s.lifecycle.timestamps.created_at}`)
+  console.log(`updated:   ${s.lifecycle.timestamps.updated_at}`)
   console.log(`tokens:    ${(s.tokens?.total ?? 0).toLocaleString()}`)
   console.log(`cost:      ${usdFromMillicents(s.cost?.total ?? 0)}`)
   const keys = Object.keys(s.metadata ?? {})
@@ -807,7 +809,7 @@ export function buildStartOverride(opts: {
   memory?: string
   timeout?: string
   budget?: number
-}): Record<string, unknown> | undefined {
+}, defaultHarness: 'claude_code' | 'codex' = 'claude_code'): Record<string, unknown> | undefined {
   if (opts.override && opts.overrideFile) {
     throw new Error('provide only one of --override / --override-file')
   }
@@ -824,11 +826,13 @@ export function buildStartOverride(opts: {
 
   assertCurrentHarnessKeys(base)
   const sugar: Record<string, unknown> = {}
-  const harness: Record<string, unknown> = {}
-  if (opts.harness !== undefined) harness.type = opts.harness
-  if (opts.model !== undefined) harness.model = opts.model
-  if (Object.keys(harness).length) sugar.harness = harness
-  if (opts.system !== undefined) sugar.instructions = opts.system
+  if (opts.system !== undefined) {
+    throw new Error('--system is no longer supported; put task instructions in the prompt or a repository AGENTS.md file')
+  }
+  const type = opts.harness ?? (base.codex ? 'codex' : base.claude_code ? 'claude_code' : defaultHarness)
+  if (opts.harness !== undefined || opts.model !== undefined) {
+    sugar[type] = { ...(opts.model !== undefined ? { model: opts.model } : {}) }
+  }
 
   const compute: Record<string, unknown> = {}
   if (opts.cpu !== undefined) compute.cpu = opts.cpu
@@ -864,12 +868,19 @@ function deepMerge(
   const out: Record<string, unknown> = { ...base }
   for (const [k, v] of Object.entries(over)) {
     const b = out[k]
-    // Native options from another harness must not leak across a switch.
-    const changesHarness =
-      k === 'harness' && isPlainObject(b) && isPlainObject(v) &&
-      b.type !== undefined && v.type !== undefined && b.type !== v.type
-    out[k] =
-      isPlainObject(b) && isPlainObject(v) && !changesHarness ? deepMerge(b, v) : v
+    if ((k === 'codex' || k === 'claude_code') && v != null) {
+      const other = k === 'codex' ? 'claude_code' : 'codex'
+      const previous = out[other]
+      // Carry the first message across a harness switch, never native options.
+      if (isPlainObject(previous) && isPlainObject(v) && v.prompt === undefined && previous.prompt !== undefined) {
+        out[k] = { ...v, prompt: previous.prompt }
+      } else {
+        out[k] = isPlainObject(b) && isPlainObject(v) ? deepMerge(b, v) : v
+      }
+      delete out[other]
+    } else {
+      out[k] = isPlainObject(b) && isPlainObject(v) ? deepMerge(b, v) : v
+    }
   }
   return out
 }

@@ -55,35 +55,13 @@ import {
   mergeSidebarSessions,
 } from '../src/lib/sessions'
 import { theme } from '../src/lib/theme'
-import type { AutomationConfig, AgentSession, SessionConfig, SupportedModel } from '../src/lib/types'
+import type { SupportedModel } from '../src/lib/types'
 
-// The session fixtures only read the automation's name, so the rest is a stub.
-const BARE_CONFIG = { ellipsis: { name: null } } as unknown as AutomationConfig
-const BARE_SESSION_CONFIG = {} as unknown as SessionConfig
-
-function session(overrides: Partial<AgentSession>): AgentSession {
-  return {
-    id: 'session_1',
-    created_at: '2026-07-07T00:00:00Z',
-    updated_at: '2026-07-07T00:00:00Z',
-    status: 'running',
-    status_reason: null,
-    config: BARE_SESSION_CONFIG,
-    automation: { id: null, config: BARE_CONFIG },
-    source: 'api',
-    harness: 'claude_code',
-    prompting: { enabled: true },
-    budget: { cents: 0, source: 'system' },
-    cost: { llm: 0, sandbox_cpu: 0, sandbox_memory: 0, fee: 0, total: 0 },
-    tokens: { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: 0, model: '' },
-    metadata: {},
-    ...overrides,
-  }
-}
+import { session } from './fixtures/session'
 
 describe('connectability', () => {
   it('sends when the server says prompting is enabled', () => {
-    expect(connectability(session({ prompting: { enabled: true } }))).toEqual({ canSend: true })
+    expect(connectability(session({ lifecycle: { prompting: { enabled: true } } }))).toEqual({ canSend: true })
   })
 
   it('honors the server prompting projection', () => {
@@ -91,16 +69,12 @@ describe('connectability', () => {
     // the Slack thread, so the server refuses direct messages and we open
     // watch-only instead of a composer whose first Enter would 409.
     const c = connectability(
-      session({
-        session_key: 'slack:D1:1.1',
-        session_state: 'idle',
-        prompting: {
+      session({ lifecycle: { prompting: {
           enabled: false,
           blocked_reason: 'mention_surface',
           detail: 'This conversation lives on Slack. Reply there to steer the agent.',
           surface_name: 'Slack',
-        },
-      }),
+        } } }),
     )
     expect(c.canSend).toBe(false)
     // The server's own sentence is shown verbatim, so the reason names Slack.
@@ -110,16 +84,13 @@ describe('connectability', () => {
 })
 
 describe('rowStatusWord / rowGlyph', () => {
-  it('prefers the surface projection over the raw status', () => {
-    const s = session({
-      status: 'running',
-      surface: { session: 'alive', run: 'working', status: 'waiting' },
-    })
+  it('reads the canonical lifecycle status', () => {
+    const s = session({ lifecycle: { status: 'waiting' } })
     expect(rowStatusWord(s)).toBe('waiting')
   })
 
-  it('falls back to the raw status without a surface', () => {
-    expect(rowStatusWord(session({ status: 'completed' }))).toBe('completed')
+  it('reads a closed lifecycle', () => {
+    expect(rowStatusWord(session({ lifecycle: { status: 'closed' } }))).toBe('closed')
   })
 
   it('is always a dot — status is told by color, the arrow means selection', () => {
@@ -146,23 +117,20 @@ describe('rowStatusWord / rowGlyph', () => {
 
 describe('rowDescription', () => {
   it('prefers the live summary, collapsed to one line', () => {
-    const s = session({
-      summary: { description: 'fixing the\n  webhook tests', created_at: null },
-      prompt: 'do a thing',
-    })
+    const s = session({ summary: { description: 'fixing the\n  webhook tests', created_at: null }, claude_code: { prompt: 'do a thing' } })
     expect(rowDescription(s)).toBe('fixing the webhook tests')
   })
 
   it('falls back to the prompt, then the source', () => {
-    expect(rowDescription(session({ prompt: 'fix the tests' }))).toBe('fix the tests')
+    expect(rowDescription(session({ claude_code: { prompt: 'fix the tests' } }))).toBe('fix the tests')
     expect(rowDescription(session({ source: 'react' }))).toBe('react session')
     // Every session carries a source, so that is the floor.
-    expect(rowDescription(session({}))).toBe('api session')
+    expect(rowDescription(session({  }))).toBe('api session')
   })
 
   it('ignores whitespace-only summaries', () => {
     expect(
-      rowDescription(session({ summary: { description: '  \n ', created_at: null }, prompt: 'p' })),
+      rowDescription(session({ summary: { description: '  \n ', created_at: null }, claude_code: { prompt: 'p' } })),
     ).toBe('p')
   })
 })
@@ -171,11 +139,11 @@ describe('lastEventAt / shortAge', () => {
   it('prefers last_activity_at, then last_message_at, then updated_at', () => {
     expect(
       lastEventAt(
-        session({ last_activity_at: 'A', last_message_at: 'B', updated_at: 'C' } as never),
+        session({ lifecycle: { timestamps: { last_activity_at: 'A', last_message_at: 'B', updated_at: 'C' } } } as never),
       ),
     ).toBe('A')
-    expect(lastEventAt(session({ last_message_at: 'B', updated_at: 'C' } as never))).toBe('B')
-    expect(lastEventAt(session({ updated_at: 'C' }))).toBe('C')
+    expect(lastEventAt(session({ lifecycle: { timestamps: { last_message_at: 'B', updated_at: 'C' } } } as never))).toBe('B')
+    expect(lastEventAt(session({ lifecycle: { timestamps: { updated_at: 'C' } } }))).toBe('C')
   })
 
   it('renders compact ages and never goes negative', () => {
@@ -192,28 +160,20 @@ describe('rowMeta', () => {
   const now = new Date('2026-07-23T12:00:00Z')
 
   it('reads spend and age, never the token count', () => {
-    const s = session({
-      tokens: { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: 84_200, model: '' },
-      cost: { llm: 30_000, sandbox_cpu: 10_000, sandbox_memory: 2_000, fee: 0, total: 42_000 },
-      updated_at: '2026-07-23T11:58:00Z',
-    } as never)
+    const s = session({ tokens: { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: 84_200, model: '' }, cost: { llm: 30_000, sandbox_cpu: 10_000, sandbox_memory: 2_000, fee: 0, total: 42_000 }, lifecycle: { timestamps: { updated_at: '2026-07-23T11:58:00Z' } } } as never)
     expect(rowMeta(s, now)).toBe('$0.42, 2m ago')
   })
 
   it('drops the spend a fresh session has none of', () => {
-    const s = session({ updated_at: '2026-07-23T11:59:48Z' })
+    const s = session({ lifecycle: { timestamps: { updated_at: '2026-07-23T11:59:48Z' } } })
     expect(rowMeta(s, now)).toBe('12s ago')
   })
 })
 
 describe('filterSessions', () => {
-  const budget = session({
-    id: 'budget',
-    summary: { description: 'Checking the monthly budget' },
-    prompt: 'can you check my budget',
-  })
-  const greet = session({ id: 'greet', summary: null, prompt: 'Hey!' })
-  const bare = session({ id: 'bare', summary: null, prompt: null })
+  const budget = session({ id: 'budget', summary: { description: 'Checking the monthly budget' }, claude_code: { prompt: 'can you check my budget' } })
+  const greet = session({ id: 'greet', summary: null, claude_code: { prompt: 'Hey!' } })
+  const bare = session({ id: 'bare', summary: null, claude_code: { prompt: null } })
 
   it('matches all on an empty or blank query', () => {
     expect(filterSessions([budget, greet], '')).toEqual([budget, greet])
@@ -290,23 +250,11 @@ describe('sessionBarQuery', () => {
 describe('statusBand / sortSidebarSessions', () => {
   // A row per band, deliberately born newest-first-is-wrong-order so a
   // recency sort can't accidentally pass.
-  const waiting = session({
-    id: 'waiting',
-    created_at: '2026-07-20T00:00:00Z',
-    surface: { session: 'alive', run: 'waiting', status: 'waiting' },
-  })
-  const working = session({
-    id: 'working',
-    created_at: '2026-07-21T00:00:00Z',
-    surface: { session: 'alive', run: 'working', status: 'working' },
-  })
-  const sleeping = session({
-    id: 'sleeping',
-    created_at: '2026-07-22T00:00:00Z',
-    surface: { session: 'sleeping', run: 'done', status: 'sleeping' },
-  })
-  const done = session({ id: 'done', created_at: '2026-07-23T00:00:00Z', status: 'completed' })
-  const failed = session({ id: 'failed', created_at: '2026-07-24T00:00:00Z', status: 'error' })
+  const waiting = session({ id: 'waiting', lifecycle: { status: 'waiting', timestamps: { created_at: '2026-07-20T00:00:00Z' } } })
+  const working = session({ id: 'working', lifecycle: { status: 'working', timestamps: { created_at: '2026-07-21T00:00:00Z' } } })
+  const sleeping = session({ id: 'sleeping', lifecycle: { status: 'idle', timestamps: { created_at: '2026-07-22T00:00:00Z' } } })
+  const done = session({ id: 'done', lifecycle: { status: 'closed', timestamps: { created_at: '2026-07-23T00:00:00Z' } } })
+  const failed = session({ id: 'failed', lifecycle: { status: 'failed', timestamps: { created_at: '2026-07-24T00:00:00Z' } } })
 
   it('bands by status: live, parked, done, dead', () => {
     expect(sortSidebarSessions([failed, done, sleeping, waiting, working]).map((s) => s.id)).toEqual(
@@ -322,18 +270,18 @@ describe('statusBand / sortSidebarSessions', () => {
     expect(statusBand('waiting')).toBe(statusBand('starting'))
     const mid = sortSidebarSessions([waiting, working, sleeping]).map((s) => s.id)
     const after = sortSidebarSessions([
-      { ...waiting, surface: { session: 'alive', run: 'working', status: 'working' } },
-      { ...working, surface: { session: 'alive', run: 'waiting', status: 'waiting' } },
+      session({ ...waiting, lifecycle: { ...waiting.lifecycle, status: 'working' } }),
+      session({ ...working, lifecycle: { ...working.lifecycle, status: 'waiting' } }),
       sleeping,
     ] as AgentSession[]).map((s) => s.id)
     expect(after).toEqual(mid)
   })
 
   it('orders within a band newest-born first, ignoring event recency', () => {
-    const old = session({ id: 'old', created_at: '2026-07-20T00:00:00Z', status: 'running' })
-    const fresh = session({ id: 'fresh', created_at: '2026-07-22T00:00:00Z', status: 'running' })
+    const old = session({ id: 'old', lifecycle: { status: 'working', timestamps: { created_at: '2026-07-20T00:00:00Z' } } })
+    const fresh = session({ id: 'fresh', lifecycle: { status: 'working', timestamps: { created_at: '2026-07-22T00:00:00Z' } } })
     // `old` just spoke; that must not lift it above the younger session.
-    const chatty = { ...old, last_activity_at: '2026-07-23T00:00:00Z' } as AgentSession
+    const chatty = session({ ...old, lifecycle: { ...old.lifecycle, timestamps: { ...old.lifecycle.timestamps, last_activity_at: '2026-07-23T00:00:00Z' } } })
     expect(sortSidebarSessions([chatty, fresh]).map((s) => s.id)).toEqual(['fresh', 'old'])
     expect(sortSidebarSessions([fresh, chatty]).map((s) => s.id)).toEqual(['fresh', 'old'])
   })
@@ -341,17 +289,17 @@ describe('statusBand / sortSidebarSessions', () => {
 
 describe('mergeSidebarSessions', () => {
   it('keeps local sessions the poll has not returned yet', () => {
-    const polled = session({ id: 'a', created_at: '2026-07-23T10:00:00Z' })
-    const local = session({ id: 'b', created_at: '2026-07-23T11:00:00Z' })
+    const polled = session({ id: 'a', lifecycle: { timestamps: { created_at: '2026-07-23T10:00:00Z' } } })
+    const local = session({ id: 'b', lifecycle: { timestamps: { created_at: '2026-07-23T11:00:00Z' } } })
     expect(mergeSidebarSessions([polled], [local]).map((s) => s.id)).toEqual(['b', 'a'])
   })
 
   it('emits one row when a session is in both lists, preferring the polled copy', () => {
-    const polled = session({ id: 'a', status: 'completed', session_state: 'closed' })
-    const local = session({ id: 'a', status: 'running' })
+    const polled = session({ id: 'a', lifecycle: { status: 'closed' } })
+    const local = session({ id: 'a', lifecycle: { status: 'working' } })
     const merged = mergeSidebarSessions([polled], [local])
     expect(merged.map((s) => s.id)).toEqual(['a'])
-    expect(merged[0]?.status).toBe('completed')
+    expect(merged[0]?.lifecycle.status).toBe('closed')
   })
 })
 
@@ -582,7 +530,7 @@ describe('applyComposerChoices', () => {
     expect(req).toEqual({
       repositories: ['acme/api'],
       environment: {},
-      harness: { type: 'claude_code', model: 'claude-opus-5' },
+      claude_code: { model: 'claude-opus-5' },
     })
   })
 
@@ -590,21 +538,20 @@ describe('applyComposerChoices', () => {
   // context repo rides along as the additive key.
   it('names a chosen environment on the request, keeping the context repo', () => {
     const req = applyComposerChoices(
-      { prompt: 'ship it', repositories: ['acme/api'] },
+      { claude_code: { prompt: 'ship it' }, repositories: ['acme/api'] },
       { ...untouched, environment: { kind: 'named', id: 'env_1' } },
     )
-    expect(req).toEqual({ prompt: 'ship it', repositories: ['acme/api'], environment: 'env_1' })
+    expect(req).toEqual({ claude_code: { prompt: 'ship it' }, repositories: ['acme/api'], environment: 'env_1' })
   })
 
   it('carries an environment and a model through together', () => {
     const req = applyComposerChoices(
-      { prompt: 'ship it' },
+      { claude_code: { prompt: 'ship it' } },
       { environment: { kind: 'named', id: 'env_1' }, model: 'claude-fable-5' },
     )
     expect(req).toEqual({
-      prompt: 'ship it',
+      claude_code: { prompt: 'ship it', model: 'claude-fable-5' },
       environment: 'env_1',
-      harness: { type: 'claude_code', model: 'claude-fable-5' },
     })
   })
 
@@ -618,9 +565,9 @@ describe('applyComposerChoices', () => {
   })
 
   it('does not mutate the request it was given', () => {
-    const base = { prompt: 'hi', repositories: ['acme/api'] }
+    const base = { claude_code: { prompt: 'hi' }, repositories: ['acme/api'] }
     applyComposerChoices(base, { ...untouched, environment: { kind: 'custom', pane: EMPTY_PANE } })
-    expect(base).toEqual({ prompt: 'hi', repositories: ['acme/api'] })
+    expect(base).toEqual({ claude_code: { prompt: 'hi' }, repositories: ['acme/api'] })
   })
 
   // The whole point of the pane: once custom it IS the sandbox, shipped as the
@@ -679,8 +626,8 @@ describe('paneEnvironment', () => {
 
   it('sends only the set image fields', () => {
     expect(
-      paneEnvironment({ ...EMPTY_PANE, image: { dockerfile_append: '', setup: 'npm install' } }),
-    ).toMatchObject({ image: { setup: 'npm install' } })
+      paneEnvironment({ ...EMPTY_PANE, image: { build_base: '', after_checkout: 'npm install' } }),
+    ).toMatchObject({ hooks: { after_checkout: 'npm install' } })
   })
 
   it('sends only the set hook fields', () => {
@@ -712,8 +659,7 @@ describe('environmentPane', () => {
         variables: [{ name: 'A', value: '1' }, { name: 'B' }],
         mcp_servers: ['linear', { name: 'docs', url: 'https://x' }],
         compute: { cpu: 4, memory: '16GB' },
-        image: { setup: 'npm ci' },
-        hooks: { post_clone: 'make' },
+        hooks: { after_checkout: 'npm ci', before_start: 'make' },
       }),
     ).toEqual({
       repositories: [
@@ -729,8 +675,9 @@ describe('environmentPane', () => {
         { name: 'docs', command: null, url: 'https://x', raw: { name: 'docs', url: 'https://x' } },
       ],
       compute: { cpu: '4', memory: '16GB', timeout: '' },
-      image: { dockerfile_append: '', setup: 'npm ci' },
-      hooks: { post_start: '', post_clone: 'make' },
+      image: { build_base: '', after_checkout: 'npm ci' },
+      hooks: { post_start: '', post_clone: '' },
+      rawHooks: { after_checkout: 'npm ci', before_start: 'make' },
     })
   })
 
@@ -742,7 +689,7 @@ describe('environmentPane', () => {
   // A script keeps its newlines here: the pane ships what it holds, and only its
   // row flattens (oneLine).
   it('keeps a multi-line script whole', () => {
-    expect(environmentPane({ image: { setup: 'a\nb' } }).image.setup).toBe('a\nb')
+    expect(environmentPane({ hooks: { after_checkout: 'a\nb' } }).image.after_checkout).toBe('a\nb')
   })
 })
 
@@ -891,8 +838,8 @@ describe('computeOverride', () => {
 
 describe('fieldsOverride', () => {
   it('keeps only the set fields, trimmed', () => {
-    expect(fieldsOverride({ dockerfile_append: '', setup: ' npm install ' })).toEqual({
-      setup: 'npm install',
+    expect(fieldsOverride({ build_base: '', after_checkout: ' npm install ' })).toEqual({
+      after_checkout: 'npm install',
     })
     expect(fieldsOverride(EMPTY_IMAGE)).toEqual({})
   })
@@ -945,8 +892,8 @@ describe('environmentSectionRows', () => {
       { kind: 'addVariable', hover: 3 },
     ])
     expect(environmentSectionRows(input, 'image')).toEqual([
-      { kind: 'image', field: 'dockerfile_append', hover: 0 },
-      { kind: 'image', field: 'setup', hover: 1 },
+      { kind: 'image', field: 'build_base', hover: 0 },
+      { kind: 'image', field: 'after_checkout', hover: 1 },
     ])
     expect(environmentSectionRows(input, 'hooks')).toEqual([
       { kind: 'hook', field: 'post_start', hover: 0 },
@@ -1047,7 +994,7 @@ describe('environmentSectionAt', () => {
     expect(environmentSectionAt(input, 'variables', 1)).toEqual({ kind: 'addVariable' })
     expect(environmentSectionAt(input, 'image', 0)).toEqual({
       kind: 'image',
-      field: 'dockerfile_append',
+      field: 'build_base',
     })
   })
 
@@ -1202,15 +1149,13 @@ describe('start request shaping', () => {
         trigger: { type: 'cron', schedule: '* * * * *' },
         input: { json_schema: {} },
         session: {
-          harness: { type: 'claude_code', model: 'claude-opus-5' },
-          instructions: 'do it',
+          claude_code: { model: 'claude-opus-5', prompt: 'do it' },
           environment: { repositories: [{ name: 'api' }] },
           budget: { session: 5 },
         },
       }),
     ).toEqual({
-      harness: { type: 'claude_code', model: 'claude-opus-5' },
-          instructions: 'do it',
+      claude_code: { model: 'claude-opus-5', prompt: 'do it' },
       environment: { repositories: [{ name: 'api' }] },
       budget: 5,
     })
@@ -1219,11 +1164,11 @@ describe('start request shaping', () => {
   it('accepts a bare session config too', () => {
     expect(
       startRequestFromConfig({
-        harness: { type: 'claude_code' }, instructions: 'do it',
+        claude_code: { prompt: 'do it' },
         budget: { session: 2 },
         trigger: { type: 'cron', schedule: '* * * * *' },
       }),
-    ).toEqual({ harness: { type: 'claude_code' }, instructions: 'do it', budget: 2 })
+    ).toEqual({ claude_code: { prompt: 'do it' }, budget: 2 })
   })
 
   // The context repo rides the request's additive `repositories` key and

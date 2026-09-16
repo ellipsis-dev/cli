@@ -1,3 +1,4 @@
+import { sessionPrompt } from '../lib/sessions'
 import React, {
   useCallback,
   useEffect,
@@ -557,9 +558,9 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
   const pendingPrompt = useMemo(() => {
     if (items.length > 0) return null
     if (snapshot.records.some((r) => r.record_type === 'message_received')) return null
-    const prompt = snapshot.session?.prompt
+    const prompt = snapshot.session ? sessionPrompt(snapshot.session) : undefined
     return typeof prompt === 'string' && prompt.trim() ? prompt : null
-  }, [items.length, snapshot.records, snapshot.session?.prompt])
+  }, [items.length, snapshot.records, snapshot.session])
 
   // Whether a send is waiting on the agent — a queued row breathes while it
   // waits, like a running tool does.
@@ -652,7 +653,7 @@ export function ConnectApp(props: ConnectAppProps): React.ReactElement {
               ...prev,
               {
                 key: `note${prev.length}`,
-                text: `Stopped the agent (${s.status}). The conversation is saved. Send a message to pick it back up.`,
+                text: `Stopped the agent (${s.lifecycle.status}). The conversation is saved. Send a message to pick it back up.`,
               },
             ])
             return

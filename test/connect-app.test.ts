@@ -234,14 +234,15 @@ describe('layOutItems', () => {
   const res = (key: string): TranscriptItem => ({ key, kind: 'tool_result', text: 'ok' })
   const fold = (key: string): TranscriptItem => ({ key: `grp:${key}`, kind: 'notice', text: 'Ran 2' })
 
-  it('lays every row out flat, tool runs included — the SDK contract since 0.27', () => {
+  it('keeps rows flat and attaches consecutive activity rows', () => {
     // A run is never indented under the message before it: an indented run
     // under a message that has scrolled by reads as if the message were the
     // subject, when the run is the agent's own next step in the turn.
     const think: TranscriptItem = { key: 'th', kind: 'thinking', text: 'hmm', gutter: '✻' }
     const out = layOutItems([prose('a'), call('t1'), res('r1'), think, fold('t2'), user('u')])
     expect(out.map((p) => p.item.key)).toEqual(['a', 't1', 'r1', 'th', 'grp:t2', 'u'])
-    expect(out.every((p) => !p.nested && !p.attach)).toBe(true)
+    expect(out.every((p) => !p.nested)).toBe(true)
+    expect(out.map((p) => p.attach)).toEqual([false, false, true, true, true, false])
   })
 })
 

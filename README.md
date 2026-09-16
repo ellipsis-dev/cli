@@ -193,6 +193,22 @@ only inside their automation — dashboard starts, cron runs — do not
 match a repo filter, so `"repo": "any"` is the way to see those alongside the
 rest.
 
+## SDK 0.30 configuration
+
+Session configs select one native block. Put the first message inside it:
+
+```yaml
+session:
+  claude_code:
+    prompt: Fix the failing tests.
+  # Or: codex: {model: gpt-6-astra, prompt: Fix the failing tests.}
+```
+
+The old `harness`, `instructions`, and top-level `prompt` fields are no longer
+accepted. `--system` now reports an error; put task instructions in the prompt
+or a repository `AGENTS.md` file. Environment build scripts use
+`hooks.build_base` and `hooks.after_checkout`; the old `image` block is removed.
+
 ## Develop
 
 ```sh
@@ -251,7 +267,7 @@ tarballs, and regenerates the formula in
 [`ellipsis-dev/homebrew-cli`](https://github.com/ellipsis-dev/homebrew-cli).
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0
+git tag v2.30.0 && git push origin v2.30.0
 ```
 
 The cross-repo push to the tap uses a write-scoped **deploy key**: the public

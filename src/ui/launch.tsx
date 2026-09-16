@@ -6,7 +6,7 @@ import { repoFromCwd } from '../lib/git'
 import { makeOpenSocket, resolveWsBase } from '../lib/stream'
 import { applyDetectedThemeMode } from '../lib/terminalBackground'
 import type { StartAgentSessionRequest } from '../lib/types'
-import { withContextRepository } from '../lib/sessions'
+import { withContextRepository, withSessionPrompt } from '../lib/sessions'
 import { SessionsApp } from './SessionsApp'
 
 // Launches the multi-session UI (sidebar + chat) — the shared destination of
@@ -43,8 +43,8 @@ export function canHostSessionsUi(): boolean {
 export function defaultStartRequest(prompt: string): StartAgentSessionRequest {
   // A promptless start opens idle by definition (the server-side contract
   // since #6394): Claude Code waits at its prompt for the first message.
-  let req: StartAgentSessionRequest = { harness: { type: 'claude_code' } }
-  if (prompt) req.prompt = prompt
+  let req: StartAgentSessionRequest = { claude_code: {} }
+  if (prompt) req = withSessionPrompt(req, prompt)
   const contextRepo = repoFromCwd(process.cwd())
   if (contextRepo) req = withContextRepository(req, contextRepo)
   return req
