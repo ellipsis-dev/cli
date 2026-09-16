@@ -206,60 +206,31 @@ describe('budgetLines', () => {
 })
 
 describe('explicit harness requests', () => {
-  it('preserves instructions and Codex options from an automation file', () => {
-    const instructions = ['Keep changes small.', { file: 'AGENTS.md' }]
-    expect(
-      startRequestFromConfig({
-        ellipsis: { name: 'Code helper' },
-        session: {
-          harness: { type: 'codex', model: 'gpt-6-astra', effort: 'high' },
-          instructions,
-          budget: { session: 2 },
-        },
-      }),
-    ).toEqual({
-      harness: { type: 'codex', model: 'gpt-6-astra', effort: 'high' },
-      instructions,
-      budget: 2,
-    })
+  it('preserves the native prompt and Codex options from an automation file', () => {
+    expect(startRequestFromConfig({
+      ellipsis: { name: 'Code helper' },
+      session: { codex: { model: 'gpt-6-astra', prompt: 'Keep changes small.', effort: 'high' }, budget: { session: 2 } },
+    })).toEqual({ codex: { model: 'gpt-6-astra', prompt: 'Keep changes small.', effort: 'high' }, budget: 2 })
   })
 
-  it('rejects legacy configs and overrides instead of dropping their instructions', () => {
-    expect(() => startRequestFromConfig({ claude: { system: 'Do this.' } })).toThrow(
-      /move system to instructions/,
-    )
-    expect(() => buildStartOverride({ override: 'claude:\n  system: Do this.' })).toThrow(
-      /move system to instructions/,
-    )
-    expect(() => startRequestFromConfig({ instructions: 'Do this.' })).toThrow(
-      /harness.type/,
-    )
-  })
-
-  it('switches native options cleanly while keeping shared instructions', () => {
-    const base = {
-      harness: {
-        type: 'claude_code' as const,
-        model: 'claude-opus-5',
-        max_turns: 5,
-        effort: 'max' as const,
-      },
-      instructions: 'Keep changes small.',
+  it('rejects retired configs and overrides instead of dropping instructions', () => {
+    for (const config of [{ claude: { system: 'Do this.' } }, { harness: { type: 'claude_code' } }, { instructions: 'Do this.' }]) {
+      expect(() => startRequestFromConfig(config)).toThrow(/no longer supported/)
+      expect(() => buildStartOverride({ override: JSON.stringify(config) })).toThrow(/no longer supported/)
     }
-    const unchanged = applyComposerChoices(base, {
-      environment: { kind: 'empty' },
-      model: 'claude-fable-5',
-      harness: 'claude_code',
-    })
-    expect(unchanged.harness).toEqual({ ...base.harness, model: 'claude-fable-5' })
-    const changed = applyComposerChoices(base, {
-      environment: { kind: 'empty' },
-      model: 'gpt-6-astra',
-      harness: 'codex',
-    })
-    expect(changed.harness).toEqual({ type: 'codex', model: 'gpt-6-astra' })
-    expect(changed.instructions).toBe(base.instructions)
-    expect(base.harness.max_turns).toBe(5)
+    expect(() => startRequestFromConfig({})).toThrow(/exactly one/)
+    expect(() => startRequestFromConfig({ claude_code: {}, codex: {} })).toThrow(/exactly one/)
+    expect(() => buildStartOverride({ system: 'Be brief.' })).toThrow(/--system is no longer supported/)
+  })
+
+  it('switches native options cleanly while keeping the prompt', () => {
+    const base = { claude_code: { model: 'claude-opus-5', max_turns: 5, effort: 'max' as const, prompt: 'Keep changes small.' } }
+    const unchanged = applyComposerChoices(base, { environment: { kind: 'empty' }, model: 'claude-fable-5', harness: 'claude_code' })
+    expect(unchanged.claude_code).toEqual({ ...base.claude_code, model: 'claude-fable-5' })
+    const changed = applyComposerChoices(base, { environment: { kind: 'empty' }, model: 'gpt-6-astra', harness: 'codex' })
+    expect(changed.codex).toEqual({ model: 'gpt-6-astra', prompt: 'Keep changes small.' })
+    expect(changed.claude_code).toBeUndefined()
+    expect(base.claude_code.max_turns).toBe(5)
   })
 
   it('keeps the certified harness and concrete model on a Codex default row', () => {
@@ -283,25 +254,10 @@ describe('explicit harness requests', () => {
     expect(composerModelChoice(row)).toEqual({ harness: 'codex', model: 'gpt-6-astra' })
   })
 
-  it('validates the harness flag and maps shared instructions separately', () => {
+  it('validates the harness flag and replaces options on a switch', () => {
     expect(toHarness('codex')).toBe('codex')
     expect(() => toHarness('claude')).toThrow(/claude_code, codex/)
-    expect(
-      buildStartOverride({ harness: 'codex', model: 'gpt-6-astra', system: 'Be brief.' }),
-    ).toEqual({
-      harness: { type: 'codex', model: 'gpt-6-astra' },
-      instructions: 'Be brief.',
-    })
-    expect(
-      buildStartOverride({
-        override:
-          'harness:\n  type: claude_code\n  max_turns: 3\ninstructions: Keep this.',
-        harness: 'codex',
-        model: 'gpt-6-astra',
-      }),
-    ).toEqual({
-      harness: { type: 'codex', model: 'gpt-6-astra' },
-      instructions: 'Keep this.',
-    })
+    expect(buildStartOverride({ harness: 'codex', model: 'gpt-6-astra' })).toEqual({ codex: { model: 'gpt-6-astra' } })
+    expect(buildStartOverride({ override: 'claude_code:\n  max_turns: 3', harness: 'codex', model: 'gpt-6-astra' })).toEqual({ codex: { model: 'gpt-6-astra' } })
   })
 })

@@ -189,8 +189,8 @@ mcp_servers:
 #      Authorization: "Bearer \${SENTRY_AUTH_TOKEN}"
 
 # Toolchain baked into the cached image (runs once per image build).
-image:
-  setup: |
+hooks:
+  build_base: |
     echo "install CLIs and dependencies here"
 
 # Sandbox sizing.

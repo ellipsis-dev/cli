@@ -98,6 +98,7 @@ and `web`:
 ```yaml
 ellipsis:
   version: v1
+  kind: agent
   name: Recent work summary
   description: Summarizes the week's merged work across api and web
 
@@ -106,14 +107,13 @@ trigger:
   schedule: "0 9 * * 1"
 
 session:
-  harness:
-    type: claude_code
+  claude_code:
     model: claude-haiku-4-5-20251001
-  instructions: |
-    Summarize the pull requests merged in api and web over the last 7
-    days. Group them by theme, lead with user-facing changes, and return
-    the summary as your answer. Ground every line in a real PR. Never
-    invent activity.
+    prompt: |
+      Summarize the pull requests merged in api and web over the last 7
+      days. Group them by theme, lead with user-facing changes, and return
+      the summary as your answer. Ground every line in a real PR. Never
+      invent activity.
 
   environment:
     repositories:
@@ -183,6 +183,7 @@ Actions and filters live inside the surface block:
 ```yaml
 ellipsis:
   version: v1
+  kind: agent
   name: Migration reviewer
   description: Flags unsafe database migrations on pull requests
 
@@ -195,14 +196,13 @@ trigger:
     paths: ["migrations/**"]
 
 session:
-  harness:
-    type: claude_code
-  instructions: |
-    Review the database migrations in this pull request for production
-    safety: locking that blocks writes on large tables, missing backfills
-    for new non-null columns, and rollout ordering that breaks if the
-    migration and the code deploy out of order. Comment on the pull
-    request with what you find.
+  claude_code:
+    prompt: |
+      Review the database migrations in this pull request for production
+      safety: locking that blocks writes on large tables, missing backfills
+      for new non-null columns, and rollout ordering that breaks if the
+      migration and the code deploy out of order. Comment on the pull
+      request with what you find.
 
   environment:
     repositories:
@@ -487,7 +487,7 @@ Top-level keys, all optional except `ellipsis`:
 
 | Key | Purpose |
 | --- | --- |
-| `ellipsis` | `version: v1`, `name`, `description`, `metadata`, and the `enabled`, `interactive`, `ide` flags. Its presence marks the file as a config. |
+| `ellipsis` | `kind: agent`, `version: v1`, `name`, `description`, `metadata`, and `enabled`. Its presence marks the file as a config. |
 | `trigger` | One trigger, or omit for a manual-only agent. |
 | `input` | A JSON Schema for the payload `agent automation run` passes, and the message template it renders into. |
 | `session` | What every session runs on; the keys below. The same keys, flattened, are the body of `agent` / `POST /v1/sessions`. |
@@ -496,9 +496,8 @@ Under `session`:
 
 | Key | Purpose |
 | --- | --- |
-| `harness` | Required: `type: claude_code` or `type: codex`, plus that harness's native `model` and `effort` options. Claude Code also accepts `fallback_model`, `max_turns`, and `settings`. |
-| `instructions` | Text or repository file references appended to the harness prompt. |
-| `environment` | A saved environment by name, or an inline block: `repositories`, `variables`, `ports`, `compute`, `image`, `hooks`, `mcp_servers`. |
+| `claude_code` or `codex` | Exactly one native block, with `prompt`, `model`, and `effort`. Claude Code also accepts `fallback_model`, `max_turns`, and `settings`. |
+| `environment` | A saved environment by name, or an inline block: `repositories`, `variables`, `compute`, `hooks`, `mcp_servers`. |
 | `permissions` | What it may do: `github` scopes its GitHub token, `ellipsis` its API token. |
 | `skills` | Claude Code skills beyond what the cloned repositories provide. |
 | `output` | A JSON Schema contract, so downstream automation gets typed data. |
@@ -507,10 +506,10 @@ Under `session`:
 The schema is strict, so an unknown or misplaced key fails validation rather
 than being silently dropped. Points that decide whether a config works:
 
-- `session.instructions` takes inline text, a `{file: path}` reference to a repository
-  file, or an ordered list of both, joined at session start. It is appended to
-  the selected harness's default prompt. 64 KiB per file.
-- `session.harness.model` selects a model for the chosen harness. Claude Code
+- `session.claude_code.prompt` or `session.codex.prompt` supplies the first user
+  message verbatim. Put repository guidance in `AGENTS.md`. The former `harness`
+  and `instructions` keys are rejected.
+- `session.claude_code.model` or `session.codex.model` selects a model. Claude Code
   inherits the organization default when omitted. `agent model list` reports
   the available ids and the harness certified for each. Digest and
   summary jobs run well on `claude-haiku-4-5-20251001`; judgment jobs earn the
@@ -525,8 +524,8 @@ than being silently dropped. Points that decide whether a config works:
   your JSON Schema, so downstream automation gets typed data instead of prose to
   parse. Schema failures exit loudly as `tool_call_failed`. It does not go
   together with a mention trigger.
-- `ellipsis.interactive: false` opts sessions out of messages entirely, for
-  fire-and-forget automations. `ellipsis.ide: false` locks the sandbox shut.
+- Raw session starts accept `lifecycle.interactive: false` to run once. The
+  returned `lifecycle.prompting` describes whether direct messages are accepted.
 
 Validation surfaces on push to the default branch, on config pull requests, in
 the dashboard editor, and at session start for checks that need the session's

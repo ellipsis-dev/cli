@@ -12,6 +12,17 @@ import type {
   SupportedModel,
 } from './types'
 
+// Both REST sessions and start requests carry the prompt in the selected harness.
+export function sessionPrompt(session: Pick<StartAgentSessionRequest, 'claude_code' | 'codex'>): string | null | undefined {
+  return session.claude_code?.prompt ?? session.codex?.prompt
+}
+
+export function withSessionPrompt(req: StartAgentSessionRequest, prompt: string): StartAgentSessionRequest {
+  return req.codex
+    ? { ...req, codex: { ...req.codex, prompt } }
+    : { ...req, claude_code: { ...req.claude_code, prompt } }
+}
+
 // Pure session-model helpers shared by the connect command and the
 // multi-session UI (SessionsApp). No I/O here — everything is testable.
 
@@ -35,8 +46,8 @@ export function connectability(session: AgentSession): {
   canSend: boolean
   reason?: string
 } {
-  if (session.prompting.enabled) return { canSend: true }
-  const detail = session.prompting.detail?.trim()
+  if (session.lifecycle.prompting.enabled) return { canSend: true }
+  const detail = session.lifecycle.prompting.detail?.trim()
   return {
     canSend: false,
     reason: detail
@@ -45,8 +56,7 @@ export function connectability(session: AgentSession): {
   }
 }
 
-// The one-word display status for a session row (the SDK's surface-first
-// projection over the raw status).
+// The canonical lifecycle status for a session row.
 export function rowStatusWord(session: AgentSession): string {
   return sessionStatusWord(session as unknown as FrameSession)
 }
@@ -80,7 +90,7 @@ export function rowGlyph(word: string): { glyph: string; color?: string; dim: bo
 export function rowDescription(session: AgentSession): string {
   const summary = session.summary?.description
   if (typeof summary === 'string' && summary.trim()) return oneLineText(summary)
-  const prompt = session.prompt
+  const prompt = sessionPrompt(session)
   if (typeof prompt === 'string' && prompt.trim()) return oneLineText(prompt)
   const source = typeof session.source === 'string' ? session.source : null
   return source ? `${source} session` : 'session'
@@ -93,11 +103,11 @@ function oneLineText(text: string): string {
 // The instant the session last did anything visible — what the row's age
 // line counts from.
 export function lastEventAt(session: AgentSession): string {
-  const last = session.last_activity_at
+  const last = session.lifecycle.timestamps.last_activity_at
   if (typeof last === 'string' && last) return last
-  const msg = session.last_message_at
+  const msg = session.lifecycle.timestamps.last_message_at
   if (typeof msg === 'string' && msg) return msg
-  return session.updated_at
+  return session.lifecycle.timestamps.updated_at
 }
 
 // Compact age for the row's second line: "12s ago", "2m ago", "3h ago",
@@ -130,7 +140,7 @@ export function rowMeta(session: AgentSession, now: Date = new Date()): string {
 // the id of the automation it was started from. Both are absent for raw
 // sessions, which have nothing to name.
 export function sessionConfigName(session: AgentSession): string | null {
-  const automation = session.automation
+  const automation = session.agent
   if (!automation) return null
   return automation.config.ellipsis.name ?? automation.id ?? null
 }
@@ -162,7 +172,7 @@ export function statusBand(word: string): number {
 // Stable for equal keys (equal band + equal created_at keeps input order).
 export function sortSidebarSessions(sessions: readonly AgentSession[]): AgentSession[] {
   const band = (s: AgentSession): number => statusBand(rowStatusWord(s))
-  const born = (s: AgentSession): number => Date.parse(s.created_at) || 0
+  const born = (s: AgentSession): number => Date.parse(s.lifecycle.timestamps.created_at) || 0
   return [...sessions].sort((a, b) => band(a) - band(b) || born(b) - born(a))
 }
 
@@ -250,7 +260,7 @@ export function filterSessions(
   if (!q) return sessions
   return sessions.filter((s) => {
     const summary = typeof s.summary?.description === 'string' ? s.summary.description : ''
-    const prompt = typeof s.prompt === 'string' ? s.prompt : ''
+    const prompt = typeof sessionPrompt(s) === 'string' ? sessionPrompt(s) : ''
     return `${summary}\n${prompt}`.toLowerCase().includes(q)
   })
 }
@@ -267,7 +277,7 @@ export function attentionFlip(prevWord: string | undefined, nextWord: string): b
 // --------------------------- start request shaping -------------------------
 // POST /v1/sessions is flat: the request IS a SessionConfig plus run settings
 // (there is no base config and no merge; a saved automation is invoked with
-// POST /v1/automations/{id}/sessions instead).
+// POST /v1/agents/{id}/sessions instead).
 
 // Parse a repository value into an environment.repositories entry.
 // "owner/name" sets both; a bare "name" omits owner so the server defaults it
@@ -287,8 +297,8 @@ export function parseRepo(value: string): { name: string; owner?: string } {
 // dollar number on the request where the file has a `budget.session`, so it
 // is lifted.
 const START_CONFIG_KEYS = [
-  'harness',
-  'instructions',
+  'claude_code',
+  'codex',
   'environment',
   'output',
   'permissions',
@@ -296,11 +306,8 @@ const START_CONFIG_KEYS = [
 ] as const
 
 export function assertCurrentHarnessKeys(config: Record<string, unknown>): void {
-  if ('claude' in config || 'codex' in config) {
-    throw new Error(
-      'replace the legacy claude/codex block with harness: {type: claude_code or codex, ...}, ' +
-      'and move system to instructions',
-    )
+  if ('claude' in config || 'harness' in config || 'instructions' in config || 'prompt' in config) {
+    throw new Error('use claude_code: {prompt: ...} or codex: {prompt: ...}; harness and instructions are no longer supported')
   }
 }
 
@@ -317,12 +324,9 @@ export function startRequestFromConfig(
       ? (nested as Record<string, unknown>)
       : document
   assertCurrentHarnessKeys(config)
-  const harness = config.harness
-  if (
-    !harness || typeof harness !== 'object' || !('type' in harness) ||
-    (harness.type !== 'claude_code' && harness.type !== 'codex')
-  ) {
-    throw new Error('session config must include harness.type: claude_code or codex')
+  const selected = [config.claude_code, config.codex].filter((v) => v != null)
+  if (selected.length !== 1 || typeof selected[0] !== 'object' || Array.isArray(selected[0])) {
+    throw new Error('session config must include exactly one claude_code or codex object')
   }
   const req: Record<string, unknown> = {}
   for (const key of START_CONFIG_KEYS) {
@@ -358,7 +362,7 @@ export function withContextRepository(
 // uses and the other two pickers leave unset: repositories and automations
 // are flat lists of names with no vendor to group under and no price to quote.
 export type ComposerModel = {
-  harness?: StartAgentSessionRequest['harness']['type']
+  harness?: 'claude_code' | 'codex'
   modelId?: string
   id: string | null
   label: string
@@ -514,7 +518,7 @@ export const REPOSITORIES_HEADING = 'repositories'
 export const VARIABLES_HEADING = 'variables'
 export const ADD_VARIABLE_LABEL = '+ new'
 export const COMPUTE_HEADING = 'compute'
-export const IMAGE_HEADING = 'image'
+export const IMAGE_HEADING = 'build'
 export const HOOKS_HEADING = 'hooks'
 export const MCP_SERVERS_HEADING = 'mcp servers'
 export const ADD_MCP_SERVER_LABEL = '+ new'
@@ -530,16 +534,14 @@ export type CustomCompute = Readonly<Record<ComputeField, string>>
 
 export const EMPTY_COMPUTE: CustomCompute = { cpu: '', memory: '', timeout: '' }
 
-// The image customization fields: `dockerfile_append` layers onto the image
-// before any repo exists, `setup` runs at build time after checkout and is
-// captured by the cached snapshot. One-line inputs here — a longer script
-// belongs in an environment YAML.
-export const IMAGE_FIELDS = ['dockerfile_append', 'setup'] as const
+// Cached build scripts. Longer scripts and build inputs can also be declared
+// in an environment YAML; the pane preserves the selected build inputs.
+export const IMAGE_FIELDS = ['build_base', 'after_checkout'] as const
 export type ImageField = (typeof IMAGE_FIELDS)[number]
 
 export type CustomImage = Readonly<Record<ImageField, string>>
 
-export const EMPTY_IMAGE: CustomImage = { dockerfile_append: '', setup: '' }
+export const EMPTY_IMAGE: CustomImage = { build_base: '', after_checkout: '' }
 
 // The lifecycle hooks: `post_start` runs after the container starts (before
 // any repo is cloned), `post_clone` after checkout, before the agent. Per-run
@@ -803,6 +805,7 @@ export interface EnvironmentPaneState {
   // pane ships what it holds, so flattening for display must not reach the wire.
   image: CustomImage
   hooks: CustomHooks
+  rawHooks?: NonNullable<Exclude<StartAgentSessionRequest['environment'], string | null>>['hooks']
 }
 
 export const EMPTY_PANE: EnvironmentPaneState = {
@@ -849,6 +852,10 @@ export function resolveRepoFullName(
 // A saved environment's config as the pane's starting state. Every field the
 // pane can show, resolved to the strings its rows edit; anything the config
 // leaves unset stays blank, which reads as "whatever the server resolves".
+function hookScript(value: string | { run: string } | null | undefined): string {
+  return typeof value === 'string' ? value : value?.run ?? ''
+}
+
 export function environmentPane(
   config:
     | {
@@ -856,8 +863,7 @@ export function environmentPane(
         variables?: readonly { name: string; value?: string | null }[]
         mcp_servers?: readonly unknown[]
         compute?: { cpu?: number | null; memory?: unknown; timeout?: unknown } | null
-        image?: { dockerfile_append?: string | null; setup?: string | null } | null
-        hooks?: { post_start?: string | null; post_clone?: string | null } | null
+        hooks?: NonNullable<Exclude<StartAgentSessionRequest['environment'], string | null>>['hooks'] | null
       }
     | null
     | undefined,
@@ -886,9 +892,10 @@ export function environmentPane(
       memory: typeof compute?.memory === 'string' ? compute.memory : '',
       timeout: typeof compute?.timeout === 'string' ? compute.timeout : '',
     },
+    ...(config.hooks ? { rawHooks: config.hooks } : {}),
     image: {
-      dockerfile_append: config.image?.dockerfile_append ?? '',
-      setup: config.image?.setup ?? '',
+      build_base: hookScript(config.hooks?.build_base),
+      after_checkout: hookScript(config.hooks?.after_checkout),
     },
     hooks: {
       post_start: config.hooks?.post_start ?? '',
@@ -918,6 +925,7 @@ function paneKey(p: EnvironmentPaneState): unknown {
     compute: p.compute,
     image: p.image,
     hooks: p.hooks,
+    rawHooks: p.rawHooks,
   }
 }
 
@@ -997,7 +1005,7 @@ export type ComposerEnvironment =
   | { kind: 'custom'; pane: EnvironmentPaneState }
 
 export interface ComposerChoices {
-  harness?: StartAgentSessionRequest['harness']['type']
+  harness?: 'claude_code' | 'codex'
   environment: ComposerEnvironment
   model: string | null
 }
@@ -1033,9 +1041,16 @@ export function paneEnvironment(pane: EnvironmentPaneState): Record<string, unkn
   }
   const compute = computeOverride(pane.compute)
   if (Object.keys(compute).length > 0) environment.compute = compute
-  const image = fieldsOverride(pane.image)
-  if (Object.keys(image).length > 0) environment.image = image
-  const hooks = fieldsOverride(pane.hooks)
+  const hooks = { ...pane.rawHooks, ...fieldsOverride(pane.hooks) }
+  for (const field of IMAGE_FIELDS) {
+    const script = pane.image[field].trim()
+    const previous = pane.rawHooks?.[field]
+    if (script) hooks[field] = typeof previous === 'object' && previous !== null ? { ...previous, run: script } : script
+    else delete hooks[field]
+  }
+  for (const field of HOOK_FIELDS) {
+    if (!pane.hooks[field].trim()) delete hooks[field]
+  }
   if (Object.keys(hooks).length > 0) environment.hooks = hooks
   return environment
 }
@@ -1053,17 +1068,18 @@ export function applyComposerChoices(
   choices: ComposerChoices,
 ): StartAgentSessionRequest {
   const req: StartAgentSessionRequest = { ...base }
-  // Keep native options when the harness is unchanged; a model certified for
-  // another harness starts with that harness's own options. Instructions stay.
-  const type = choices.harness ?? req.harness?.type ?? 'claude_code'
-  if (choices.model) {
-    req.harness =
-      req.harness?.type === type
-        ? { ...req.harness, model: choices.model }
-        : { type, model: choices.model }
-  } else if (choices.harness && req.harness?.type !== type) {
-    if (type === 'codex') throw new Error('select a model for the Codex harness')
-    req.harness = { type: 'claude_code' }
+  const type = choices.harness ?? (req.codex ? 'codex' : 'claude_code')
+  const prompt = sessionPrompt(req)
+  if (choices.model || choices.harness) {
+    if (type === 'codex') {
+      const model = choices.model ?? req.codex?.model
+      if (!model) throw new Error('select a model for the Codex harness')
+      req.codex = { ...req.codex, ...(prompt != null ? { prompt } : {}), model }
+      delete req.claude_code
+    } else {
+      req.claude_code = { ...req.claude_code, ...(prompt != null ? { prompt } : {}), ...(choices.model ? { model: choices.model } : {}) }
+      delete req.codex
+    }
   }
   const env = choices.environment
   if (env.kind === 'named') req.environment = env.id

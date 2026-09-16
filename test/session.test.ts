@@ -12,31 +12,10 @@ import {
 import type { Ellipsis } from '@ellipsis-dev/sdk'
 import type { AgentSession, AgentSessionStatus, SessionLogSegment } from '../src/lib/types'
 
+import { session as makeSession } from './fixtures/session'
+
 function session(status: AgentSessionStatus): AgentSession {
-  return {
-    id: 'session_1',
-    created_at: '2026-06-25T00:00:00+00:00',
-    updated_at: '2026-06-25T00:00:00+00:00',
-    status: status,
-    status_reason: null,
-    config_id: null,
-    source: 'api',
-    harness: 'claude_code',
-    prompting: { enabled: true },
-    resolved_budget_cents: 0,
-    resolved_budget_source: 'system',
-    cost_tokens: 0,
-    cost_sandbox_cpu: 0,
-    cost_sandbox_memory: 0,
-    cost_fee: 0,
-    tokens_total: 0,
-    tokens_input: 0,
-    tokens_output: 0,
-    tokens_cache_read: 0,
-    tokens_cache_creation: 0,
-    tokens_model: '',
-    metadata: {},
-  }
+  return makeSession({ lifecycle: { status } })
 }
 
 describe('watchSession', () => {
@@ -52,9 +31,9 @@ describe('watchSession', () => {
   it('polls until a terminal status, then stops', async () => {
     const get = vi
       .fn()
-      .mockResolvedValueOnce({ session: session('running') })
-      .mockResolvedValueOnce({ session: session('running') })
-      .mockResolvedValueOnce({ session: session('completed') })
+      .mockResolvedValueOnce({ session: session('working') })
+      .mockResolvedValueOnce({ session: session('working') })
+      .mockResolvedValueOnce({ session: session('closed') })
     const client = { sessions: { get } } as unknown as Ellipsis
 
     const promise = watchSession(client, 'session_1', 1, true)
@@ -67,7 +46,7 @@ describe('watchSession', () => {
   })
 
   it('returns immediately when the session is already terminal', async () => {
-    const get = vi.fn().mockResolvedValueOnce({ session: session('error') })
+    const get = vi.fn().mockResolvedValueOnce({ session: session('failed') })
     const client = { sessions: { get } } as unknown as Ellipsis
 
     await watchSession(client, 'session_1', 5, true) // no timer advance needed
@@ -85,7 +64,7 @@ describe('watchSession', () => {
 
   it('sets a failure exit code on a non-completed terminal status (for --wait)', async () => {
     process.exitCode = 0
-    const get = vi.fn().mockResolvedValueOnce({ session: session('error') })
+    const get = vi.fn().mockResolvedValueOnce({ session: session('failed') })
     const client = { sessions: { get } } as unknown as Ellipsis
     await watchSession(client, 'session_1', 5, true)
     expect(process.exitCode).toBe(1)
@@ -94,7 +73,7 @@ describe('watchSession', () => {
 
   it('leaves the exit code clean on a completed status', async () => {
     process.exitCode = 0
-    const get = vi.fn().mockResolvedValueOnce({ session: session('completed') })
+    const get = vi.fn().mockResolvedValueOnce({ session: session('closed') })
     const client = { sessions: { get } } as unknown as Ellipsis
     await watchSession(client, 'session_1', 5, true)
     expect(process.exitCode).toBe(0)
@@ -161,7 +140,6 @@ describe('buildStartOverride', () => {
     expect(
       buildStartOverride({
         model: 'claude-opus-4-8',
-        system: 'do the thing',
         repo: ['ellipsis-dev/ellipsis', 'solo'],
         cpu: 2,
         memory: '8GB',
@@ -169,8 +147,7 @@ describe('buildStartOverride', () => {
         budget: 0.5,
       }),
     ).toEqual({
-      harness: { model: 'claude-opus-4-8' },
-      instructions: 'do the thing',
+      claude_code: { model: 'claude-opus-4-8' },
       environment: {
         compute: { cpu: 2, memory: '8GB', timeout: '30m' },
       },
@@ -188,12 +165,11 @@ describe('buildStartOverride', () => {
   it('deep-merges sugar flags on top of a raw inline override (flags win)', () => {
     expect(
       buildStartOverride({
-        override: 'harness:\n  type: claude_code\n  model: claude-haiku-4-5-20251001\n  effort: high\ninstructions: base',
+        override: 'claude_code:\n  model: claude-haiku-4-5-20251001\n  effort: high\n  prompt: base',
         model: 'claude-opus-4-8',
       }),
     ).toEqual({
-      harness: { type: 'claude_code', model: 'claude-opus-4-8', effort: 'high' },
-      instructions: 'base',
+      claude_code: { model: 'claude-opus-4-8', effort: 'high', prompt: 'base' },
     })
   })
 
@@ -266,7 +242,7 @@ describe('session start prompt positional', () => {
     // POSTs is the only place the CLI's own assembly is observable.
     let seen: string | undefined
     const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
-      seen = JSON.parse(init?.body as string).prompt
+      seen = JSON.parse(init?.body as string).claude_code?.prompt
       return new Response(JSON.stringify({ session: session('scheduled') }), { status: 201 })
     })
     vi.stubGlobal('fetch', fetchMock)
