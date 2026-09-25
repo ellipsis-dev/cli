@@ -2,8 +2,7 @@ import { InvalidArgumentError } from 'commander'
 
 // commander option coercions. These get called as (value, previous), so a bare
 // `parseInt` would treat `previous` as the radix — hence the explicit parsers.
-// Kept out of the command modules so they're unit-testable without pulling in
-// ink/React.
+// Kept out of the command modules so they're unit-testable on their own.
 
 // Append a repeated `--flag a --flag b` option into an array.
 export function collect(value: string, previous: string[]): string[] {

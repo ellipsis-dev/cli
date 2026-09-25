@@ -1,44 +1,16 @@
 import type { Command } from 'commander'
-import { parse as parseYaml } from 'yaml'
-import { api, APIError } from '../lib/api'
-import { apiRoutes } from '../lib/help'
-import { runAction } from '../lib/output'
-import { repoFromCwd } from '../lib/git'
-import { startConnect, startRequestFromConfig, withContextRepository } from './session'
-import type { StartAgentSessionRequest } from '../lib/types'
 
-// The template behind `agent help --interactive`. Kebab-case like every other
-// slug in the registry; it is not served yet, so a 404 here is expected and
-// gets its own message rather than a raw HTTP failure.
-const HELPER_TEMPLATE_SLUG = 'ellipsis-helper'
-
-// Replaces commander's built-in `help` command so `--interactive` can hang off
-// it. Everything the built-in did must keep working: `agent help` prints the
-// top-level help, `agent help <command>` prints that subcommand's. Note the
-// built-in only ever resolved ONE level ("help session start" printed
-// session's help); this walks the whole path, which is a strict improvement.
+// Replaces commander's built-in `help` command. Everything the built-in did
+// must keep working: `agent help` prints the top-level help, `agent help
+// <command>` prints that subcommand's. Note the built-in only ever resolved
+// ONE level ("help session start" printed session's help); this walks the
+// whole path, which is a strict improvement.
 export function registerHelp(program: Command): void {
-  apiRoutes(
-    program
-      .command('help')
-      .description('Show help for a command, or ask the help agent with --interactive'),
-    'POST /v1/sessions with --interactive',
-  )
+  program
+    .command('help')
+    .description('Show help for a command')
     .argument('[command...]', 'command to show help for (e.g. `session start`)')
-    .option(
-      '-i, --interactive',
-      'start a cloud session with the Ellipsis help agent and open the conversation',
-    )
-    .action(async (path: string[], opts: { interactive?: boolean }) => {
-      if (opts.interactive) {
-        if (path.length > 0) {
-          console.error('error: --interactive takes no command argument')
-          process.exitCode = 1
-          return
-        }
-        await runAction(startHelperSession)
-        return
-      }
+    .action((path: string[]) => {
       const target = resolveCommandPath(program, path)
       if (!target) {
         console.error(`error: unknown command '${path.join(' ')}'`)
@@ -62,29 +34,4 @@ export function resolveCommandPath(program: Command, path: string[]): Command | 
     cmd = next
   }
   return cmd
-}
-
-async function startHelperSession(): Promise<void> {
-  const template = await api().templates.get(HELPER_TEMPLATE_SLUG)
-  let req: StartAgentSessionRequest = startRequestFromConfig(
-    parseYaml(template.yaml) as Record<string, unknown>,
-  )
-  // Same as `session start`: add the repo we're standing in to the sandbox
-  // checkout set so the helper can answer questions about this checkout.
-  const contextRepo = repoFromCwd(process.cwd())
-  if (contextRepo) req = withContextRepository(req, contextRepo)
-  // No prompt: the helper opens idle and waits for the question (a promptless
-  // start is idle by definition since #6394).
-
-  try {
-    const { session } = await api().sessions.start(req)
-    await startConnect(session, 'Ellipsis help agent')
-  } catch (err) {
-    if (err instanceof APIError && err.status === 404) {
-      throw new Error(
-        `the help agent is not available on this host yet (template "${HELPER_TEMPLATE_SLUG}" not found). Run \`agent template list\` to see what you can start.`,
-      )
-    }
-    throw err
-  }
 }

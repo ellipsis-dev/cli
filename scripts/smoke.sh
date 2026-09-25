@@ -30,14 +30,14 @@ export ELLIPSIS_CONFIG_DIR="$CONFIG_DIR"
 cleanup() { rm -rf "$CONFIG_DIR"; }
 trap cleanup EXIT
 
-run() { echo "+ agent $*"; npx tsx src/cli.tsx "$@"; echo; }
+run() { echo "+ agent $*"; npx tsx src/cli.ts "$@"; echo; }
 
 echo "API base:    $API_BASE"
 echo "Config dir:  $CONFIG_DIR (temporary)"
 echo
 
 echo "== Logging in (approve the printed request, then this continues) =="
-npx tsx src/cli.tsx login --no-browser
+npx tsx src/cli.ts login --no-browser
 
 echo "== Authenticated API calls =="
 run me
@@ -48,7 +48,7 @@ run session list --limit 5
 
 echo "== Logout should clear the token (next call 401s) =="
 run logout
-if npx tsx src/cli.tsx me; then
+if npx tsx src/cli.ts me; then
   echo "UNEXPECTED: 'me' succeeded after logout" >&2
   exit 1
 else

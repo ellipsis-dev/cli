@@ -8,7 +8,6 @@ import { registerAutomation } from '../src/commands/automation'
 import { registerEnvironment } from '../src/commands/environment'
 import { registerSession, watchSession } from '../src/commands/session'
 import { api } from '../src/lib/api'
-import { environmentPane, paneEnvironment } from '../src/lib/sessions'
 import { session } from './fixtures/session'
 
 let dir: string
@@ -94,13 +93,6 @@ describe('SDK 0.30 request contracts', () => {
     const config = parse(readFileSync(file, 'utf8'))
     expect(config.hooks.build_base).toContain('install CLIs')
     expect(config).not.toHaveProperty('image')
-  })
-
-  it('preserves build inputs and before_start when editing environment build scripts', () => {
-    const pane = environmentPane({ hooks: { build_base: { inputs: ['api/package.json'], run: 'npm ci' }, before_start: { run: 'echo ready' } } })
-    const env = paneEnvironment({ ...pane, image: { ...pane.image, build_base: 'npm install' } })
-    expect(env.hooks).toEqual({ build_base: { inputs: ['api/package.json'], run: 'npm install' }, before_start: { run: 'echo ready' } })
-    expect(env).not.toHaveProperty('image')
   })
 
   it.each(['completed', 'budget_hit'] as const)('uses the execution outcome when a conversation closes: %s', async (reason) => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appLoginUrl, automationUrl, cliAuthUrl, hyperlink, sessionUrl } from '../src/lib/urls'
+import { appLoginUrl, automationUrl, cliAuthUrl, sessionUrl } from '../src/lib/urls'
 
 describe('sessionUrl', () => {
   it('builds the account page link with the session query param', () => {
@@ -46,20 +46,5 @@ describe('appLoginUrl', () => {
     expect(appLoginUrl('https://beta-app.ellipsis.dev')).toBe(
       'https://beta-app.ellipsis.dev/login',
     )
-  })
-})
-
-describe('hyperlink', () => {
-  const ESC = String.fromCharCode(27)
-
-  it('wraps the label in an OSC 8 escape on a TTY', () => {
-    const url = 'https://app.ellipsis.dev/octocat/sessions/session_8f2c'
-    expect(hyperlink(url, 'session_8f2c', true)).toBe(
-      `${ESC}]8;;${url}${ESC}\\session_8f2c${ESC}]8;;${ESC}\\`,
-    )
-  })
-
-  it('returns the bare label off a TTY, so piped output stays clean', () => {
-    expect(hyperlink('https://x', 'label', false)).toBe('label')
   })
 })

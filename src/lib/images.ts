@@ -3,8 +3,8 @@ import { basename } from 'node:path'
 import type { ImageAttachment } from './types'
 
 // Images on a message — the Claude Code paste model. `agent session start
-// --image shot.png` and the connect composer's `/image shot.png` read the
-// file here, and it rides the request inline (base64) as `images`; the server
+// --image shot.png` reads the file here, and it rides the request inline
+// (base64) as `images`; the server
 // appends one `[Image #N]` placeholder per image to the message body and the
 // model sees the picture as a content block on the turn that message opens.
 //

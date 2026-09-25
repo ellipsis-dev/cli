@@ -7,12 +7,7 @@
 // (query-option bags it assembles before calling, and the loosely-typed GitHub
 // user it caches on disk) are declared here.
 
-import type {
-  components,
-  Ellipsis,
-  SessionRecord as SessionRecordFrame,
-  SessionMessage as SessionMessageFrame,
-} from '@ellipsis-dev/sdk'
+import type { components, Ellipsis, SessionRecord as SessionRecordFrame } from '@ellipsis-dev/sdk'
 
 type S = components['schemas']
 
@@ -21,18 +16,15 @@ type S = components['schemas']
 export type AgentSession = S['Session']
 export type AgentSessionSource = S['SessionSource']
 export type AgentSessionStatus = S['SessionLifecycleStatus']
-export type SessionPrompting = S['SessionPrompting']
 // The frames flavor, not `S['SessionRecord']`: the spec marks defaulted fields
 // optional, but on the wire the server always serializes every field, and the
 // SDK's transcript store types its inputs this way. Using it here keeps records
 // flowing from REST straight into the store without a cast at each call site.
 export type SessionRecord = SessionRecordFrame
-export type SessionMessage = SessionMessageFrame
 export type ListSessionRecordsResponse = S['SessionRecordsListResponse']
 export type ListAgentSessionsResponse = S['SessionsListResponse']
 export type StartAgentSessionRequest = NonNullable<Parameters<Ellipsis['sessions']['start']>[0]>
 export type SessionResponse = S['SessionResponse']
-export type SendSessionMessageRequest = S['SendSessionMessageRequest']
 export type ImageAttachment = S['ImageAttachment']
 export type SessionLogSegment = S['SessionLogSegment']
 export type GetSessionLogResponse = S['GetSessionLogResponse']
@@ -67,9 +59,6 @@ export type ListAgentTemplatesResponse = S['AgentTemplatesListResponse']
 
 // --------------------------------- models ---------------------------------
 
-export type ModelManufacturer = S['ModelManufacturer']
-export type ModelRateCard = S['ModelRateCardApi']
-export type SupportedModel = S['Model']
 export type GetSupportedModelsResponse = S['ModelsListResponse']
 
 // -------------------------------- reviews ---------------------------------
@@ -135,7 +124,6 @@ export type SlackIntegrationSummary = S['SlackIntegrationSummary']
 export type LinearIntegrationSummary = S['LinearIntegrationSummary']
 export type JiraIntegrationSummary = S['JiraIntegrationSummary']
 export type SentryOrganizationSummary = S['SentryOrganizationSummary']
-export type RepositorySummary = S['GithubRepository']
 export type GithubMemberSummary = S['GithubMember']
 export type SlackMemberSummary = S['SlackMember']
 export type SlackChannelSummary = S['SlackChannel']
@@ -178,27 +166,6 @@ export type CliAuthPollStatus =
 // The option bags the CLI assembles before calling the SDK. They mirror the
 // generated methods' parameter objects; they exist so command modules can name
 // and pass around a query without importing the SDK's inline parameter types.
-
-export interface ListAgentSessionsQuery {
-  // An automation id or name: only sessions that automation started.
-  agent?: string
-  source?: AgentSessionSource[]
-  days?: number
-  start?: string
-  end?: string
-  limit?: number
-  // A GitHub account id (`agent github members`); scopes the list to sessions
-  // attributed to that developer. The CLI resolves it from a --author login.
-  author_id?: number
-  // "owner/name" or a bare repository name. Sessions that name their
-  // repository only inside their automation — dashboard starts, cron runs,
-  // handoffs — do not match.
-  repo?: string
-  // Keep only the conversations still going (live or sleeping), dropping the
-  // ones that completed, errored, or were stopped. A session parked between
-  // turns counts as unfinished.
-  unfinished?: boolean
-}
 
 export interface ListFilesQuery {
   // Scope to one run's uploads.

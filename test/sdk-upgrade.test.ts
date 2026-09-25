@@ -1,22 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionRecord } from '@ellipsis-dev/sdk'
-import { SessionTranscriptStore } from '@ellipsis-dev/sdk/store'
 import { budgetLines } from '../src/commands/usage'
-import {
-  chatTurnsToItems,
-  foldRecordCosts,
-  undisplayedRecordCount,
-} from '../src/lib/chatItems'
 import { recordText } from '../src/lib/steps'
 import { buildStartOverride } from '../src/commands/session'
 import { toHarness } from '../src/lib/args'
-import {
-  applyComposerChoices,
-  composerModelChoice,
-  composerModelOptions,
-  startRequestFromConfig,
-} from '../src/lib/sessions'
-import type { BudgetSummary, SupportedModel } from '../src/lib/types'
+import { startRequestFromConfig } from '../src/lib/sessions'
+import type { BudgetSummary } from '../src/lib/types'
 
 const envelope = {
   id: 'record_1',
@@ -75,43 +64,14 @@ const result: SessionRecord = {
 }
 
 describe('native session records', () => {
-  it('renders native Claude replies through the CLI transcript and record listing', () => {
+  it('renders native Claude replies through the record listing', () => {
     const original = JSON.stringify(assistant)
-    const store = new SessionTranscriptStore()
-    store.ingest({ type: 'records_append', records: [assistant, result] })
-    expect(chatTurnsToItems(store.chatTurns()).map((item) => item.text)).toEqual([
-      'All tests pass.',
-    ])
     expect(recordText(assistant)).toBe('All tests pass.')
     expect(recordText(result)).toBe('All tests pass.')
-    expect(undisplayedRecordCount([assistant, result], 0)).toBe(0)
     expect(JSON.stringify(assistant)).toBe(original)
   })
 
-  it('keeps the cost footer populated for native and archived Claude results', () => {
-    const archived: SessionRecord = {
-      ...envelope,
-      kind: 'claude_sdk',
-      source: 'claude_code',
-      record_format: 'claude_sdk@1',
-      record_type: 'result',
-      payload: {
-        kind: 'result',
-        subtype: 'success',
-        is_error: false,
-        duration_ms: 1000,
-        duration_api_ms: 800,
-        num_turns: 1,
-        cost_usd: 0.08,
-      },
-    }
-    expect(foldRecordCosts([archived, result])).toMatchObject({
-      total: 0.2,
-      lastStep: 0.12,
-    })
-  })
-
-  it('renders native Codex replies and ignores successful turn completion', () => {
+  it('renders native Codex replies', () => {
     const reply: SessionRecord = {
       ...envelope,
       kind: 'codex_app_server',
@@ -127,34 +87,10 @@ describe('native session records', () => {
         },
       },
     }
-    const done: SessionRecord = {
-      ...reply,
-      id: 'record_2',
-      feed_seq: 2,
-      record_type: 'turn/completed',
-      payload: {
-        method: 'turn/completed',
-        params: {
-          threadId: 'thread_1',
-          turn: { id: 'turn_1', status: 'completed', items: [] },
-        },
-      },
-    }
-    const store = new SessionTranscriptStore()
-    store.ingest({ type: 'records_append', records: [reply, done] })
-    expect(chatTurnsToItems(store.chatTurns()).map((item) => item.text)).toEqual([
-      'Done.',
-    ])
     expect(recordText(reply)).toBe('Done.')
-    expect(undisplayedRecordCount([reply, done], 0)).toBe(0)
   })
 
-  it('ignores native bookkeeping but still warns about unknown records from a known producer', () => {
-    const system: SessionRecord = {
-      ...assistant,
-      record_type: 'system',
-      payload: { type: 'system', subtype: 'init' },
-    }
+  it('falls back to the raw payload for an unknown record', () => {
     const unknown: SessionRecord = {
       ...envelope,
       kind: 'unknown',
@@ -163,8 +99,6 @@ describe('native session records', () => {
       record_format: 'claude_jsonl@2',
       payload: { future: true },
     }
-    expect(undisplayedRecordCount([system], 0)).toBe(0)
-    expect(undisplayedRecordCount([system, unknown], 0)).toBe(1)
     expect(recordText(unknown)).toBe('{"future":true}')
   })
 })
@@ -221,37 +155,6 @@ describe('explicit harness requests', () => {
     expect(() => startRequestFromConfig({})).toThrow(/exactly one/)
     expect(() => startRequestFromConfig({ claude_code: {}, codex: {} })).toThrow(/exactly one/)
     expect(() => buildStartOverride({ system: 'Be brief.' })).toThrow(/--system is no longer supported/)
-  })
-
-  it('switches native options cleanly while keeping the prompt', () => {
-    const base = { claude_code: { model: 'claude-opus-5', max_turns: 5, effort: 'max' as const, prompt: 'Keep changes small.' } }
-    const unchanged = applyComposerChoices(base, { environment: { kind: 'empty' }, model: 'claude-fable-5', harness: 'claude_code' })
-    expect(unchanged.claude_code).toEqual({ ...base.claude_code, model: 'claude-fable-5' })
-    const changed = applyComposerChoices(base, { environment: { kind: 'empty' }, model: 'gpt-6-astra', harness: 'codex' })
-    expect(changed.codex).toEqual({ model: 'gpt-6-astra', prompt: 'Keep changes small.' })
-    expect(changed.claude_code).toBeUndefined()
-    expect(base.claude_code.max_turns).toBe(5)
-  })
-
-  it('keeps the certified harness and concrete model on a Codex default row', () => {
-    const model: SupportedModel = {
-      id: 'gpt-6-astra',
-      display_name: 'GPT-6 Astra',
-      harness: 'codex',
-      capabilities: [],
-      manufacturer: 'openai',
-      is_default_agent_model: true,
-      rate_card: {
-        input_millicents_per_1m_tokens: 0,
-        output_millicents_per_1m_tokens: 0,
-        cache_write_5m_millicents_per_1m_tokens: 0,
-        cache_write_1h_millicents_per_1m_tokens: 0,
-        cache_read_millicents_per_1m_tokens: 0,
-      },
-    }
-    const [row] = composerModelOptions([model])
-    expect(row.id).toBeNull()
-    expect(composerModelChoice(row)).toEqual({ harness: 'codex', model: 'gpt-6-astra' })
   })
 
   it('validates the harness flag and replaces options on a switch', () => {

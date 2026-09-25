@@ -31,34 +31,12 @@ export interface Host {
   token?: string
 }
 
-// How the interactive UI's session bar is scoped. Every field is optional; a
-// missing one takes the SESSION_BAR_DEFAULTS value below.
-export interface SessionBarConfig {
-  // Drop the session list entirely: the chat then never hands focus to it.
-  hidden?: boolean
-  // Only sessions that moved in the last N days; 0 means no age cutoff.
-  days?: number
-  // "cwd" lists only sessions on the repository the shell is in, falling back
-  // to every repository when the cwd is not one. "any" never scopes by repo.
-  repo?: 'cwd' | 'any'
-  // "unfinished" drops the sessions that completed, errored, or were stopped,
-  // leaving the conversations still going. "all" keeps them.
-  statuses?: 'all' | 'unfinished'
-  // Only sessions started these ways, e.g. ["cli", "web"]. An empty list
-  // means every source. Laptop sessions never appear whatever this says: there
-  // is nothing in the cloud to open.
-  sources?: string[]
-}
-
 // The config file (v2): a named set of hosts plus which one is active. Commands
 // resolve against the active host unless an env var / explicit arg overrides.
-// UI preferences live at the top level, not per host: they describe the
-// terminal in front of the user, which is the same whichever host is active.
 export interface CliConfig {
   version: 2
   activeHost?: string
   hosts: Record<string, Host>
-  sessionBar?: SessionBarConfig
 }
 
 // The pre-hosts (v1) file shape — a single flat instance. Kept only so
@@ -228,54 +206,6 @@ export function clearAllTokens(): void {
   const cfg = loadConfig()
   for (const host of Object.values(cfg.hosts)) delete host.token
   saveConfig(cfg)
-}
-
-// The session bar with nothing configured: scoped to the repository you are
-// standing in and the last week, which is short enough to read at a glance
-// without hiding a session you are likely to reopen. `repo: 'cwd'` falls back
-// to every repository outside a repo, so the bar is never mysteriously empty.
-// The default sources are the ones a person started; `react` and `cron` fire on
-// their own and would bury the sessions you are actually working in.
-export const SESSION_BAR_DEFAULTS: Required<Omit<SessionBarConfig, 'sources'>> & {
-  sources: string[] | undefined
-} = {
-  hidden: false,
-  days: 7,
-  repo: 'cwd',
-  statuses: 'all',
-  sources: ['web', 'cli', 'mention'],
-}
-
-export type ResolvedSessionBar = typeof SESSION_BAR_DEFAULTS
-
-const SESSION_SOURCES = ['react', 'web', 'api', 'cli', 'mention', 'cron']
-
-// The session bar's settings, defaults filled in — set them under
-// `"sessionBar"` in ~/.ellipsis/config.json. A value of the wrong type or
-// outside its range takes the default rather than throwing: a typo in a
-// preference should not stop the UI from opening.
-export function sessionBar(): ResolvedSessionBar {
-  const raw = loadConfig().sessionBar
-  if (!raw || typeof raw !== 'object') return { ...SESSION_BAR_DEFAULTS }
-  const sources = Array.isArray(raw.sources)
-    ? raw.sources.filter((s) => SESSION_SOURCES.includes(s))
-    : null
-  return {
-    hidden: raw.hidden === true,
-    days:
-      typeof raw.days === 'number' && isFinite(raw.days) && raw.days >= 0
-        ? Math.floor(raw.days)
-        : SESSION_BAR_DEFAULTS.days,
-    repo: raw.repo === 'any' || raw.repo === 'cwd' ? raw.repo : SESSION_BAR_DEFAULTS.repo,
-    statuses:
-      raw.statuses === 'unfinished' || raw.statuses === 'all'
-        ? raw.statuses
-        : SESSION_BAR_DEFAULTS.statuses,
-    // An explicit [] would list nothing at all, which no one means; treat it as
-    // "every source" — the only way to ask for the automated ones too. Leaving
-    // the key out keeps the human-started default.
-    sources: sources === null ? SESSION_BAR_DEFAULTS.sources : sources.length > 0 ? sources : undefined,
-  }
 }
 
 // --- credential / URL resolution --------------------------------------------

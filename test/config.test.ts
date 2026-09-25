@@ -14,8 +14,6 @@ import {
   resolveApiBase,
   resolveAppBase,
   resolveToken,
-  SESSION_BAR_DEFAULTS,
-  sessionBar,
   setActiveHostToken,
   updateHost,
   useHost,
@@ -207,79 +205,6 @@ describe('host management', () => {
     clearActiveHostToken()
     expect(resolveToken()).toBeUndefined()
     expect(activeHostName()).toBe('beta') // entry survives
-  })
-})
-
-describe('sessionBar', () => {
-  it('falls back to the defaults with no config file', () => {
-    expect(sessionBar()).toEqual(SESSION_BAR_DEFAULTS)
-  })
-
-  it('reads every field from the config file', () => {
-    writeConfig({
-      version: 2,
-      hosts: {},
-      sessionBar: {
-        hidden: true,
-        days: 30,
-        repo: 'any',
-        statuses: 'unfinished',
-        sources: ['cli', 'web'],
-      },
-    })
-    expect(sessionBar()).toEqual({
-      hidden: true,
-      days: 30,
-      repo: 'any',
-      statuses: 'unfinished',
-      sources: ['cli', 'web'],
-    })
-  })
-
-  it('fills in the fields the file leaves out', () => {
-    writeConfig({ version: 2, hosts: {}, sessionBar: { days: 3 } })
-    expect(sessionBar()).toEqual({ ...SESSION_BAR_DEFAULTS, days: 3 })
-  })
-
-  // A typo in a preference should not stop the UI from opening.
-  it('ignores values of the wrong type or out of range', () => {
-    writeConfig({
-      version: 2,
-      hosts: {},
-      sessionBar: { hidden: 'yes', days: -3, repo: 'origin', statuses: 'live' },
-    })
-    expect(sessionBar()).toEqual(SESSION_BAR_DEFAULTS)
-  })
-
-  it('drops unknown sources and treats an empty list as every source', () => {
-    writeConfig({ version: 2, hosts: {}, sessionBar: { sources: ['cli', 'carrier-pigeon'] } })
-    expect(sessionBar().sources).toEqual(['cli'])
-    writeConfig({ version: 2, hosts: {}, sessionBar: { sources: [] } })
-    expect(sessionBar().sources).toBeUndefined()
-    writeConfig({ version: 2, hosts: {}, sessionBar: { sources: ['carrier-pigeon'] } })
-    expect(sessionBar().sources).toBeUndefined()
-  })
-
-  it('defaults to the human-started sources when the key is absent', () => {
-    writeConfig({ version: 2, hosts: {}, sessionBar: { days: 3 } })
-    expect(sessionBar().sources).toEqual(['web', 'cli', 'mention'])
-  })
-
-  it('takes days 0 as "no age cutoff", not as a missing value', () => {
-    writeConfig({ version: 2, hosts: {}, sessionBar: { days: 0 } })
-    expect(sessionBar().days).toBe(0)
-  })
-
-  it('survives a host write', () => {
-    writeConfig({ version: 2, hosts: {}, sessionBar: { hidden: true } })
-    addHost('beta', 'https://beta-api.ellipsis.dev')
-    expect(sessionBar().hidden).toBe(true)
-  })
-
-  // hideSessionBar (the flat key sessionBar replaced) is gone, not honored.
-  it('ignores the old hideSessionBar key', () => {
-    writeConfig({ version: 2, hosts: {}, hideSessionBar: true })
-    expect(sessionBar().hidden).toBe(false)
   })
 })
 

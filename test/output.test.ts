@@ -5,7 +5,6 @@ import {
   relativeAge,
   usd,
   usdFromMillicents,
-  usdNumberFromMillicents,
 } from '../src/lib/output'
 
 // The SDK's error, as its transport builds one from a parsed error body: the
@@ -25,14 +24,6 @@ describe('usdFromMillicents', () => {
     expect(usdFromMillicents(0)).toBe('$0.00')
     expect(usdFromMillicents(100_000)).toBe('$1.00') // 100 cents
     expect(usdFromMillicents(12_345_000)).toBe('$123.45')
-  })
-})
-
-describe('usdNumberFromMillicents', () => {
-  it('converts millicents to a USD number for math before formatting', () => {
-    expect(usdNumberFromMillicents(0)).toBe(0)
-    expect(usdNumberFromMillicents(100_000)).toBe(1)
-    expect(usdNumberFromMillicents(12_345_000)).toBeCloseTo(123.45)
   })
 })
 
