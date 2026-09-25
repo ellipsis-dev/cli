@@ -62,19 +62,6 @@ export type ListAgentTemplatesResponse = S['AgentTemplatesListResponse']
 
 export type GetSupportedModelsResponse = S['ModelsListResponse']
 
-// -------------------------------- reviews ---------------------------------
-// A review's `id` IS a session id, so the session types above apply to it
-// unchanged — hence no review-specific status, stream, or cost type.
-
-export type Review = S['Review']
-export type ReviewScope = S['ReviewScope']
-export type ResolvedReviewScope = S['ResolvedReviewScope']
-export type ReviewCounters = S['ReviewCounters']
-export type Finding = S['ReviewFinding']
-export type CreateReviewRequest = S['CreateReviewRequest']
-export type ListReviewsResponse = S['ReviewsListResponse']
-export type CodeReviewRunStatus = S['CodeReviewRunStatus']
-
 // ------------------------------- secrets ----------------------------------
 // Customer-scoped environment variables injected into a sandbox when an agent
 // config names them. Values are write-only: the API accepts them but never
@@ -163,14 +150,6 @@ export type CliAuthPollStatus =
 export interface ListFilesQuery {
   // Scope to one run's uploads.
   session_id?: string
-  limit?: number
-}
-
-export interface ListReviewsQuery {
-  owner?: string
-  repo?: string
-  pull_request_number?: number
-  status?: S['CodeReviewRunStatus']
   limit?: number
 }
 

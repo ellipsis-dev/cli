@@ -2,7 +2,6 @@ import { Command } from 'commander'
 import { registerAuth } from './commands/auth'
 import { registerHost } from './commands/host'
 import { registerSession } from './commands/session'
-import { registerReview } from './commands/review'
 import { registerAutomation } from './commands/automation'
 import { registerEnvironment } from './commands/environment'
 import { registerVariable } from './commands/variable'
@@ -37,7 +36,6 @@ configureCliHelp(program)
 registerAuth(program)
 registerHost(program)
 registerSession(program)
-registerReview(program)
 registerAutomation(program)
 registerEnvironment(program)
 registerVariable(program)

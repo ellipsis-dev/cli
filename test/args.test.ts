@@ -122,11 +122,11 @@ describe('looksLikeCommandTypo', () => {
 })
 
 describe('similarCommands', () => {
-  const commands = ['session', 'review', 'automation', 'install', 'model', 'host']
+  const commands = ['session', 'variable', 'automation', 'install', 'model', 'host']
 
   it('finds the intended command behind a typo', () => {
     expect(similarCommands('sesion', commands)).toEqual(['session'])
-    expect(similarCommands('reveiw', commands)).toEqual(['review'])
+    expect(similarCommands('varible', commands)).toEqual(['variable'])
     expect(similarCommands('instal', commands)).toEqual(['install'])
   })
 
@@ -141,7 +141,7 @@ describe('similarCommands', () => {
 })
 
 describe('commandTypoMessage', () => {
-  const commands = ['session', 'review', 'install']
+  const commands = ['session', 'variable', 'install']
 
   it('names the likely command and how to force a prompt', () => {
     const msg = commandTypoMessage('sesion', commands)

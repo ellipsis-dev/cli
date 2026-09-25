@@ -594,18 +594,6 @@ export async function watchTurn(
   }
 }
 
-// Follow a session's whole conversation live until it closes. A session that
-// runs once closes after its turn ended and the platform's teardown work is
-// done: a review's findings are collected then, so `ellipsis review` waits
-// for the close rather than the turn's end.
-export async function followConversation(
-  client: Ellipsis,
-  sessionId: string,
-  json?: boolean,
-): Promise<void> {
-  await streamFrames(client, sessionId, null, FALLBACK_POLL_INTERVAL_SECONDS, json)
-}
-
 // The watch's last word: one line naming how the turn ended, and the exit
 // code that goes with it. `--json` callers have already printed the turn.
 function endWatch(sessionId: string, turn: TurnEnd, json?: boolean): void {
