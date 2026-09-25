@@ -393,8 +393,6 @@ agent session start --config-file agents/my_agent.yaml --watch
 agent session start --template ellipsis-helper --watch
 agent session get <session-id> --watch               # follow a running session
 agent session stop <session-id>
-agent session ide <session-id>                       # browser IDE into the live sandbox
-agent session port <session-id> 3000                 # preview a port the sandbox serves
 ```
 
 With no config source, a bare `start` runs the bare ad-hoc config — an empty
@@ -407,12 +405,10 @@ cache. `--detach` returns immediately. `--watch --quiet` prints only status
 transitions and the result, and either watch form exits `0` only when the session
 completes.
 
-Search and audit what agents have done:
+List and audit what agents have done:
 
 ```sh
 agent session list --limit 20                # --automation, --source, --author, --days, --since
-agent session search "webhook retries"       # transcripts, recaps, created PRs, similarity
-agent session search "owner/repo#512"        # finds the session that opened that PR
 agent session record <session-id>            # the stored transcript, one line per record
 agent session log <session-id> -o session.jsonl   # the complete archived log
 agent analytics reviewer --account-type bot  # human versus bot PR and review activity
@@ -646,8 +642,8 @@ npx skills add ellipsis-dev/cli
 
 If `ELLIPSIS_SANDBOX_ID` is set in the environment, you are the agent in an
 Ellipsis session. The `agent` CLI is pre-installed and pre-authenticated with a
-session-scoped token, so you can start child sessions, search the team's session
-history, read analytics, and upload screenshots as org-gated links
+session-scoped token, so you can start child sessions, list the team's sessions,
+read analytics, and upload screenshots as org-gated links
 (`agent file upload shot.png`) with no login.
 
 That token is deliberately narrower than a human's. It can list variable names

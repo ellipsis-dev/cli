@@ -1,8 +1,7 @@
 # Ellipsis CLI
 
 Drive the [Ellipsis](https://ellipsis.dev) cloud from your terminal: start agent
-sessions, stream their output live, manage configurations, and open a session
-in the browser IDE.
+sessions, stream their output live, and manage configurations.
 
 This is a thin client. The agent runs in the Ellipsis cloud; the CLI
 authenticates, opens a WebSocket, and streams results. It is open source
