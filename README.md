@@ -62,8 +62,6 @@ agent session list --limit 20         # list recent sessions (filter by --source
 agent session get <session-id>        # inspect one session (prints a dashboard link)
 agent session get <session-id> --watch  # follow a session until it finishes
 agent session record <session-id>     # read a session's stored transcript, one line per record
-agent session connect <session-id>    # connect to a session: transcript + live output + send messages
-agent session connect                 # inside an Ellipsis sandbox: connects to the running session
 agent session stop <session-id>       # stop an in-flight session
 
 agent review 123                  # review a pull request now, instead of waiting for a push
@@ -163,36 +161,6 @@ Hosts and tokens live in `~/.ellipsis/config.json` (mode 0600); set
 is migrated on first use — your existing login becomes a host named for its API
 base.
 
-The config file also carries UI preferences. `"sessionBar"` scopes the session
-list, which the interactive UI opens as a full screen with `esc`:
-
-```json
-{
-  "sessionBar": {
-    "hidden": false,
-    "days": 7,
-    "repo": "cwd",
-    "statuses": "all",
-    "sources": ["cli", "web"]
-  }
-}
-```
-
-`hidden` drops the list entirely, so the chat never hands focus to it. `days`
-hides sessions that have not moved in that long; `0` means no age cutoff. `repo` is `"cwd"` to
-list only sessions on the repository your shell is in, or `"any"` for all of
-them. `statuses` is `"unfinished"` to leave out the sessions that finished,
-errored, or were stopped, or `"all"` to keep them. `sources` lists only sessions
-started those ways (`react`, `web`, `api`, `cli`, `mention`, `cron`); leave it
-out for all of them.
-
-Every field is optional and the defaults above are what you get with no
-`sessionBar` at all. Two caveats on `repo`: a shell outside a repository lists
-every repository rather than nothing, and sessions that name their repository
-only inside their automation — dashboard starts, cron runs — do not
-match a repo filter, so `"repo": "any"` is the way to see those alongside the
-rest.
-
 ## SDK 0.30 configuration
 
 Session configs select one native block. Put the first message inside it:
@@ -254,9 +222,8 @@ npm run compile             # single-binary build (bun)
 
 | Path              | Purpose                                          |
 | ----------------- | ------------------------------------------------ |
-| `src/cli.tsx`     | entry point; wires up the command tree           |
+| `src/cli.ts`      | entry point; wires up the command tree           |
 | `src/commands/`   | one module per top-level command group           |
-| `src/ui/`         | Ink components for interactive / streaming views |
 | `src/lib/`        | API client, WebSocket client, config, constants  |
 
 ### Releasing

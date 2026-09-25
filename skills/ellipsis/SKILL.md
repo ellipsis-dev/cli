@@ -392,7 +392,6 @@ agent automation run <automation-id> --input '{...}'   # invoke an automation as
 agent session start --config-file agents/my_agent.yaml --watch
 agent session start --template ellipsis-helper --watch
 agent session get <session-id> --watch               # follow a running session
-agent session connect <session-id>                   # live view plus send messages
 agent session stop <session-id>
 agent session ide <session-id>                       # browser IDE into the live sandbox
 agent session port <session-id> 3000                 # preview a port the sandbox serves
@@ -649,8 +648,7 @@ If `ELLIPSIS_SANDBOX_ID` is set in the environment, you are the agent in an
 Ellipsis session. The `agent` CLI is pre-installed and pre-authenticated with a
 session-scoped token, so you can start child sessions, search the team's session
 history, read analytics, and upload screenshots as org-gated links
-(`agent file upload shot.png`) with no login. `agent session connect` with no
-id connects to the current session, via `ELLIPSIS_SESSION_ID`.
+(`agent file upload shot.png`) with no login.
 
 That token is deliberately narrower than a human's. It can list variable names
 but not set or delete them, cannot delete a file, and cannot repoint an

@@ -61,7 +61,7 @@ export function usdFromMillicents(millicents: number): string {
 }
 
 // Millicents -> USD as a number, for callers that do math/compare before
-// formatting (e.g. the connect footer's monotonic live cost).
+// formatting.
 export function usdNumberFromMillicents(millicents: number): number {
   return millicents / 100_000
 }

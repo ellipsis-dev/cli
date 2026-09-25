@@ -44,9 +44,8 @@ export function deriveSandboxState(
   }
 }
 
-// Record-rendering helpers shared by `session records` and `session connect`
-// (moved out of commands/session.tsx so connect.ts can use them without an
-// import cycle; session.tsx re-exports them for compatibility).
+// Record-rendering helpers for `session record` and the `--watch` log
+// (commands/session.ts re-exports them for compatibility).
 
 // A content block of a Claude Code stream event, typed loosely: the CLI only
 // extracts display text and names, never interprets the payload.

@@ -23,7 +23,6 @@ import { registerHelp } from './commands/help'
 import { commandTypoMessage, looksLikeCommandTypo } from './lib/args'
 import { VERSION } from './lib/constants'
 import { configureCliHelp } from './lib/help'
-import { canHostSessionsUi, defaultStartRequest, runSessionsUi } from './ui/launch'
 
 const program = new Command()
 
@@ -58,16 +57,13 @@ registerAnalytics(program)
 registerPing(program)
 registerHelp(program)
 
-// A bare `agent` opens the multi-session UI: the sidebar of your running
-// sessions beside a new-session composer — nothing starts until you type a
-// task and hit enter. (Headless callers with no TTY get the old behavior of
-// an idle connected start via the shorthand below.)
+// A bare `agent` prints the top-level help, the same page as `agent --help`.
 //
 // Any other invocation that isn't a known subcommand or a top-level
-// help/version request is shorthand for `agent session start --connect ...`:
+// help/version request is shorthand for `agent session start ...`:
 // `agent "fix the tests" --model ...` forwards the prompt and every trailing
-// flag through to a fresh connected session, which opens in the same UI.
-// `agent --help`, `agent --version`, `agent help`, and every subcommand
+// flag through to a fresh session, which starts and prints its dashboard
+// link. `agent --help`, `agent --version`, `agent help`, and every subcommand
 // dispatch unchanged.
 //
 // The exception is a single bare word (`agent sesion`): see
@@ -87,11 +83,8 @@ const isTopLevel =
   first === '-V' ||
   first === '--version' ||
   (first !== undefined && topLevelCommands.has(first))
-if (first === undefined && canHostSessionsUi()) {
-  const { runAction } = await import('./lib/output')
-  await runAction(() =>
-    runSessionsUi({ buildStartRequest: defaultStartRequest }),
-  )
+if (first === undefined) {
+  program.outputHelp()
 } else {
   if (!isTopLevel) {
     // One bare word is far more likely a mistyped command than a prompt, so
@@ -101,7 +94,7 @@ if (first === undefined && canHostSessionsUi()) {
       console.error(commandTypoMessage(rest[0]!, suggestableCommands))
       process.exit(1)
     }
-    process.argv.splice(2, 0, 'session', 'start', '--connect')
+    process.argv.splice(2, 0, 'session', 'start')
   }
   await program.parseAsync(process.argv)
 }

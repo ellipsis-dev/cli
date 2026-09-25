@@ -46,10 +46,8 @@ import type {
 } from '../lib/types'
 import { repoFromCwd } from '../lib/git'
 import { openBrowser } from '../lib/auth'
-import { registerConnect, runConnect } from './connect'
-import { canHostSessionsUi, defaultStartRequest, runSessionsUi } from '../ui/launch'
 import { readImageAttachment } from '../lib/images'
-import { formatStepLine, oneLine, recordText } from '../lib/steps'
+import { formatStepLine, recordText } from '../lib/steps'
 import {
   parseRepo,
   withSessionPrompt,
@@ -78,18 +76,14 @@ const TERMINAL_STATUSES: ReadonlySet<AgentSessionStatus> = new Set<AgentSessionS
 
 export function registerSession(program: Command): void {
   const session = alsoKnownAs(
-    program.command('session').description('Start, inspect, and connect to agent sessions'),
+    program.command('session').description('Start, inspect, and follow agent sessions'),
     'sessions',
   )
-
-  // `session connect` lives in connect.ts (the interactive terminal window
-  // into a cloud session); registered here so it sits with its siblings.
-  registerConnect(session)
 
   apiRoutes(
     session.command('start').description('Start a new agent session in the cloud'),
     'POST /v1/sessions',
-    'WS /v1/sessions/{id}/stream with --watch or --connect',
+    'WS /v1/sessions/{id}/stream with --watch',
   )
     .argument(
       '[prompt...]',
@@ -160,10 +154,6 @@ export function registerSession(program: Command): void {
       '--quiet',
       'with --watch, wait without streaming: print only the final result and exit with a matching code',
     )
-    .option(
-      '--connect',
-      'after starting, open the conversation: follow it live and send messages',
-    )
     .option('--json', 'output raw JSON')
     .action(
       async (
@@ -189,7 +179,6 @@ export function registerSession(program: Command): void {
           detach?: boolean
           watch?: boolean
           quiet?: boolean
-          connect?: boolean
           json?: boolean
         },
       ) => {
@@ -210,21 +199,13 @@ export function registerSession(program: Command): void {
           }
           const promptText = promptArg ?? opts.prompt
           // At most one attach mode. --detach is the default made explicit;
-          // --watch blocks (live, or quiet with --quiet); --connect is interactive.
-          const modes = [
-            opts.detach && '--detach',
-            opts.watch && '--watch',
-            opts.connect && '--connect',
-          ].filter(Boolean)
+          // --watch blocks (live, or quiet with --quiet).
+          const modes = [opts.detach && '--detach', opts.watch && '--watch'].filter(Boolean)
           if (modes.length > 1) {
             throw new Error(`provide at most one of ${modes.join(' / ')}`)
           }
           if (opts.quiet && !opts.watch) {
             throw new Error('--quiet only applies with --watch')
-          }
-          // --connect takes over the terminal, so it can't emit the NDJSON stream.
-          if (opts.connect && opts.json) {
-            throw new Error('--connect is interactive and cannot be combined with --json')
           }
           // The flat raw-session body: a SessionConfig plus run settings;
           // there is no base config to merge onto (a saved automation is
@@ -283,9 +264,7 @@ export function registerSession(program: Command): void {
 
           // Transparency for the environment resolution: say which environment
           // the server resolved when the session didn't name one (the agent
-          // config's own reference). The connect
-          // UI shows it in its footer meta line (anything printed before the
-          // app would land in scrollback); every other mode prints this note.
+          // config's own reference).
           let configNote: string | undefined
           const environmentSource = session.environment?.source
           if (session.environment?.id && environmentSource !== 'request') {
@@ -295,25 +274,6 @@ export function registerSession(program: Command): void {
                 : environmentSource
             const note = `using environment ${session.environment.id} (${label})`
             configNote = configNote ? `${configNote}; ${note}` : note
-          }
-
-          if (opts.connect) {
-            // A non-interactive config refuses the stream/messages surface, so
-            // a connect would fail; degrade to watching the output instead.
-            // The wire session carries no config blob, so interactivity comes
-            // from the same projection POST /messages enforces.
-            if (!session.lifecycle.prompting.enabled) {
-              if (configNote) console.log(configNote)
-              console.log(
-                'this agent is not interactive; watching output instead of connecting',
-              )
-              console.log(`✓ started session ${session.id}`)
-              await printSessionUrl(client, session.id)
-              await watchSessionStreaming(client, session.id, FALLBACK_POLL_INTERVAL_SECONDS, false)
-              return
-            }
-            await startConnect(session, undefined, sessionConfigName(session) ?? undefined)
-            return
           }
 
           if (!opts.json && configNote) console.log(configNote)
@@ -605,32 +565,6 @@ export function registerSession(program: Command): void {
     })
 }
 
-// `start --connect`: drop straight into the multi-session UI focused on the
-// fresh session (or the solo connect when no TTY hosts the sidebar). The
-// chat renders the sandbox lifecycle (creating sandbox → spawning agent
-// process) as it happens and reports a terminal status reached before the
-// sandbox ever ran (a preflight/budget gate), so there is nothing to wait
-// for out here.
-export async function startConnect(
-  session: AgentSession,
-  notice?: string,
-  // The start response's resolved config name, which the session itself does
-  // not carry; shown in the chat footer's meta line.
-  resolvedConfigName?: string,
-): Promise<void> {
-  const configName = resolvedConfigName ?? sessionConfigName(session) ?? undefined
-  if (canHostSessionsUi()) {
-    await runSessionsUi({
-      initialSessionId: session.id,
-      initialConfigName: configName,
-      initialNotice: notice,
-      buildStartRequest: defaultStartRequest,
-    })
-    return
-  }
-  await runConnect(session.id, true, false, notice, configName)
-}
-
 // `--watch` entry point: stream the session's output live over WebSocket, and
 // fall back to REST status polling if streaming is unavailable (e.g. a
 // backend without the endpoint). Identical UX either way — the same flag
@@ -703,7 +637,7 @@ function renderFrameHuman(frame: StreamFrame, statusWord?: string): void {
       break
     case 'records_append': {
       // Raw records, rendered client-side (the semantic-relay philosophy):
-      // one line per transcript item, same shaping as `session connect`.
+      // one line per transcript item.
       // Lifecycle records render too (recordToItems shapes them through
       // lifecycleText): the startup narrative — scheduled, phase
       // transitions with cache tier + duration, setup output, ready —
@@ -928,8 +862,8 @@ export async function resolveAuthorId(client: Ellipsis, login: string): Promise<
   )
 }
 
-// formatStepLine / recordText moved to lib/steps.ts (shared with `session
-// connect`); re-exported here for existing importers and tests.
+// formatStepLine / recordText live in lib/steps.ts; re-exported here for
+// existing importers and tests.
 export { formatStepLine, recordText }
 
 // Pull one session-log segment's raw .jsonl.gz bytes from its presigned S3 URL

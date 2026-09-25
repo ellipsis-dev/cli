@@ -35,7 +35,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-run() { echo "+ agent $*"; npx tsx src/cli.tsx "$@"; echo; }
+run() { echo "+ agent $*"; npx tsx src/cli.ts "$@"; echo; }
 
 echo "API base:   $API_BASE"
 echo "Container:  $CONTAINER"
@@ -61,7 +61,7 @@ echo "Approving as customer: $CUSTOMER_ID"
 echo
 
 echo "== Starting login (device-code flow) =="
-npx tsx src/cli.tsx login --no-browser >"$LOGIN_OUT" 2>&1 &
+npx tsx src/cli.ts login --no-browser >"$LOGIN_OUT" 2>&1 &
 LOGIN_PID=$!
 
 # Wait for the CLI to print the verification code (format XXXX-XXXX).
@@ -108,7 +108,7 @@ run session list --limit 5
 
 echo "== Logout should clear the token (next call 401s) =="
 run logout
-if npx tsx src/cli.tsx me 2>/dev/null; then
+if npx tsx src/cli.ts me 2>/dev/null; then
   echo "UNEXPECTED: 'me' succeeded after logout" >&2
   exit 1
 fi
