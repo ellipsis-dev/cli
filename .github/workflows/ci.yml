@@ -18,8 +18,29 @@ jobs:
       - run: bun run typecheck
       - run: bun run test
       - run: bun run build
+      - run: shellcheck install.sh
       # Compile-smoke: the release Bun-compiles a single binary, which bundles
       # everything (unlike tsup) and can fail where `build` passes. Catch that
       # here so a release tag never breaks on it.
       - run: bun build src/cli.ts --compile --outfile /tmp/agent
       - run: /tmp/agent --version
+      # Install-smoke: run install.sh for real against the binary above, laid
+      # out the way GitHub Releases serves it, then let the binary remove
+      # itself. GITHUB_PATH is unset so the startup-file branch is exercised.
+      - name: install.sh and agent uninstall round trip
+        run: |
+          set -euo pipefail
+          site="$RUNNER_TEMP/releases/latest/download"
+          mkdir -p "$site" "$RUNNER_TEMP/home"
+          tar -czf "$site/agent-linux-x64.tar.gz" -C /tmp agent
+          (cd "$site" && sha256sum agent-linux-x64.tar.gz > checksums.txt)
+          python3 -m http.server 8123 --directory "$RUNNER_TEMP/releases" >/dev/null 2>&1 &
+          sleep 1
+          env -u GITHUB_PATH HOME="$RUNNER_TEMP/home" SHELL=/bin/bash \
+            ELLIPSIS_DOWNLOAD_BASE=http://127.0.0.1:8123 \
+            sh install.sh --dir "$RUNNER_TEMP/bin"
+          "$RUNNER_TEMP/bin/agent" --version
+          grep -q "Ellipsis agent installer" "$RUNNER_TEMP/home/.bashrc"
+          HOME="$RUNNER_TEMP/home" "$RUNNER_TEMP/bin/agent" uninstall
+          test ! -e "$RUNNER_TEMP/bin/agent"
+          ! grep -q "Ellipsis agent installer" "$RUNNER_TEMP/home/.bashrc"

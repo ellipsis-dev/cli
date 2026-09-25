@@ -37,10 +37,10 @@ echo "Config dir:  $CONFIG_DIR (temporary)"
 echo
 
 echo "== Logging in (approve the printed request, then this continues) =="
-npx tsx src/cli.ts login --no-browser
+npx tsx src/cli.ts auth login --no-browser
 
 echo "== Authenticated API calls =="
-run me
+run auth status
 run budget
 run usage
 run config list
@@ -48,7 +48,7 @@ run session list --limit 5
 
 echo "== Logout should clear the token (next call 401s) =="
 run logout
-if npx tsx src/cli.ts me; then
+if npx tsx src/cli.ts auth status; then
   echo "UNEXPECTED: 'me' succeeded after logout" >&2
   exit 1
 else

@@ -51,7 +51,7 @@ export function registerHost(program: Command): void {
 
   host
     .command('add <name> <api-url>')
-    .description('Add a host and switch to it, then run `agent login` to authenticate')
+    .description('Add a host and switch to it, then run `agent auth login` to authenticate')
     .option(
       '--app-base <url>',
       'dashboard URL for building links / login (default: derived from the API URL)',
@@ -59,7 +59,7 @@ export function registerHost(program: Command): void {
     .action((name: string, apiUrl: string, opts: { appBase?: string }) => {
       addHost(name, requireUrl(apiUrl, 'api-url'), opts.appBase && requireUrl(opts.appBase, '--app-base'))
       console.log(`✓ added host "${name}", now active`)
-      console.log('Run `agent login` to authenticate against it.')
+      console.log('Run `agent auth login` to authenticate against it.')
     })
 
   host

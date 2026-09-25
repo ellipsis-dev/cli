@@ -14,7 +14,7 @@ export function automationUrl(appBase: string, accountLogin: string, automationI
   return `${appBase}/${encodeURIComponent(accountLogin)}/automations/${encodeURIComponent(automationId)}`
 }
 
-// The device-code approval page for `agent login`. `userCode` is the user_code
+// The device-code approval page for `agent auth login`. `userCode` is the user_code
 // minted by POST /cli-auth/start. Built client-side from the active host's
 // app base (not the server's verification_uri_complete) so the host always
 // matches the instance the CLI is pointed at: the backend fills its own copy
@@ -23,11 +23,4 @@ export function automationUrl(appBase: string, accountLogin: string, automationI
 // instance can never be approved.
 export function cliAuthUrl(appBase: string, userCode: string): string {
   return `${appBase}/cli-auth?code=${encodeURIComponent(userCode)}`
-}
-
-// The dashboard sign-in page, where a new customer installs the Ellipsis
-// GitHub App. Built from the active host's app base for the same reason as
-// cliAuthUrl: a beta or self-hosted CLI must not send its user to prod.
-export function appLoginUrl(appBase: string): string {
-  return `${appBase}/login`
 }

@@ -10,8 +10,27 @@ authenticates, opens a WebSocket, and streams results. It is open source
 ## Install
 
 ```sh
-brew install ellipsis-dev/cli/agent
+curl -fsSL https://raw.githubusercontent.com/ellipsis-dev/cli/main/install.sh | sh
 ```
+
+The script downloads the binary for your OS and CPU from GitHub Releases,
+checks its SHA-256, and puts it at `~/.local/bin/agent`. If that directory is
+not on your PATH, it appends one line to your shell's startup file
+(`--no-modify-path` to skip that). Pin a version with `ELLIPSIS_VERSION=2.30.0`
+or `sh -s -- --version 2.30.0`; choose the directory with `--dir`.
+
+In CI the same line works: inside GitHub Actions the directory is added to
+`GITHUB_PATH`, and in a container `--dir /usr/local/bin` skips PATH setup
+entirely. Alpine images get the musl build automatically.
+
+```sh
+agent update       # replace the binary with the latest release (--check to only look)
+agent uninstall    # remove the binary and the PATH line (--purge to delete ~/.ellipsis too)
+```
+
+An installed binary checks for a newer release once a day, in the background,
+and prints one line on stderr when it finds one. `ELLIPSIS_NO_UPDATE_CHECK=1`
+turns that off; it is already off when `CI` is set or stderr is not a terminal.
 
 ## Teach your coding agent about Ellipsis
 
@@ -39,10 +58,9 @@ skills:
 ## Usage
 
 ```sh
-agent install                     # open the dashboard sign-in page, where you install Ellipsis
-agent login                       # device-code auth against the active host
-agent logout                      # remove stored credentials (--all for every host)
-agent me                          # show the current credential's identity
+agent auth login                  # device-code auth against the active host
+agent auth logout                 # remove stored credentials (--all for every host)
+agent auth status                 # active host, where the token came from, and who you are
 
 agent host list                   # list configured hosts (the active one is marked *)
 agent host add beta https://beta-api.ellipsis.dev   # add a host and switch to it
@@ -104,7 +122,8 @@ agent usage                       # usage dashboard for the period
 agent analytics reviewer --account-type bot   # which apps review the most PRs
 agent analytics pr --days 30      # PR volume/trend with human vs bot splits
 agent analytics review --repo my-service      # review totals + top reviewers
-agent ping                        # check authenticated API connectivity
+agent update                      # update the CLI to the latest release (--to <x.y.z> for a specific one)
+agent uninstall                   # remove the CLI from this machine (--purge to delete ~/.ellipsis too)
 ```
 
 Every command shown is singular. The plural spelling of each (`agent files`,
@@ -126,7 +145,7 @@ prints a clickable dashboard link. How the stream works is described in
 
 ### Auth
 
-`agent login` uses the device-code flow: it requests a code pair, prints a
+`agent auth login` uses the device-code flow: it requests a code pair, prints a
 verification URL (and opens it unless `--no-browser`), and polls until you
 approve the request in the dashboard. The issued user token is stored under
 `~/.ellipsis/config.json` (mode 0600) and attributes sessions to you.
@@ -136,8 +155,7 @@ environment (`ELLIPSIS_API_TOKEN` / `ELLIPSIS_API_BASE_URL`, with the legacy
 `ELLIPSIS_API_BASE` accepted as a fallback) → the **active host** in the config
 file → default (prod). This lets the CLI run headlessly — e.g. inside an
 Ellipsis cloud sandbox where a per-sandbox token and base URL are injected into
-the environment — with no `agent login` and no config file on disk. `agent
-logout` only clears the on-disk token (`--all` for every host); a token supplied
+the environment — with no `agent auth login` and no config file on disk. `agent auth logout` only clears the on-disk token (`--all` for every host); a token supplied
 via `ELLIPSIS_API_TOKEN` lives in the environment and keeps working until you
 unset it.
 
@@ -151,8 +169,7 @@ them all (the active one marked `*`). Each host keeps its own token (so
 switching doesn't re-authenticate) and its own dashboard/app URL. The app URL
 is derived from the API URL by default (`api.` → `app.`); a self-hosted instance
 whose dashboard host isn't a mechanical swap sets it explicitly with `agent host
-add … --app-base <url>` (or `agent host set <name> --app-base <url>`). `agent
-login` then authenticates the active host, and every link the CLI prints points
+add … --app-base <url>` (or `agent host set <name> --app-base <url>`). `agent auth login` then authenticates the active host, and every link the CLI prints points
 at that host's dashboard.
 
 Hosts and tokens live in `~/.ellipsis/config.json` (mode 0600); set
@@ -228,19 +245,15 @@ npm run compile             # single-binary build (bun)
 ### Releasing
 
 Pushing a `v*` tag triggers `.github/workflows/release.yml`, which Bun-compiles
-binaries for macOS and Linux (arm64 + x64), publishes a GitHub release with the
-tarballs, and regenerates the formula in
-[`ellipsis-dev/homebrew-cli`](https://github.com/ellipsis-dev/homebrew-cli).
+one binary per target (macOS arm64 and x64, Linux arm64 and x64, both glibc
+and musl), and publishes a GitHub release with the tarballs and a
+`checksums.txt`. `install.sh` and `agent update` download from that release,
+so publishing it is the whole distribution step. See
+[`docs/RELEASING.md`](docs/RELEASING.md).
 
 ```sh
 git tag v2.30.0 && git push origin v2.30.0
 ```
-
-The cross-repo push to the tap uses a write-scoped **deploy key**: the public
-half is registered on `ellipsis-dev/homebrew-cli` (Settings → Deploy keys, write
-access), and the private half is stored as the `HOMEBREW_TAP_DEPLOY_KEY` secret
-on this repo. The workflow checks out the tap over SSH with it. A deploy key is
-scoped to that one repo only — no account-wide PAT involved.
 
 ### Status
 
