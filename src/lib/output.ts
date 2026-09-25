@@ -68,12 +68,12 @@ export function usd(amount: number): string {
 // malformed) regardless of which endpoint hit it, so tell the user how to get
 // a new one instead of echoing the raw HTTP failure. The remedy depends on
 // where the token came from: an env token outranks the config file in the
-// precedence chain, so `agent login` alone can't replace it.
+// precedence chain, so `agent auth login` alone can't replace it.
 export function friendlyErrorMessage(err: unknown): string {
   if (err instanceof APIError && err.status === 401) {
     return envToken()
-      ? 'The server rejected ELLIPSIS_API_TOKEN. Check the token, or unset it and run `agent login`.'
-      : 'Your login is invalid or has expired. Run `agent login` to re-authenticate.'
+      ? 'The server rejected ELLIPSIS_API_TOKEN. Check the token, or unset it and run `agent auth login`.'
+      : 'Your login is invalid or has expired. Run `agent auth login` to re-authenticate.'
   }
   // A 429 message is written for a human to act on (which limit was hit, how
   // to get it raised), so print it alone — the status prefix buries the remedy.
@@ -111,7 +111,7 @@ function upgradeHint(): string {
   return (
     `It's possible we shipped a breaking change to our API. ` +
     `You are currently on version ${VERSION}. ` +
-    'Check if there is a newer CLI version available by running: brew upgrade ellipsis-dev/cli/agent'
+    'Check for a newer CLI by running: agent update'
   )
 }
 

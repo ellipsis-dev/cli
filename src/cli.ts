@@ -1,8 +1,6 @@
 import { Command } from 'commander'
-import { registerInstall } from './commands/install'
-import { registerLogin } from './commands/login'
+import { registerAuth } from './commands/auth'
 import { registerHost } from './commands/host'
-import { registerMe } from './commands/me'
 import { registerSession } from './commands/session'
 import { registerReview } from './commands/review'
 import { registerAutomation } from './commands/automation'
@@ -18,11 +16,13 @@ import { registerLinear } from './commands/linear'
 import { registerSentry } from './commands/sentry'
 import { registerUsage } from './commands/usage'
 import { registerAnalytics } from './commands/analytics'
-import { registerPing } from './commands/ping'
+import { registerUpdate } from './commands/update'
+import { registerUninstall } from './commands/uninstall'
 import { registerHelp } from './commands/help'
 import { commandTypoMessage, looksLikeCommandTypo } from './lib/args'
 import { VERSION } from './lib/constants'
 import { configureCliHelp } from './lib/help'
+import { maybeNudgeUpdate } from './lib/update-check'
 
 const program = new Command()
 
@@ -35,10 +35,8 @@ program
 // rendering (sorted, alias-free, grouped at the top level).
 configureCliHelp(program)
 
-registerInstall(program)
-registerLogin(program)
+registerAuth(program)
 registerHost(program)
-registerMe(program)
 registerSession(program)
 registerReview(program)
 registerAutomation(program)
@@ -54,7 +52,8 @@ registerLinear(program)
 registerSentry(program)
 registerUsage(program)
 registerAnalytics(program)
-registerPing(program)
+registerUpdate(program)
+registerUninstall(program)
 registerHelp(program)
 
 // A bare `agent` prints the top-level help, the same page as `agent --help`.
@@ -76,6 +75,10 @@ const topLevelCommands = new Set([
 // Hidden plural aliases dispatch, but a "did you mean" hint should only ever
 // name the spelling we document.
 const suggestableCommands = ['help', ...program.commands.map((c) => c.name())]
+// One stderr line when a newer release is known, plus the daily background
+// check that learns about it. Never blocks, never fails the command.
+maybeNudgeUpdate(process.argv)
+
 const first = process.argv[2]
 const isTopLevel =
   first === '-h' ||

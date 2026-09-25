@@ -372,11 +372,9 @@ the dashboard uses. Most commands accept `--json` for the raw API response,
 which makes it as comfortable for a coding agent as for a human.
 
 ```sh
-brew install ellipsis-dev/cli/agent
-agent install     # opens the dashboard page that installs the GitHub app
-agent login       # device-code flow tied to your GitHub identity
-agent ping        # confirms the API is reachable and the credential is valid
-agent me          # the identity behind the current credential
+curl -fsSL https://raw.githubusercontent.com/ellipsis-dev/cli/main/install.sh | sh
+agent auth login   # device-code flow tied to your GitHub identity
+agent auth status  # the active host, the credential source, and who you are
 ```
 
 In CI or any headless environment, skip the login: create an API key in the

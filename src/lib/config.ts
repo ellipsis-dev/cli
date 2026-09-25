@@ -175,7 +175,7 @@ export function updateHost(
 
 // Ensure there IS an active host, seeding one at the resolved base (env or
 // prod default) if the user logged in / enrolled before adding a host. Returns
-// the active host's name. This is what makes a bare `agent login` work.
+// the active host's name. This is what makes a bare `agent auth login` work.
 export function ensureActiveHost(): string {
   const cfg = loadConfig()
   if (cfg.activeHost && cfg.hosts[cfg.activeHost]) return cfg.activeHost
@@ -255,7 +255,7 @@ export function requireToken(): string {
   const token = resolveToken()
   if (!token) {
     throw new Error(
-      'Not logged in. Run `agent login` first, or set ELLIPSIS_API_TOKEN.',
+      'Not logged in. Run `agent auth login` first, or set ELLIPSIS_API_TOKEN.',
     )
   }
   return token

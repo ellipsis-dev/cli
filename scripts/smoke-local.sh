@@ -3,7 +3,7 @@
 # Fully-automated end-to-end smoke test against a LOCAL docker compose backend.
 #
 # Unlike scripts/smoke.sh (which waits for you to approve the login by hand),
-# this drives the whole device-code flow itself: it starts `agent login`,
+# this drives the whole device-code flow itself: it starts `agent auth login`,
 # scrapes the user code, and approves it headlessly by calling the cli_auth
 # service inside the running `public_api` container — then exercises the
 # authenticated API surface. Uses a throwaway config dir, so your real token is
@@ -61,7 +61,7 @@ echo "Approving as customer: $CUSTOMER_ID"
 echo
 
 echo "== Starting login (device-code flow) =="
-npx tsx src/cli.ts login --no-browser >"$LOGIN_OUT" 2>&1 &
+npx tsx src/cli.ts auth login --no-browser >"$LOGIN_OUT" 2>&1 &
 LOGIN_PID=$!
 
 # Wait for the CLI to print the verification code (format XXXX-XXXX).
@@ -100,7 +100,7 @@ cat "$LOGIN_OUT"
 echo
 
 echo "== Authenticated API calls =="
-run me
+run auth status
 run budget
 run usage
 run config list
@@ -108,7 +108,7 @@ run session list --limit 5
 
 echo "== Logout should clear the token (next call 401s) =="
 run logout
-if npx tsx src/cli.ts me 2>/dev/null; then
+if npx tsx src/cli.ts auth status 2>/dev/null; then
   echo "UNEXPECTED: 'me' succeeded after logout" >&2
   exit 1
 fi

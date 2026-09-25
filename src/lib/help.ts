@@ -23,7 +23,8 @@ const TOP_LEVEL_GROUPS: ReadonlyArray<{ title: string; commands: readonly string
   { title: 'Platform', commands: ['variable', 'file'] },
   { title: 'Integrations', commands: ['integration', 'github', 'slack', 'linear', 'sentry'] },
   { title: 'Spend', commands: ['budget', 'usage', 'analytics'] },
-  { title: 'Account', commands: ['install', 'login', 'logout', 'me', 'host', 'ping'] },
+  { title: 'Account', commands: ['auth', 'host'] },
+  { title: 'CLI', commands: ['update', 'uninstall'] },
   { title: 'Help', commands: ['help'] },
 ]
 

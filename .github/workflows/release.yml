@@ -47,11 +47,14 @@ jobs:
           bun run typecheck
           bun run test
 
+      # One tarball per target. install.sh and `agent update` pick the one for
+      # the machine they run on, so the list here must match RELEASE_TARGETS in
+      # src/lib/install.ts (test/install.test.ts checks).
       - name: Build platform binaries
         run: |
           set -euo pipefail
           mkdir -p dist
-          for t in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
+          for t in darwin-arm64 darwin-x64 linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl; do
             echo "::group::build $t"
             bun build src/cli.ts --compile --target=bun-"$t" --outfile agent
             tar -czf "dist/agent-$t.tar.gz" agent
@@ -59,16 +62,13 @@ jobs:
             echo "::endgroup::"
           done
 
+      # checksums.txt is what install.sh and `agent update` verify against.
       - name: Compute checksums
-        id: sha
         run: |
           set -euo pipefail
           cd dist
-          for t in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
-            sum=$(sha256sum "agent-$t.tar.gz" | cut -d' ' -f1)
-            echo "${t//-/_}=$sum" >> "$GITHUB_OUTPUT"
-          done
           sha256sum *.tar.gz > checksums.txt
+          cat checksums.txt
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
@@ -77,38 +77,3 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/checksums.txt
-
-      - name: Check out the Homebrew tap
-        uses: actions/checkout@v7
-        with:
-          repository: ellipsis-dev/homebrew-cli
-          # Write-scoped deploy key for the tap repo only (the workflow's own
-          # GITHUB_TOKEN can't reach a second repo). checkout configures the SSH
-          # remote + key, so the push step below authenticates over SSH.
-          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
-          path: tap
-
-      - name: Regenerate the formula
-        run: |
-          set -euo pipefail
-          sed \
-            -e "s|__VERSION__|${{ steps.version.outputs.version }}|g" \
-            -e "s|__SHA_DARWIN_ARM64__|${{ steps.sha.outputs.darwin_arm64 }}|g" \
-            -e "s|__SHA_DARWIN_X64__|${{ steps.sha.outputs.darwin_x64 }}|g" \
-            -e "s|__SHA_LINUX_ARM64__|${{ steps.sha.outputs.linux_arm64 }}|g" \
-            -e "s|__SHA_LINUX_X64__|${{ steps.sha.outputs.linux_x64 }}|g" \
-            .github/homebrew/agent.rb.tmpl > tap/Formula/agent.rb
-
-      - name: Commit and push the formula
-        run: |
-          set -euo pipefail
-          cd tap
-          git config user.name "ellipsis-bot"
-          git config user.email "bot@ellipsis.dev"
-          git add Formula/agent.rb
-          if git diff --cached --quiet; then
-            echo "Formula unchanged; nothing to push."
-          else
-            git commit -m "agent ${{ steps.version.outputs.version }}"
-            git push
-          fi
