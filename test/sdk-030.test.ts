@@ -6,9 +6,9 @@ import { parse } from 'yaml'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { registerAutomation } from '../src/commands/automation'
 import { registerEnvironment } from '../src/commands/environment'
-import { registerSession, watchSession } from '../src/commands/session'
+import { pollTurn, registerSession } from '../src/commands/session'
 import { api } from '../src/lib/api'
-import { session } from './fixtures/session'
+import { session, turn } from './fixtures/session'
 
 let dir: string
 let requests: { url: URL; body: Record<string, unknown> | undefined }[]
@@ -95,9 +95,13 @@ describe('SDK 0.30 request contracts', () => {
     expect(config).not.toHaveProperty('image')
   })
 
-  it.each(['completed', 'budget_hit'] as const)('uses the execution outcome when a conversation closes: %s', async (reason) => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ session: session({ lifecycle: { status: 'closed', last_execution_result: { completion_reason: reason, detail: null } } }) }))))
-    await watchSession(api(), 's_1', 1, true)
-    expect(process.exitCode).toBe(reason === 'completed' ? 0 : 1)
+  it.each([
+    ['completed', null, 0],
+    ['failed', 'budget_hit', 1],
+  ] as const)('waits on the turn and exits by how it ended: %s', async (status, reason, code) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ turn: turn({ status, reason }) }))))
+    await pollTurn(api(), 's_1', 'turn_1', 1, true)
+    expect(requests.length).toBe(0)
+    expect(process.exitCode).toBe(code)
   })
 })

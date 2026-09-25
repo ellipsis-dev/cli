@@ -41,17 +41,15 @@ export const SESSION_SOURCES = [
   'cron',
 ] as const
 
+// Turn statuses: the session search filter matches on the session's turn.
 export const SESSION_STATUSES = [
-  'scheduled',
-  'creating_sandbox',
+  'pending',
   'running',
-  'retrying',
   'completed',
-  'error',
-  'cancelled',
+  'failed',
   'stopped',
+  'cancelled',
 ] as const
-
 
 function oneOf(kind: string, allowed: readonly string[], value: string): string {
   if (!allowed.includes(value)) {

@@ -5,20 +5,26 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildStartOverride,
+  exitCodeForStatus,
   fetchLogSegment,
+  pollTurn,
   readConfigFile,
-  watchSession,
+  turnStatusText,
+  watchTurn,
 } from '../src/commands/session'
 import type { Ellipsis } from '@ellipsis-dev/sdk'
-import type { AgentSession, AgentSessionStatus, SessionLogSegment } from '../src/lib/types'
+import type { SessionLogSegment, TurnStatus } from '../src/lib/types'
 
-import { session as makeSession } from './fixtures/session'
+import { session as makeSession, turn as makeTurn } from './fixtures/session'
 
-function session(status: AgentSessionStatus): AgentSession {
-  return makeSession({ lifecycle: { status } })
+// A client whose turns.get answers each poll with the next status in order.
+function turnsClient(statuses: TurnStatus[]): { client: Ellipsis; get: ReturnType<typeof vi.fn> } {
+  const get = vi.fn()
+  for (const status of statuses) get.mockResolvedValueOnce({ turn: makeTurn({ status }) })
+  return { client: { sessions: { turns: { get } } } as unknown as Ellipsis, get }
 }
 
-describe('watchSession', () => {
+describe('pollTurn', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -26,58 +32,94 @@ describe('watchSession', () => {
   afterEach(() => {
     vi.useRealTimers()
     vi.restoreAllMocks()
+    process.exitCode = 0
   })
 
-  it('polls until a terminal status, then stops', async () => {
-    const get = vi
-      .fn()
-      .mockResolvedValueOnce({ session: session('working') })
-      .mockResolvedValueOnce({ session: session('working') })
-      .mockResolvedValueOnce({ session: session('closed') })
-    const client = { sessions: { get } } as unknown as Ellipsis
+  it('polls the turn until a final status, then stops', async () => {
+    const { client, get } = turnsClient(['pending', 'running', 'completed'])
 
-    const promise = watchSession(client, 'session_1', 1, true)
-    await vi.advanceTimersByTimeAsync(1000) // 1st poll running -> sleep -> 2nd poll
+    const promise = pollTurn(client, 'session_1', 'turn_1', 1, true)
+    await vi.advanceTimersByTimeAsync(1000) // 1st poll pending -> sleep -> 2nd poll
     await vi.advanceTimersByTimeAsync(1000) // -> 3rd poll completed -> return
     await promise
 
     expect(get).toHaveBeenCalledTimes(3)
-    expect(get).toHaveBeenCalledWith('session_1')
+    expect(get).toHaveBeenCalledWith('session_1', 'turn_1')
   })
 
-  it('returns immediately when the session is already terminal', async () => {
-    const get = vi.fn().mockResolvedValueOnce({ session: session('failed') })
-    const client = { sessions: { get } } as unknown as Ellipsis
-
-    await watchSession(client, 'session_1', 5, true) // no timer advance needed
+  it('returns at once when the turn is already final', async () => {
+    const { client, get } = turnsClient(['failed'])
+    await pollTurn(client, 'session_1', 'turn_1', 5, true) // no timer advance needed
     expect(get).toHaveBeenCalledTimes(1)
   })
 
-  it('treats stopped/cancelled as terminal', async () => {
-    for (const status of ['stopped', 'cancelled'] as AgentSessionStatus[]) {
-      const get = vi.fn().mockResolvedValueOnce({ session: session(status) })
-      const client = { sessions: { get } } as unknown as Ellipsis
-      await watchSession(client, 'session_1', 5, true)
-      expect(get).toHaveBeenCalledTimes(1)
-    }
-  })
+  it.each(['failed', 'stopped', 'cancelled'] as const)(
+    'sets a failure exit code when the turn ended %s',
+    async (status) => {
+      const { client } = turnsClient([status])
+      await pollTurn(client, 'session_1', 'turn_1', 5, true)
+      expect(process.exitCode).toBe(1)
+    },
+  )
 
-  it('sets a failure exit code on a non-completed terminal status (for --wait)', async () => {
-    process.exitCode = 0
-    const get = vi.fn().mockResolvedValueOnce({ session: session('failed') })
-    const client = { sessions: { get } } as unknown as Ellipsis
-    await watchSession(client, 'session_1', 5, true)
-    expect(process.exitCode).toBe(1)
-    process.exitCode = 0
-  })
-
-  it('leaves the exit code clean on a completed status', async () => {
-    process.exitCode = 0
-    const get = vi.fn().mockResolvedValueOnce({ session: session('closed') })
-    const client = { sessions: { get } } as unknown as Ellipsis
-    await watchSession(client, 'session_1', 5, true)
+  it('leaves the exit code clean when the turn completed', async () => {
+    const { client } = turnsClient(['completed'])
+    await pollTurn(client, 'session_1', 'turn_1', 5, true)
     expect(process.exitCode).toBe(0)
+  })
+})
+
+describe('watchTurn', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
     process.exitCode = 0
+  })
+
+  it('has nothing to wait for when the session has no turn', async () => {
+    const { client, get } = turnsClient([])
+    await watchTurn(client, makeSession({ turn: null }), { quiet: true })
+    expect(get).not.toHaveBeenCalled()
+    expect(process.exitCode).toBe(0)
+  })
+
+  it('answers with the latest turn, without polling, when none is in progress', async () => {
+    const { client, get } = turnsClient([])
+    const failed = makeTurn({ status: 'failed', reason: 'budget_hit', detail: 'over budget' })
+    await watchTurn(client, makeSession({ turn: failed }), { quiet: true })
+    expect(get).not.toHaveBeenCalled()
+    expect(process.exitCode).toBe(1)
+  })
+
+  it('waits on the turn in progress', async () => {
+    const { client, get } = turnsClient(['completed'])
+    await watchTurn(client, makeSession({ turn: makeTurn({ status: 'running' }) }), { quiet: true })
+    expect(get).toHaveBeenCalledWith('session_1', 'turn_1')
+    expect(process.exitCode).toBe(0)
+  })
+})
+
+describe('turnStatusText / exitCodeForStatus', () => {
+  it('names the status, with the reason and detail a failed turn carries', () => {
+    expect(turnStatusText(makeTurn({ status: 'running' }))).toBe('running')
+    expect(
+      turnStatusText(
+        makeTurn({ status: 'failed', reason: 'budget_hit', detail: 'The session reached its budget.' }),
+      ),
+    ).toBe('failed (budget_hit): The session reached its budget.')
+    expect(turnStatusText(makeTurn({ status: 'stopped', detail: 'Stopped by hbrooks.' }))).toBe(
+      'stopped: Stopped by hbrooks.',
+    )
+    expect(turnStatusText(null)).toBe('none')
+  })
+
+  it('exits 0 only for a completed turn', () => {
+    expect(exitCodeForStatus('completed')).toBe(0)
+    for (const status of ['failed', 'stopped', 'cancelled', 'running', 'pending']) {
+      expect(exitCodeForStatus(status)).toBe(1)
+    }
   })
 })
 
@@ -243,7 +285,7 @@ describe('session start prompt positional', () => {
     let seen: string | undefined
     const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
       seen = JSON.parse(init?.body as string).claude_code?.prompt
-      return new Response(JSON.stringify({ session: session('scheduled') }), { status: 201 })
+      return new Response(JSON.stringify({ session: makeSession() }), { status: 201 })
     })
     vi.stubGlobal('fetch', fetchMock)
     vi.spyOn(console, 'log').mockImplementation(() => {})

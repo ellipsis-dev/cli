@@ -15,7 +15,8 @@ type S = components['schemas']
 
 export type AgentSession = S['Session']
 export type AgentSessionSource = S['SessionSource']
-export type AgentSessionStatus = S['SessionLifecycleStatus']
+export type SessionTurn = S['SessionTurn']
+export type TurnStatus = S['TurnStatus']
 // The frames flavor, not `S['SessionRecord']`: the spec marks defaulted fields
 // optional, but on the wire the server always serializes every field, and the
 // SDK's transcript store types its inputs this way. Using it here keeps records

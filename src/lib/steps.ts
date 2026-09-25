@@ -1,48 +1,6 @@
-import {
-  deriveSandboxState as sdkDeriveSandboxState,
-  lifecycleText as sdkLifecycleText,
-  sessionLogText as sdkSessionLogText,
-  oneLine,
-  claudePayload,
-  recordToItems,
-  type SandboxState,
-} from '@ellipsis-dev/sdk/store'
+import { claudePayload, lifecycleText, oneLine, recordToItems } from '@ellipsis-dev/sdk/store'
 import { formatTs } from './output'
 import type { SessionRecord } from './types'
-
-// Re-exported for the record-view callers below and their historical
-// importers; the implementations live in the SDK's store layer now.
-export { oneLine, sandboxOutputStep, sandboxOutputLine } from '@ellipsis-dev/sdk/store'
-
-// The SDK's wording, with its middot separators as commas — the CLI writes
-// plain sentences.
-const commas = (text: string): string => text.replaceAll(' · ', ', ')
-
-export function lifecycleText(
-  ...args: Parameters<typeof sdkLifecycleText>
-): string | null {
-  const text = sdkLifecycleText(...args)
-  return text === null ? null : commas(text)
-}
-
-export function sessionLogText(
-  ...args: Parameters<typeof sdkSessionLogText>
-): string | null {
-  const text = sdkSessionLogText(...args)
-  return text === null ? null : commas(text)
-}
-
-export function deriveSandboxState(
-  ...args: Parameters<typeof sdkDeriveSandboxState>
-): SandboxState | null {
-  const state = sdkDeriveSandboxState(...args)
-  if (!state) return null
-  return {
-    ...state,
-    headline: commas(state.headline),
-    log: state.log.map((line) => ({ ...line, text: commas(line.text) })),
-  }
-}
 
 // Record-rendering helpers for `session record` and the `--watch` log
 // (commands/session.ts re-exports them for compatibility).
@@ -63,25 +21,28 @@ function fields(record: SessionRecord): Record<string, unknown> {
   return (claudePayload(record) ?? record.payload) as Record<string, unknown>
 }
 
-// One session_record as a single display line: index, timestamp, record type,
-// and the first ~120 characters of its text content. Exported for tests.
+// One session_record as a single display line: feed position, timestamp,
+// record type, and the first ~120 characters of its text content. Exported
+// for tests.
 export function formatStepLine(record: SessionRecord): string {
   const raw = fields(record).subtype
   const subtype = typeof raw === 'string' ? raw : null
   const type = subtype ? `${record.record_type}/${subtype}` : record.record_type
   return [
-    String(record.stream_seq).padStart(4),
+    String(record.feed_seq).padStart(4),
     formatTs(record.created_at),
     type.padEnd(16),
     oneLine(recordText(record), 120),
   ].join('  ')
 }
 
-// Best-effort display text for a stored record. A lifecycle record shows its
-// notification line; a claude_code record's `payload` is the raw agent stream
-// event — a result step carries `result`, assistant/user steps carry `content`,
-// a string or a list of blocks (text, thinking, tool_use, tool_result).
-// Anything unrecognized falls back to its JSON.
+// Best-effort display text for a stored record. A platform record shows its
+// notification line (a record type the SDK has no copy for, including types
+// the platform no longer emits, shows its bare type); a claude_code record's
+// `payload` is the raw agent stream event — a result step carries `result`,
+// assistant/user steps carry `content`, a string or a list of blocks (text,
+// thinking, tool_use, tool_result). Anything unrecognized falls back to its
+// JSON.
 export function recordText(record: SessionRecord): string {
   const data = fields(record)
   if (record.kind === 'platform') {

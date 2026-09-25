@@ -17,7 +17,6 @@ import {
   collect,
   collectKeyValue,
   collectSource,
-  collectStatus,
   parseWhen,
   toInt,
   toNumber,
@@ -35,11 +34,10 @@ import {
 } from '@ellipsis-dev/sdk/stream'
 import { recordToItems } from '@ellipsis-dev/sdk/store'
 import { makeOpenSocket, resolveWsBase } from '../lib/stream'
-import type { Ellipsis, Session as FrameSession } from '@ellipsis-dev/sdk'
+import { isTurnFinal, type Ellipsis } from '@ellipsis-dev/sdk'
 import type {
   AgentSession,
   AgentSessionSource,
-  AgentSessionStatus,
   SessionLogSegment,
   SessionRecord,
   StartAgentSessionRequest,
@@ -64,15 +62,6 @@ export { startRequestFromConfig, withContextRepository }
 // Poll cadence for the `--watch` REST fallback (used only when live WebSocket
 // streaming is unavailable). Not user-configurable — the fallback is rare.
 const FALLBACK_POLL_INTERVAL_SECONDS = 2
-
-// Statuses past which a session no longer changes — `--watch` stops here.
-const TERMINAL_STATUSES: ReadonlySet<AgentSessionStatus> = new Set<AgentSessionStatus>([
-  'closed',
-  'idle',
-  'failed',
-  'cancelled',
-  'stopped',
-])
 
 export function registerSession(program: Command): void {
   const session = alsoKnownAs(
@@ -148,11 +137,11 @@ export function registerSession(program: Command): void {
     .option('-d, --detach', 'start and return immediately, the default')
     .option(
       '-w, --watch',
-      'block until the session reaches a terminal status, streaming live output',
+      'block until the opening turn ends (completed, failed, stopped, or cancelled), streaming live output',
     )
     .option(
       '--quiet',
-      'with --watch, wait without streaming: print only the final result and exit with a matching code',
+      'with --watch, wait without streaming: print only how the turn ended and exit with a matching code',
     )
     .option('--json', 'output raw JSON')
     .action(
@@ -251,13 +240,12 @@ export function registerSession(program: Command): void {
             req.images = opts.image.map((path) => readImageAttachment(path).attachment)
           }
           // Run settings ride top-level: --rebuild skips the image cache for
-          // the initial provision (wakes cache as usual; the fresh build's
-          // snapshot refreshes the cache).
+          // the initial provision (the fresh build's snapshot refreshes the
+          // cache).
           if (Object.keys(opts.metadata).length > 0) req.metadata = opts.metadata
           if (opts.rebuild) req.force_rebuild = true
-          // A promptless start opens idle: no fabricated kickoff message,
-          // Claude Code waits at the prompt like a local `claude` (the
-          // server-side contract since #6394 — nothing extra to send).
+          // A promptless start creates no turn: the session waits for its
+          // first message, nothing extra to send.
 
           const client = api()
           const { session } = await client.sessions.start(req)
@@ -283,18 +271,9 @@ export function registerSession(program: Command): void {
               console.log(`✓ started session ${session.id}`)
               await printSessionUrl(client, session.id)
             }
-            // --quiet blocks on status only (no live output stream); either way
-            // the terminal status sets the exit code.
-            if (opts.quiet) {
-              await watchSession(client, session.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
-            } else {
-              await watchSessionStreaming(
-                client,
-                session.id,
-                FALLBACK_POLL_INTERVAL_SECONDS,
-                opts.json,
-              )
-            }
+            // The opening turn is the one this start created; a promptless
+            // start has none to wait on.
+            await watchTurn(client, session, opts)
             return
           }
 
@@ -302,7 +281,8 @@ export function registerSession(program: Command): void {
             printJson(session)
             return
           }
-          console.log(`✓ started session ${session.id} (${session.lifecycle.status})`)
+          const opening = session.turn ? `turn ${session.turn.status}` : 'no turn yet'
+          console.log(`✓ started session ${session.id} (${opening})`)
           await printSessionUrl(client, session.id)
           console.log(`  follow with: ellipsis session get ${session.id} --watch`)
         })
@@ -370,12 +350,13 @@ export function registerSession(program: Command): void {
             return
           }
           printTable(
-            ['ID', 'STATUS', 'SOURCE', 'CREATED', 'COST'],
+            ['ID', 'CONVERSATION', 'TURN', 'SOURCE', 'CREATED', 'COST'],
             sessions.map((s) => [
               s.id,
-              s.lifecycle.status,
+              s.conversation.state,
+              s.turn?.status ?? '-',
               s.source ?? '-',
-              formatTs(s.lifecycle.timestamps.created_at),
+              formatTs(s.created_at),
               usdFromMillicents(s.cost?.total ?? 0),
             ]),
           )
@@ -503,15 +484,16 @@ export function registerSession(program: Command): void {
   apiRoutes(
     session
       .command('get <session-id>')
-      .description("Show one session's status, cost, and dashboard link"),
+      .description("Show one session's conversation state, turn, cost, and dashboard link"),
     'GET /v1/sessions/{id}',
     'WS /v1/sessions/{id}/stream with --watch',
+    'GET /v1/sessions/{id}/turns/{turn_id} with --watch --quiet',
   )
     .option(
       '-w, --watch',
-      'block until the session reaches a terminal status, streaming live output',
+      'block until the turn in progress ends (completed, failed, stopped, or cancelled), streaming live output',
     )
-    .option('--quiet', 'with --watch, wait without streaming: print only the final result')
+    .option('--quiet', 'with --watch, wait without streaming: print only how the turn ended')
     .option('--json', 'output raw JSON')
     .action(
       async (sessionId: string, opts: { watch?: boolean; quiet?: boolean; json?: boolean }) => {
@@ -522,16 +504,10 @@ export function registerSession(program: Command): void {
           }
           if (opts.watch) {
             if (!opts.json) await printSessionUrl(client, sessionId)
-            if (opts.quiet) {
-              await watchSession(client, sessionId, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
-            } else {
-              await watchSessionStreaming(
-                client,
-                sessionId,
-                FALLBACK_POLL_INTERVAL_SECONDS,
-                opts.json,
-              )
-            }
+            // The turn to wait on is the one in progress (running, else
+            // pending); with none, the latest turn's status is the answer.
+            const { session: s } = await client.sessions.get(sessionId)
+            await watchTurn(client, s, opts)
             return
           }
         if (opts.json) {
@@ -544,12 +520,12 @@ export function registerSession(program: Command): void {
           client.identity(),
         ])
         printSessionSummary(s)
-        console.log(`url:       ${sessionUrl(resolveAppBase(), me.customer_login, sessionId)}`)
+        console.log(row('url', sessionUrl(resolveAppBase(), me.customer_login, sessionId)))
       })
     })
 
   apiRoutes(
-    session.command('stop <session-id>').description('Stop an in-flight session'),
+    session.command('stop <session-id>').description("Stop a session's turn in progress"),
     'POST /v1/sessions/{id}/stop',
   )
     .option('--json', 'output raw JSON')
@@ -560,73 +536,173 @@ export function registerSession(program: Command): void {
           printJson(s)
           return
         }
-        console.log(`✓ stopped session ${sessionId} (${s.lifecycle.status})`)
+        console.log(`✓ stopped session ${sessionId} (turn ${turnStatusText(s.turn)})`)
       })
     })
 }
 
-// `--watch` entry point: stream the session's output live over WebSocket, and
-// fall back to REST status polling if streaming is unavailable (e.g. a
-// backend without the endpoint). Identical UX either way — the same flag
-// covers both.
-export async function watchSessionStreaming(
+// How a turn ended: its status plus the reason and detail a failed, stopped,
+// or cancelled turn carries. The wire's own words, so the human line and
+// `--json` never disagree.
+export interface TurnEnd {
+  status: string
+  reason: string | null
+  detail: string | null
+}
+
+// One line for where a turn is: `running`, `completed`, or
+// `failed (budget_hit): The session reached its budget.` `none` when the
+// session has no turn yet.
+export function turnStatusText(turn: TurnEnd | null | undefined): string {
+  if (!turn) return 'none'
+  const reason = turn.reason ? ` (${turn.reason})` : ''
+  const detail = turn.detail ? `: ${turn.detail}` : ''
+  return `${turn.status}${reason}${detail}`
+}
+
+// Exit 0 only when the turn completed; 1 when it failed, was stopped, or was
+// cancelled (see docs/SESSION_STREAMING.md).
+export function exitCodeForStatus(status: string): number {
+  return status === 'completed' ? 0 : 1
+}
+
+// `--watch` entry point: follow one turn until it reaches a final status.
+// `session.turn` is the turn to wait on: the opening turn a start created, or
+// the one in progress (running, else pending) that a GET found. With no turn
+// in progress there is nothing to wait for: the latest turn's status is the
+// answer, and the exit code follows it.
+export async function watchTurn(
+  client: Ellipsis,
+  session: AgentSession,
+  opts: { quiet?: boolean; json?: boolean },
+): Promise<void> {
+  const turn = session.turn
+  if (turn == null) {
+    if (opts.json) printJson(session)
+    else console.log(`session ${session.id} has no turn yet: nothing to wait for`)
+    return
+  }
+  if (isTurnFinal(turn.status)) {
+    if (opts.json) printJson(session)
+    endWatch(session.id, turn, opts.json)
+    return
+  }
+  if (opts.quiet) {
+    await pollTurn(client, session.id, turn.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+  } else {
+    await streamFrames(client, session.id, turn.id, FALLBACK_POLL_INTERVAL_SECONDS, opts.json)
+  }
+}
+
+// Follow a session's whole conversation live until it closes. A session that
+// runs once closes after its turn ended and the platform's teardown work is
+// done: a review's findings are collected then, so `ellipsis review` waits
+// for the close rather than the turn's end.
+export async function followConversation(
   client: Ellipsis,
   sessionId: string,
+  json?: boolean,
+): Promise<void> {
+  await streamFrames(client, sessionId, null, FALLBACK_POLL_INTERVAL_SECONDS, json)
+}
+
+// The watch's last word: one line naming how the turn ended, and the exit
+// code that goes with it. `--json` callers have already printed the turn.
+function endWatch(sessionId: string, turn: TurnEnd, json?: boolean): void {
+  if (!json) {
+    const mark = exitCodeForStatus(turn.status) === 0 ? '✓' : '✗'
+    console.log(`${mark} session ${sessionId} turn ${turnStatusText(turn)}`)
+  }
+  if (exitCodeForStatus(turn.status) !== 0) process.exitCode = 1
+}
+
+// Stream a session's output live over WebSocket, falling back to polling over
+// REST if streaming is unavailable (e.g. a backend without the endpoint).
+// With `turnId` the watch ends when that turn does; without one it follows
+// the whole conversation until it closes. Either way the last line names how
+// the turn ended and the exit code follows it.
+async function streamFrames(
+  client: Ellipsis,
+  sessionId: string,
+  turnId: string | null,
   intervalSeconds: number,
   json?: boolean,
 ): Promise<void> {
   const token = requireToken()
   const openSocket = makeOpenSocket(token, resolveWsBase(resolveApiBase()))
 
-  // Session frames are LWW snapshots resent on any change (cost ticks
-  // included), so collapse to status-word transitions — both to keep the
-  // human log quiet and the NDJSON stream clean of near-duplicates. Heartbeats
-  // are liveness only; deltas are ephemeral partials the committed record
-  // supersedes — a line-oriented log skips both.
-  let lastStatus: string | undefined
+  // The stream stays open for the whole conversation; a turn watch wants one
+  // turn of it. That turn's end arrives twice, as its turn_ended record
+  // (cursored, never lost) and on the session frame carrying its final
+  // status, and either one ends the watch, which closes the socket itself.
+  const abort = new AbortController()
+  // What the frames have said: the latest turn seen (the awaited one, or
+  // whichever turn the session is on) and, for a turn watch, its end once
+  // seen. Session frames are LWW snapshots resent on any change (cost ticks
+  // included), so they collapse to the turn's status transitions to keep the
+  // human log quiet and the NDJSON stream clean of near-duplicates.
+  // Heartbeats are liveness only; deltas are ephemeral partials the committed
+  // record supersedes: a line-oriented log skips both.
+  const seen: { turn: (TurnEnd & { id: string }) | null; end: TurnEnd | null } = {
+    turn: null,
+    end: null,
+  }
   const onFrame = (frame: StreamFrame) => {
-    if (frame.type === 'session' || frame.type === 'snapshot') {
-      const word = sessionStatusWord(
-        (frame as unknown as { session: FrameSession }).session,
-      )
-      if (word === lastStatus) return
-      lastStatus = word
-    }
     if (frame.type === 'heartbeat' || frame.type === 'delta') return
-    if (json) {
-      console.log(JSON.stringify(frame))
-      return
+    if (frame.type === 'snapshot' || frame.type === 'session') {
+      const turn = frame.session.turn
+      if (turn == null || (turnId != null && turn.id !== turnId)) return
+      if (turn.id === seen.turn?.id && turn.status === seen.turn.status) return
+      seen.turn = { id: turn.id, status: turn.status, reason: turn.reason, detail: turn.detail }
+      if (turnId != null && isTurnFinal(turn.status)) seen.end = seen.turn
+    } else if (frame.type === 'records_append') {
+      for (const record of frame.records) {
+        if (
+          turnId != null &&
+          record.kind === 'platform' &&
+          record.record_type === 'turn_ended' &&
+          record.payload.turn_id === turnId
+        ) {
+          const { status, reason, detail } = record.payload
+          seen.end = { status, reason: reason ?? null, detail: detail ?? null }
+        }
+      }
     }
-    renderFrameHuman(frame, lastStatus)
+    if (json) console.log(JSON.stringify(frame))
+    else renderFrameHuman(frame, seen.turn?.status)
+    if (seen.end) abort.abort()
   }
 
   let outcome: StreamOutcome
   try {
-    outcome = await streamSession({ sessionId, openSocket, onFrame })
+    outcome = await streamSession({ sessionId, openSocket, onFrame, signal: abort.signal })
   } catch (err) {
     if (err instanceof StreamUnavailableError) {
       if (!json) {
-        console.error(
-          `live stream unavailable (${err.message}); falling back to status polling`,
-        )
+        console.error(`live stream unavailable (${err.message}); falling back to polling`)
       }
-      await watchSession(client, sessionId, intervalSeconds, json)
+      if (turnId != null) await pollTurn(client, sessionId, turnId, intervalSeconds, json)
+      else await pollConversation(client, sessionId, intervalSeconds, json)
       return
     }
     throw err // StreamAuthError and anything unexpected: surfaced by runAction.
   }
 
-  if (outcome.type === 'aborted') return
   if (outcome.type === 'error') {
     process.exitCode = 1
     return
   }
-  // Terminal `done` frame. Output already streamed live; print a one-line cap.
-  if (!json) {
-    const mark = exitCodeForStatus(outcome.exitStatus ?? outcome.status) === 0 ? '✓' : '✗'
-    console.log(`\n${mark} session ${sessionId} ${outcome.status}`)
+  // `aborted` is a turn watch closing the socket once its turn ended; `done`
+  // is the conversation closing, after the last session frame carried its
+  // turn's end. A turn watch that saw neither fetches its turn.
+  const end =
+    seen.end ??
+    (turnId != null ? (await client.sessions.turns.get(sessionId, turnId)).turn : seen.turn)
+  if (end == null) {
+    if (!json) console.log(`\nconversation ${sessionId} closed`)
+    return
   }
-  if (exitCodeForStatus(outcome.exitStatus ?? outcome.status) !== 0) process.exitCode = 1
+  endWatch(sessionId, end, json)
 }
 
 function renderFrameHuman(frame: StreamFrame, statusWord?: string): void {
@@ -637,14 +713,12 @@ function renderFrameHuman(frame: StreamFrame, statusWord?: string): void {
       break
     case 'records_append': {
       // Raw records, rendered client-side (the semantic-relay philosophy):
-      // one line per transcript item.
-      // Lifecycle records render too (recordToItems shapes them through
-      // lifecycleText): the startup narrative — scheduled, phase
-      // transitions with cache tier + duration, setup output, ready —
-      // belongs in a watch log; types without display copy (message_*/
-      // turn_* bookkeeping) shape to nothing.
-      const records = (frame as { records: SessionRecord[] }).records
-      for (const record of records) {
+      // one line per transcript item. Platform records render too
+      // (recordToItems shapes them through lifecycleText): environment
+      // preparation with the customer's hook output, how a turn ended, the
+      // conversation closing. Types without display copy (message_*
+      // bookkeeping) shape to nothing.
+      for (const record of frame.records) {
         for (const item of recordToItems(record, `w${record.feed_seq}`)) {
           const line = item.detail ? `${item.text}  ${item.detail}` : item.text
           if (line.trim()) console.log(line)
@@ -653,7 +727,7 @@ function renderFrameHuman(frame: StreamFrame, statusWord?: string): void {
       break
     }
     case 'error':
-      console.error(`error: ${(frame as { message?: string }).message ?? 'stream error'}`)
+      console.error(`error: ${frame.message ?? 'stream error'}`)
       break
     case 'done':
       break // handled by the caller
@@ -662,55 +736,79 @@ function renderFrameHuman(frame: StreamFrame, statusWord?: string): void {
   }
 }
 
-// Exit 0 for a successful terminal status, non-zero otherwise (see docs/SESSION_STREAMING.md).
-export function exitCodeForStatus(status: string): number {
-  return ['completed', 'closed', 'idle'].includes(status) ? 0 : 1
-}
-
-// Poll a session until it reaches a terminal status, printing each status
-// transition. This is the status-level fallback used when live streaming isn't
-// available: the public REST API exposes session state, not the step-by-step stream.
-export async function watchSession(
+// Poll one turn until it reaches a final status, printing each status
+// transition. The status-level path: `--watch --quiet`, and the fallback when
+// live streaming isn't available.
+export async function pollTurn(
   client: Ellipsis,
   sessionId: string,
+  turnId: string,
   intervalSeconds: number,
   json?: boolean,
 ): Promise<void> {
   const intervalMs = Math.max(1, intervalSeconds) * 1000
-  let last: AgentSessionStatus | undefined
+  let last: string | undefined
   for (;;) {
-    const { session: s } = await client.sessions.get(sessionId)
-    if (s.lifecycle.status !== last) {
-      if (!json) {
-        const reason = s.lifecycle.detail ? `: ${s.lifecycle.detail}` : ''
-        console.log(`${nowClock()}  ${s.lifecycle.status}${reason}`)
-      }
-      last = s.lifecycle.status
+    const { turn } = await client.sessions.turns.get(sessionId, turnId)
+    if (turn.status !== last) {
+      if (!json) console.log(`${nowClock()}  ${turn.status}`)
+      last = turn.status
     }
-    if (TERMINAL_STATUSES.has(s.lifecycle.status)) {
-      if (json) {
-        printJson(s)
-      } else {
-        console.log('')
-        printSessionSummary(s)
-      }
-      if (exitCodeForStatus(s.lifecycle.last_execution_result?.completion_reason ?? s.lifecycle.status) !== 0) process.exitCode = 1
+    if (isTurnFinal(turn.status)) {
+      if (json) printJson(turn)
+      else console.log('')
+      endWatch(sessionId, turn, json)
       return
     }
     await sleep(intervalMs)
   }
 }
 
+// Poll a session until its conversation closes, printing the turn's status
+// transitions. The fallback for following a conversation when live streaming
+// isn't available.
+async function pollConversation(
+  client: Ellipsis,
+  sessionId: string,
+  intervalSeconds: number,
+  json?: boolean,
+): Promise<void> {
+  const intervalMs = Math.max(1, intervalSeconds) * 1000
+  let last: string | undefined
+  for (;;) {
+    const { session } = await client.sessions.get(sessionId)
+    const word = sessionStatusWord(session)
+    if (word !== last) {
+      if (!json) console.log(`${nowClock()}  ${word}`)
+      last = word
+    }
+    if (session.conversation.state === 'closed') {
+      if (json) printJson(session)
+      else console.log('')
+      if (session.turn) endWatch(sessionId, session.turn, json)
+      return
+    }
+    await sleep(intervalMs)
+  }
+}
+
+// One `label: value` line of `session get`, labels padded to one column.
+function row(label: string, value: string): string {
+  return `${label}:`.padEnd(14) + value
+}
+
 function printSessionSummary(s: AgentSession): void {
-  console.log(`id:        ${s.id}`)
-  console.log(`status:    ${s.lifecycle.status}${s.lifecycle.detail ? ` (${s.lifecycle.detail})` : ''}`)
-  if (s.source) console.log(`source:    ${s.source}`)
+  console.log(row('id', s.id))
+  console.log(row('conversation', s.conversation.state))
+  console.log(row('warm', s.conversation.warm ? 'yes' : 'no'))
+  console.log(row('turn', turnStatusText(s.turn)))
+  if (s.source) console.log(row('source', s.source))
   const config = sessionConfigName(s)
-  if (config) console.log(`config:    ${config}`)
-  console.log(`created:   ${s.lifecycle.timestamps.created_at}`)
-  console.log(`updated:   ${s.lifecycle.timestamps.updated_at}`)
-  console.log(`tokens:    ${(s.tokens?.total ?? 0).toLocaleString()}`)
-  console.log(`cost:      ${usdFromMillicents(s.cost?.total ?? 0)}`)
+  if (config) console.log(row('config', config))
+  console.log(row('created', s.created_at))
+  console.log(row('updated', s.updated_at))
+  console.log(row('tokens', (s.tokens?.total ?? 0).toLocaleString()))
+  console.log(row('cost', usdFromMillicents(s.cost?.total ?? 0)))
   const keys = Object.keys(s.metadata ?? {})
   if (keys.length) {
     console.log('metadata:')

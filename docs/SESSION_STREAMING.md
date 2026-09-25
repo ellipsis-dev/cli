@@ -1,13 +1,17 @@
-# Session streaming: how `--watch` follows a session
+# Session streaming: how `--watch` follows a turn
 
 `ellipsis session start --watch` and `ellipsis session get --watch` follow a
-session's output live until it reaches a terminal status. The stream is
-read-only: the CLI never sends anything to the session. Stopping one is
-`ellipsis session stop`.
+session's output live until the turn they are waiting on ends. For `start`
+that is the opening turn the start created (a promptless start has none, so
+there is nothing to wait for). For `get` it is the turn in progress: the
+running turn, else the pending one. A session with no turn in progress has
+nothing to wait for either: `get --watch` prints the latest turn's status and
+exits. The stream is read-only: the CLI never sends anything to the session.
+Stopping a turn is `ellipsis session stop`.
 
 The WebSocket client is `streamSession` from `@ellipsis-dev/sdk/stream`. This
 repo owns only the transport adapter (`src/lib/stream.ts`) and the rendering
-(`watchSessionStreaming` in `src/commands/session.ts`).
+(`streamTurn` in `src/commands/session.ts`).
 
 ## Endpoint
 
@@ -35,17 +39,29 @@ the SDK package.
 
 | Frame | Payload | What the watch log does with it |
 | --- | --- | --- |
-| `snapshot` | `session`, `messages`, `earliest_feed_seq`, `protocol` | prints the status word when it changes |
-| `session` | `session`, the whole row, resent on any change | same: collapsed to status-word transitions |
-| `records_append` | `records`, feed-ordered `SessionRecord`s | one line per transcript item, via `recordToItems` from `@ellipsis-dev/sdk/store` |
+| `snapshot` | `session`, `messages`, `earliest_feed_seq`, `protocol` | prints the awaited turn's status when it changes |
+| `session` | `session`, the whole object, resent on any change | same: collapsed to the awaited turn's status transitions; a final status ends the watch |
+| `records_append` | `records`, feed-ordered `SessionRecord`s | one line per transcript item, via `recordToItems` from `@ellipsis-dev/sdk/store`; a `turn_ended` record for the awaited turn ends the watch |
 | `delta` | ephemeral partial output for a turn | skipped: the committed record supersedes it |
 | `heartbeat` | `ts` | skipped: liveness only |
 | `error` | `message` | printed to stderr; the watch ends with exit code 1 |
-| `done` | none | ends the watch; the last seen status decides the exit code |
+| `done` | none | the conversation closed, which happens only after its turn ended; the watch ends |
+
+The stream itself stays open for the whole conversation. A watch wants one
+turn of it, so it closes the socket as soon as that turn's end arrives (its
+`turn_ended` record, or a `session` frame carrying the turn's final status),
+and resolves the turn with `GET /v1/sessions/{id}/turns/{turn_id}` if the
+stream ended first.
+
+Platform records render with plain wording: environment preparation
+(`environment_phase`), the customer's own hook output (`environment_output`),
+`Environment ready`, how a turn ended (`turn_ended`), and `Conversation
+closed`. Records whose type the SDK has no copy for, including types the
+platform no longer emits, render nothing.
 
 `--json` with `--watch` prints one JSON object per frame (NDJSON) with the
 same filtering: `heartbeat` and `delta` are dropped, and `snapshot` and
-`session` frames are printed only when the status word changes.
+`session` frames are printed only when the awaited turn's status changes.
 
 ## Liveness, reconnect, fallback
 
@@ -63,15 +79,14 @@ All of this is inside `streamSession`; the CLI configures none of it.
   fallback. `1002` and `1003` mean the protocol is unsupported and give up at
   once. Every other code is retried.
 - Fallback: giving up throws `StreamUnavailableError`. The CLI prints
-  `live stream unavailable (...); falling back to status polling` on stderr
-  and polls `GET /v1/sessions/{id}` every 2 seconds, printing status
-  transitions until a terminal status (`watchSession`). `--watch --quiet`
+  `live stream unavailable (...); falling back to polling the turn` on stderr
+  and polls `GET /v1/sessions/{id}/turns/{turn_id}` every 2 seconds, printing
+  status transitions until a final status (`pollTurn`). `--watch --quiet`
   takes this polling path directly, with no live output.
 
 ## Exit code
 
-A watch exits 0 when the session ended in `completed`, `closed`, or `idle`,
-and 1 otherwise (`exitCodeForStatus`). When a conversation closes, the
-execution outcome (`lifecycle.last_execution_result.completion_reason`, for
-example `budget_hit`) stands in for the lifecycle status, so a closed session
-that hit its budget still exits 1.
+A watch exits 0 when the turn ended `completed`, and 1 when it ended `failed`,
+`stopped`, or `cancelled` (`exitCodeForStatus`). Its last line names the
+outcome with the turn's `reason` and `detail`, for example
+`✗ session session_1 turn failed (budget_hit): The session reached its budget.`
