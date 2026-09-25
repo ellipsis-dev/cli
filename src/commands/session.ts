@@ -91,7 +91,7 @@ export function registerSession(program: Command): void {
     )
     .option(
       '-f, --config-file <path>',
-      'start from a config file (.yaml/.yml or .json: an automation file, whose session: block is used, or a bare session config); to run a saved automation use `agent automation run`',
+      'start from a config file (.yaml/.yml or .json: an automation file, whose session: block is used, or a bare session config); to run a saved automation use `ellipsis automation run`',
     )
     .option(
       '-t, --template <slug>',
@@ -111,7 +111,7 @@ export function registerSession(program: Command): void {
     )
     .option(
       '--model <model-id>',
-      'override the selected harness model for this session (see `agent model list`)',
+      'override the selected harness model for this session (see `ellipsis model list`)',
     )
     .option('--harness <type>', 'select claude_code or codex (default: claude_code)', toHarness)
     .option('--system <text>', 'retired; put instructions in the prompt or AGENTS.md')
@@ -191,7 +191,7 @@ export function registerSession(program: Command): void {
             throw new Error('provide only one of --config-file / --template')
           }
           // An unquoted prompt arrives as one word per argv entry, so join it
-          // back into a sentence: `agent fix the tests` means one instruction.
+          // back into a sentence: `ellipsis fix the tests` means one instruction.
           const promptArg = promptWords.length > 0 ? promptWords.join(' ') : undefined
           // The prompt is either positional or --prompt, not both.
           if (promptArg !== undefined && opts.prompt !== undefined) {
@@ -209,7 +209,7 @@ export function registerSession(program: Command): void {
           }
           // The flat raw-session body: a SessionConfig plus run settings;
           // there is no base config to merge onto (a saved automation is
-          // invoked with `agent automation run` instead).
+          // invoked with `ellipsis automation run` instead).
           let req: StartAgentSessionRequest = { claude_code: {} }
           if (opts.configFile) {
             req = startRequestFromConfig(readConfigFile(opts.configFile))
@@ -304,7 +304,7 @@ export function registerSession(program: Command): void {
           }
           console.log(`✓ started session ${session.id} (${session.lifecycle.status})`)
           await printSessionUrl(client, session.id)
-          console.log(`  follow with: agent session get ${session.id} --watch`)
+          console.log(`  follow with: ellipsis session get ${session.id} --watch`)
         })
       },
     )
@@ -330,7 +330,7 @@ export function registerSession(program: Command): void {
     )
     .option(
       '-a, --author <login>',
-      'only sessions attributed to this GitHub login (see `agent github members`)',
+      'only sessions attributed to this GitHub login (see `ellipsis github members`)',
     )
     .option('--days <n>', 'look back N days', toInt)
     .option('--since <when>', 'only sessions at or after this time', (v: string) => parseWhen(v))

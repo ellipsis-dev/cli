@@ -1,7 +1,7 @@
 import type { Command } from 'commander'
 
 // Replaces commander's built-in `help` command. Everything the built-in did
-// must keep working: `agent help` prints the top-level help, `agent help
+// must keep working: `ellipsis help` prints the top-level help, `ellipsis help
 // <command>` prints that subcommand's. Note the built-in only ever resolved
 // ONE level ("help session start" printed session's help); this walks the
 // whole path, which is a strict improvement.
@@ -25,7 +25,7 @@ export function registerHelp(program: Command): void {
 }
 
 // Walk a command path ("session start") down the tree, matching hidden aliases
-// too so `agent help sessions` resolves the same as `agent help session`.
+// too so `ellipsis help sessions` resolves the same as `ellipsis help session`.
 export function resolveCommandPath(program: Command, path: string[]): Command | undefined {
   let cmd: Command = program
   for (const name of path) {

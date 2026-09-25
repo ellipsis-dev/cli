@@ -36,7 +36,7 @@ export function registerModel(program: Command): void {
           ['ID', 'NAME', 'HARNESS', 'DEFAULT'],
           models.map((m) => [m.id, m.display_name, m.harness, m.is_default_agent_model ? 'yes' : '']),
         )
-        console.log('\nSet `session.harness.type` and `session.harness.model` in your automation YAML, or use `agent session start --harness <type> --model <id>`.')
+        console.log('\nSet `session.harness.type` and `session.harness.model` in your automation YAML, or use `ellipsis session start --harness <type> --model <id>`.')
       })
     })
 }

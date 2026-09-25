@@ -30,7 +30,7 @@ export ELLIPSIS_CONFIG_DIR="$CONFIG_DIR"
 cleanup() { rm -rf "$CONFIG_DIR"; }
 trap cleanup EXIT
 
-run() { echo "+ agent $*"; npx tsx src/cli.ts "$@"; echo; }
+run() { echo "+ ellipsis $*"; npx tsx src/cli.ts "$@"; echo; }
 
 echo "API base:    $API_BASE"
 echo "Config dir:  $CONFIG_DIR (temporary)"

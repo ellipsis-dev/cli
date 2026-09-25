@@ -7,7 +7,7 @@ import { compareVersions, installKind } from './install'
 
 // Without a package manager nothing tells a user their CLI is stale, so the
 // binary does it itself. Once a day it asks GitHub for the latest release in
-// a detached child (`agent update --check --quiet`) and remembers the answer
+// a detached child (`ellipsis update --check --quiet`) and remembers the answer
 // in the config dir. The next run prints one line on stderr when that answer
 // is newer than itself. Nothing here may slow down or fail the command in
 // progress: the network call never happens in this process, and every error
@@ -54,7 +54,7 @@ export function checkIsDue(state: UpdateState | undefined, now: Date): boolean {
 // The one-line nudge, or undefined when the remembered latest is not newer.
 export function updateNudge(state: UpdateState | undefined, current: string): string | undefined {
   if (!state?.latest || compareVersions(state.latest, current) <= 0) return undefined
-  return `A newer agent is available: ${state.latest} (you have ${current}). Run \`agent update\`.`
+  return `A newer ellipsis is available: ${state.latest} (you have ${current}). Run \`ellipsis update\`.`
 }
 
 // Invocations that must not start a check: they are the check, they are about

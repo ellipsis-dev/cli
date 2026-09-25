@@ -15,16 +15,16 @@ import type {
   ReviewScope,
 } from '../lib/types'
 
-// `agent review`: ask for a code review now, instead of waiting for a push to
+// `ellipsis review`: ask for a code review now, instead of waiting for a push to
 // trigger one.
 //
-//   agent review 5975                 review that pull request
+//   ellipsis review 5975                 review that pull request
 //
 // A review is always of an existing pull request: the range, the checkout, and
 // the delivery all read PR state, so there is nothing to review without one.
 //
 // Which pipeline runs is not a parameter. It is resolved from the repository's
-// committed `code_review.yaml` (see `agent review init`), the same way an
+// committed `code_review.yaml` (see `ellipsis review init`), the same way an
 // automatic review resolves it.
 //
 // A review is a pipeline of stage sessions, not a single session: its id is a
@@ -86,14 +86,14 @@ export function registerReview(program: Command): void {
           if (opts.json) printJson(started)
           else {
             console.log(`✓ started review ${started.id}`)
-            console.log(`  follow with: agent review get ${started.id}`)
+            console.log(`  follow with: ellipsis review get ${started.id}`)
           }
           return
         }
 
         // Block-and-stream, then re-read: the findings are collected from the
         // sandbox at teardown, so they only exist once the review finalizes.
-        // Same two-step `agent file get` uses.
+        // Same two-step `ellipsis file get` uses.
         if (!opts.json) {
           console.log(
             `✓ reviewing ${request.owner}/${request.repo}#${started.pull_request.number} ` +
@@ -173,9 +173,9 @@ export function registerReview(program: Command): void {
   registerReviewInit(review)
 }
 
-// `agent review init`: the code review twin of `agent automation init`. Scaffolds a
+// `ellipsis review init`: the code review twin of `ellipsis automation init`. Scaffolds a
 // starter pipeline YAML locally; you commit it and Ellipsis syncs it from
-// GitHub. No API call and no pull request, because `agent automation create` posts
+// GitHub. No API call and no pull request, because `ellipsis automation create` posts
 // an automation and a pipeline is a different kind of file.
 function registerReviewInit(review: Command): void {
   review
@@ -421,12 +421,12 @@ export function splitRepo(value: string): { owner: string; name: string } {
 export function parsePullRequest(raw: string): number {
   const match = /^#?(\d+)$/.exec(raw.trim()) ?? /\/pull\/(\d+)/.exec(raw.trim())
   if (!match) {
-    // `review` reserves the word, so `agent review the auth changes` lands
+    // `review` reserves the word, so `ellipsis review the auth changes` lands
     // here rather than starting a session with that prompt. Name the fix.
     throw new Error(
-      `'${raw}' is not a pull request number. Pass a number (agent review 123). ` +
+      `'${raw}' is not a pull request number. Pass a number (ellipsis review 123). ` +
         'To run an agent with a prompt that starts with "review", quote it: ' +
-        `agent "review ${raw} …"`,
+        `ellipsis "review ${raw} …"`,
     )
   }
   return Number.parseInt(match[1], 10)

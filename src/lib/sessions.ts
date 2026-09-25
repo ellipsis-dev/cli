@@ -57,7 +57,7 @@ export function assertCurrentHarnessKeys(config: Record<string, unknown>): void 
 
 // An inline config file (`session start -f/-t`) as a start request. The file
 // is either an automation document (session keys under `session:`, as every
-// template and `agent automation init` file is) or a bare session config;
+// template and `ellipsis automation init` file is) or a bare session config;
 // either way its per-session keys are spread onto the request body.
 export function startRequestFromConfig(
   document: Record<string, unknown>,

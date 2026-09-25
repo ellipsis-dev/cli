@@ -233,7 +233,7 @@ describe('fetchLogSegment', () => {
 })
 
 // Regression: `[prompt]` was a single positional, so an unquoted
-// `agent fix the tests` sent just "fix" and dropped the rest silently.
+// `ellipsis fix the tests` sent just "fix" and dropped the rest silently.
 describe('session start prompt positional', () => {
   async function startedPrompt(argv: string[]): Promise<string | undefined> {
     const { Command } = await import('commander')
@@ -251,7 +251,7 @@ describe('session start prompt positional', () => {
     program.exitOverride()
     registerSession(program)
     try {
-      await program.parseAsync(['node', 'agent', 'session', 'start', ...argv, '--json'])
+      await program.parseAsync(['node', 'ellipsis', 'session', 'start', ...argv, '--json'])
     } finally {
       vi.unstubAllGlobals()
       vi.restoreAllMocks()

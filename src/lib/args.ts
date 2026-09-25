@@ -97,8 +97,8 @@ export function parseWhen(value: string, now: Date = new Date()): string {
   return value
 }
 
-// A bare `agent <text>` is shorthand for starting a session with that text as
-// the prompt, so a mistyped subcommand like `agent sesion` would silently start
+// A bare `ellipsis <text>` is shorthand for starting a session with that text as
+// the prompt, so a mistyped subcommand like `ellipsis sesion` would silently start
 // a session instead of failing. Guard on shape rather than edit distance: a
 // real prompt is a sentence, a typo is one word. So one bare word that is not a
 // known command is treated as a mistake, even when nothing looks close to it.
@@ -163,12 +163,12 @@ export function commandTypoMessage(word: string, commands: string[]): string {
   const similar = similarCommands(word, commands)
   const lines = [`error: unknown command "${word}"`]
   if (similar.length === 1) {
-    lines.push(`  did you mean "agent ${similar[0]}"?`)
+    lines.push(`  did you mean "ellipsis ${similar[0]}"?`)
   } else if (similar.length > 1) {
-    lines.push(`  did you mean one of: ${similar.map((c) => `agent ${c}`).join(', ')}?`)
+    lines.push(`  did you mean one of: ${similar.map((c) => `ellipsis ${c}`).join(', ')}?`)
   }
-  lines.push(`  to start a session with that prompt: agent -p ${word}`)
-  lines.push('  to see every command: agent --help')
+  lines.push(`  to start a session with that prompt: ellipsis -p ${word}`)
+  lines.push('  to see every command: ellipsis --help')
   return lines.join('\n')
 }
 

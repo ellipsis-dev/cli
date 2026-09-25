@@ -23,7 +23,7 @@ function configFile(): string {
 // to build clickable links and the login verification URL — derived from
 // `apiBase` by default (api. -> app.), but stored explicitly so a self-hosted
 // instance whose dashboard host isn't a mechanical swap can set it directly
-// (`agent host add … --app-base`). `token` is the credential minted against
+// (`ellipsis host add … --app-base`). `token` is the credential minted against
 // THIS instance.
 export interface Host {
   apiBase: string
@@ -50,7 +50,7 @@ interface CliConfigV1 {
 // Swap the `api` host label for `app` (api.ellipsis.dev -> app.ellipsis.dev,
 // beta-api.ellipsis.dev -> beta-app.ellipsis.dev). An unrecognized host (a
 // self-hosted deployment whose dashboard isn't a mechanical swap) is returned
-// unchanged — set the app base explicitly via `agent host … --app-base`.
+// unchanged — set the app base explicitly via `ellipsis host … --app-base`.
 export function deriveAppBase(apiBase: string): string {
   const base = apiBase.replace(/\/+$/, '')
   return base.replace('://api.', '://app.').replace('-api.', '-app.')
@@ -58,7 +58,7 @@ export function deriveAppBase(apiBase: string): string {
 
 // A friendly default name for a host seeded from a bare API base: the prod URL
 // is "prod", a `<label>-api.ellipsis.dev` base is "<label>" (beta-api -> beta),
-// anything else is "default". Users can rename with `agent host set --rename`.
+// anything else is "default". Users can rename with `ellipsis host set --rename`.
 export function hostNameForBase(apiBase: string): string {
   const base = apiBase.replace(/\/+$/, '')
   if (base === DEFAULT_API_BASE) return 'prod'
@@ -140,14 +140,14 @@ export function addHost(name: string, apiBase: string, appBase?: string): void {
 
 export function useHost(name: string): void {
   const cfg = loadConfig()
-  if (!cfg.hosts[name]) throw new Error(`No such host: ${name}. See \`agent host list\`.`)
+  if (!cfg.hosts[name]) throw new Error(`No such host: ${name}. See \`ellipsis host list\`.`)
   cfg.activeHost = name
   saveConfig(cfg)
 }
 
 export function deleteHost(name: string): void {
   const cfg = loadConfig()
-  if (!cfg.hosts[name]) throw new Error(`No such host: ${name}. See \`agent host list\`.`)
+  if (!cfg.hosts[name]) throw new Error(`No such host: ${name}. See \`ellipsis host list\`.`)
   delete cfg.hosts[name]
   if (cfg.activeHost === name) cfg.activeHost = undefined
   saveConfig(cfg)
@@ -161,7 +161,7 @@ export function updateHost(
 ): void {
   const cfg = loadConfig()
   const host = cfg.hosts[name]
-  if (!host) throw new Error(`No such host: ${name}. See \`agent host list\`.`)
+  if (!host) throw new Error(`No such host: ${name}. See \`ellipsis host list\`.`)
   if (patch.apiBase !== undefined) host.apiBase = patch.apiBase.replace(/\/+$/, '')
   if (patch.appBase !== undefined) host.appBase = patch.appBase.replace(/\/+$/, '')
   if (patch.rename !== undefined && patch.rename !== name) {
@@ -175,7 +175,7 @@ export function updateHost(
 
 // Ensure there IS an active host, seeding one at the resolved base (env or
 // prod default) if the user logged in / enrolled before adding a host. Returns
-// the active host's name. This is what makes a bare `agent auth login` work.
+// the active host's name. This is what makes a bare `ellipsis auth login` work.
 export function ensureActiveHost(): string {
   const cfg = loadConfig()
   if (cfg.activeHost && cfg.hosts[cfg.activeHost]) return cfg.activeHost
@@ -212,7 +212,7 @@ export function clearAllTokens(): void {
 //
 // Precedence (highest wins): explicit arg → environment → active host → default.
 // The environment layer lets a pre-provisioned token + base URL (e.g. injected
-// into an Ellipsis cloud sandbox) drive the CLI headlessly, with no `agent
+// into an Ellipsis cloud sandbox) drive the CLI headlessly, with no `ellipsis auth
 // login`, no host, and no config file on disk.
 
 // Token from the environment, if set. Used for non-interactive/sandbox auth.
@@ -255,7 +255,7 @@ export function requireToken(): string {
   const token = resolveToken()
   if (!token) {
     throw new Error(
-      'Not logged in. Run `agent auth login` first, or set ELLIPSIS_API_TOKEN.',
+      'Not logged in. Run `ellipsis auth login` first, or set ELLIPSIS_API_TOKEN.',
     )
   }
   return token

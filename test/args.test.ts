@@ -94,7 +94,7 @@ describe('parseWhen', () => {
   })
 })
 
-// A bare `agent <text>` starts a session with that text as the prompt, so a
+// A bare `ellipsis <text>` starts a session with that text as the prompt, so a
 // mistyped command must not silently spawn one.
 describe('looksLikeCommandTypo', () => {
   it('flags a single bare word', () => {
@@ -146,14 +146,14 @@ describe('commandTypoMessage', () => {
   it('names the likely command and how to force a prompt', () => {
     const msg = commandTypoMessage('sesion', commands)
     expect(msg).toContain('unknown command "sesion"')
-    expect(msg).toContain('did you mean "agent session"?')
-    expect(msg).toContain('agent -p sesion')
+    expect(msg).toContain('did you mean "ellipsis session"?')
+    expect(msg).toContain('ellipsis -p sesion')
   })
 
   it('still explains the escape hatch with no suggestion', () => {
     const msg = commandTypoMessage('xyzzy', commands)
     expect(msg).not.toContain('did you mean')
-    expect(msg).toContain('agent -p xyzzy')
-    expect(msg).toContain('agent --help')
+    expect(msg).toContain('ellipsis -p xyzzy')
+    expect(msg).toContain('ellipsis --help')
   })
 })

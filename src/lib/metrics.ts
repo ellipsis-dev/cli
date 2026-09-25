@@ -1,4 +1,4 @@
-// Pure shaping for `agent automation metrics`: the API returns one sample per
+// Pure shaping for `ellipsis automation metrics`: the API returns one sample per
 // finished session (duration, cost, tokens) and the trailing spend windows;
 // the table wants medians and a short duration.
 

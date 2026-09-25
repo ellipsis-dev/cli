@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs the Ellipsis agent CLI.
+# Installs the Ellipsis CLI: the `ellipsis` binary, with `el` linked next to it.
 #
 #   curl -fsSL https://raw.githubusercontent.com/ellipsis-dev/cli/main/install.sh | sh
 #
@@ -13,19 +13,23 @@
 # ELLIPSIS_NO_MODIFY_PATH=1.
 #
 # What it does: picks the release asset for this OS and CPU, downloads it and
-# checksums.txt from GitHub Releases, checks the SHA-256, and puts the binary
-# at <dir>/agent. If <dir> is not on PATH it appends one marked line to the
-# startup file of $SHELL; inside GitHub Actions it appends to $GITHUB_PATH
-# instead. `agent update` and `agent uninstall` take it from there.
+# checksums.txt from GitHub Releases, checks the SHA-256, puts the binary at
+# <dir>/ellipsis, and links <dir>/el to it. If <dir> is not on PATH it appends
+# one marked line to the startup file of $SHELL; inside GitHub Actions it
+# appends to $GITHUB_PATH instead. `ellipsis update` and `ellipsis uninstall`
+# take it from there.
 #
 # Needs: curl or wget, tar, and one of sha256sum, shasum, or openssl.
 set -eu
 
 RELEASES="${ELLIPSIS_DOWNLOAD_BASE:-https://github.com/ellipsis-dev/cli/releases}"
-BIN="agent"
-# Keep in sync with PATH_MARKER in src/lib/install.ts: `agent uninstall`
+BIN="ellipsis"
+# The short spelling, linked to $BIN in the same directory. Keep in sync with
+# ALIAS_NAME in src/lib/install.ts.
+ALIAS="el"
+# Keep in sync with PATH_MARKER in src/lib/install.ts: `ellipsis uninstall`
 # removes exactly the startup-file lines that carry this comment.
-PATH_MARKER="Ellipsis agent installer"
+PATH_MARKER="Ellipsis CLI installer"
 
 VERSION="${ELLIPSIS_VERSION:-}"
 INSTALL_DIR="${ELLIPSIS_INSTALL_DIR:-$HOME/.local/bin}"
@@ -183,7 +187,19 @@ fi
 if ! installed=$("$INSTALL_DIR/$BIN" --version 2>/dev/null); then
   fail "$INSTALL_DIR/$BIN does not run on this machine"
 fi
-say "Installed $BIN $installed to $INSTALL_DIR/$BIN"
+
+# `el` is the short spelling of the same binary: a relative symlink next to it.
+alias_path="$INSTALL_DIR/$ALIAS"
+alias_note=""
+if [ -L "$alias_path" ] && [ "$(readlink "$alias_path")" != "$BIN" ]; then
+  say "Note: $alias_path points somewhere else, so the $ALIAS alias was left alone."
+elif [ -e "$alias_path" ] && [ ! -L "$alias_path" ]; then
+  say "Note: $alias_path already exists, so the $ALIAS alias was left alone."
+else
+  ln -sfn "$BIN" "$alias_path"
+  alias_note=" (and $ALIAS)"
+fi
+say "Installed $BIN $installed to $INSTALL_DIR/$BIN$alias_note"
 
 # --- PATH --------------------------------------------------------------------
 

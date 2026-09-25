@@ -6,7 +6,7 @@ import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { formatTs, printJson, printTable, runAction } from '../lib/output'
 import type { CreateFileRequest, FileView, GetFileResponse } from '../lib/types'
 
-// `agent file <verb>`: persist files to Ellipsis platform storage and get back
+// `ellipsis file <verb>`: persist files to Ellipsis platform storage and get back
 // an org-membership-gated link. The primary caller is an agent inside a sandbox
 // that took a screenshot of a UI change and wants a link to paste into a PR
 // comment: the injected sandbox token authenticates it with zero setup, and the
@@ -202,7 +202,7 @@ function renderFile(res: GetFileResponse): void {
   console.log(`created:   ${formatTs(f.created_at)}`)
   if (f.session_id) console.log(`session:   ${f.session_id}`)
   console.log(`url:       ${res.url}`)
-  console.log(`\ndownload the file with: agent file get ${f.id} -o ${f.filename}`)
+  console.log(`\ndownload the file with: ellipsis file get ${f.id} -o ${f.filename}`)
 }
 
 // Pull the bytes from the presigned S3 URL. Deliberately bare fetch (no

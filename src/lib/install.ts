@@ -17,18 +17,20 @@ import { USER_AGENT } from './constants'
 
 // How the CLI is installed and kept current without a package manager. The
 // release workflow publishes one tarball per target plus checksums.txt to
-// GitHub Releases. install.sh (the first install) and `agent update` (every
+// GitHub Releases. install.sh (the first install) and `ellipsis update` (every
 // later one) both download from there and verify the SHA-256 before swapping
 // the binary in. The pure helpers come first so test/install.test.ts can cover
 // them without touching the network or the disk.
 
 export const RELEASES_BASE = 'https://github.com/ellipsis-dev/cli/releases'
-export const BINARY_NAME = 'agent'
+export const BINARY_NAME = 'ellipsis'
+// The short alias install.sh links next to the binary (`el` -> `ellipsis`).
+export const ALIAS_NAME = 'el'
 
 // The comment install.sh appends to the PATH line it writes into a shell
-// startup file. `agent uninstall` deletes exactly the lines carrying it, so
+// startup file. `ellipsis uninstall` deletes exactly the lines carrying it, so
 // the two must stay identical (test/install.test.ts checks).
-export const PATH_MARKER = 'Ellipsis agent installer'
+export const PATH_MARKER = 'Ellipsis CLI installer'
 
 // Every target release.yml builds (test/install.test.ts checks the workflow).
 export const RELEASE_TARGETS = [

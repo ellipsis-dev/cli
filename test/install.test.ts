@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
+  ALIAS_NAME,
   compareVersions,
   installKind,
   parseChecksums,
@@ -38,14 +39,14 @@ describe('releaseTarget', () => {
 describe('releaseUrls', () => {
   it('pins a version under /download/v<version>', () => {
     expect(releaseUrls('2.30.0', 'linux-x64')).toEqual({
-      tarball: 'https://github.com/ellipsis-dev/cli/releases/download/v2.30.0/agent-linux-x64.tar.gz',
+      tarball: 'https://github.com/ellipsis-dev/cli/releases/download/v2.30.0/ellipsis-linux-x64.tar.gz',
       checksums: 'https://github.com/ellipsis-dev/cli/releases/download/v2.30.0/checksums.txt',
     })
   })
 
   it('uses the latest redirect when no version is given, so no API call is needed', () => {
     expect(releaseUrls(undefined, 'darwin-arm64').tarball).toBe(
-      'https://github.com/ellipsis-dev/cli/releases/latest/download/agent-darwin-arm64.tar.gz',
+      'https://github.com/ellipsis-dev/cli/releases/latest/download/ellipsis-darwin-arm64.tar.gz',
     )
   })
 })
@@ -54,10 +55,10 @@ describe('parseChecksums', () => {
   it('reads sha256sum output into a name to digest map', () => {
     const a = 'a'.repeat(64)
     const b = 'B'.repeat(64)
-    const text = `${a}  agent-linux-x64.tar.gz\n${b} *agent-darwin-arm64.tar.gz\n\nnot a checksum line\n`
+    const text = `${a}  ellipsis-linux-x64.tar.gz\n${b} *ellipsis-darwin-arm64.tar.gz\n\nnot a checksum line\n`
     const sums = parseChecksums(text)
-    expect(sums.get('agent-linux-x64.tar.gz')).toBe(a)
-    expect(sums.get('agent-darwin-arm64.tar.gz')).toBe('b'.repeat(64))
+    expect(sums.get('ellipsis-linux-x64.tar.gz')).toBe(a)
+    expect(sums.get('ellipsis-darwin-arm64.tar.gz')).toBe('b'.repeat(64))
     expect(sums.size).toBe(2)
   })
 })
@@ -127,8 +128,8 @@ describe('installKind', () => {
   })
 
   it('treats anything else as an installed binary', () => {
-    expect(installKind('/Users/me/.local/bin/agent')).toBe('binary')
-    expect(installKind('/usr/local/bin/agent')).toBe('binary')
+    expect(installKind('/Users/me/.local/bin/ellipsis')).toBe('binary')
+    expect(installKind('/usr/local/bin/ellipsis')).toBe('binary')
   })
 })
 
@@ -151,7 +152,7 @@ describe('updateNudge', () => {
     const msg = updateNudge({ checkedAt: 'x', latest: '2.31.0' }, '2.30.0')
     expect(msg).toContain('2.31.0')
     expect(msg).toContain('2.30.0')
-    expect(msg).toContain('agent update')
+    expect(msg).toContain('ellipsis update')
   })
 
   it('stays quiet when there is nothing newer', () => {
@@ -167,6 +168,10 @@ describe('updateNudge', () => {
 describe('install.sh and release.yml agree with the binary', () => {
   it('install.sh writes the same PATH marker uninstall looks for', () => {
     expect(repoFile('install.sh')).toContain(`PATH_MARKER="${PATH_MARKER}"`)
+  })
+
+  it('install.sh links the same alias name uninstall removes', () => {
+    expect(repoFile('install.sh')).toContain(`ALIAS="${ALIAS_NAME}"`)
   })
 
   it('release.yml builds exactly the targets the binary knows about', () => {

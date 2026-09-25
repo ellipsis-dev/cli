@@ -24,7 +24,7 @@ export function registerIntegration(program: Command): void {
         }
         printTable(['INTEGRATION', 'STATUS', 'DETAILS'], integrationRows(integrations))
         console.log(
-          '\nList resources: agent github repos, agent slack channels, agent linear teams, agent sentry orgs',
+          '\nList resources: ellipsis github repos, ellipsis slack channels, ellipsis linear teams, ellipsis sentry orgs',
         )
       })
     })

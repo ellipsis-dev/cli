@@ -1,4 +1,4 @@
-// Pure shaping for `agent session diff`: the API returns one unified-diff
+// Pure shaping for `ellipsis session diff`: the API returns one unified-diff
 // section per changed file; stdout gets them back to back, in order, so the
 // output is a patch `git apply` reads whole.
 

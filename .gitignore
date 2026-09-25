@@ -1,6 +1,7 @@
 node_modules
 dist
-agent
+ellipsis
+el
 *.log
 .DS_Store
 

@@ -1,9 +1,9 @@
 # Session streaming: how `--watch` follows a session
 
-`agent session start --watch` and `agent session get --watch` follow a
+`ellipsis session start --watch` and `ellipsis session get --watch` follow a
 session's output live until it reaches a terminal status. The stream is
 read-only: the CLI never sends anything to the session. Stopping one is
-`agent session stop`.
+`ellipsis session stop`.
 
 The WebSocket client is `streamSession` from `@ellipsis-dev/sdk/stream`. This
 repo owns only the transport adapter (`src/lib/stream.ts`) and the rendering

@@ -3,7 +3,7 @@
 # Fully-automated end-to-end smoke test against a LOCAL docker compose backend.
 #
 # Unlike scripts/smoke.sh (which waits for you to approve the login by hand),
-# this drives the whole device-code flow itself: it starts `agent auth login`,
+# this drives the whole device-code flow itself: it starts `ellipsis auth login`,
 # scrapes the user code, and approves it headlessly by calling the cli_auth
 # service inside the running `public_api` container — then exercises the
 # authenticated API surface. Uses a throwaway config dir, so your real token is
@@ -35,7 +35,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-run() { echo "+ agent $*"; npx tsx src/cli.ts "$@"; echo; }
+run() { echo "+ ellipsis $*"; npx tsx src/cli.ts "$@"; echo; }
 
 echo "API base:   $API_BASE"
 echo "Container:  $CONTAINER"

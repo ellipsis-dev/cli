@@ -27,8 +27,8 @@ import { maybeNudgeUpdate } from './lib/update-check'
 const program = new Command()
 
 program
-  .name('agent')
-  .description('Ellipsis agent CLI: drive the Ellipsis cloud from your terminal')
+  .name('ellipsis')
+  .description('Ellipsis CLI: drive the Ellipsis cloud from your terminal')
   .version(VERSION)
 
 // Set before the register* calls so every subcommand inherits the same help
@@ -56,18 +56,18 @@ registerUpdate(program)
 registerUninstall(program)
 registerHelp(program)
 
-// A bare `agent` prints the top-level help, the same page as `agent --help`.
+// A bare `ellipsis` prints the top-level help, the same page as `ellipsis --help`.
 //
 // Any other invocation that isn't a known subcommand or a top-level
-// help/version request is shorthand for `agent session start ...`:
-// `agent "fix the tests" --model ...` forwards the prompt and every trailing
+// help/version request is shorthand for `ellipsis session start ...`:
+// `ellipsis "fix the tests" --model ...` forwards the prompt and every trailing
 // flag through to a fresh session, which starts and prints its dashboard
-// link. `agent --help`, `agent --version`, `agent help`, and every subcommand
+// link. `ellipsis --help`, `ellipsis --version`, `ellipsis help`, and every subcommand
 // dispatch unchanged.
 //
-// The exception is a single bare word (`agent sesion`): see
+// The exception is a single bare word (`ellipsis sesion`): see
 // looksLikeCommandTypo. Quoting does not help, since the shell strips the
-// quotes. Use `agent -p word` or `agent -- word` to force it through.
+// quotes. Use `ellipsis -p word` or `ellipsis -- word` to force it through.
 const topLevelCommands = new Set([
   'help',
   ...program.commands.flatMap((c) => [c.name(), ...c.aliases()]),
