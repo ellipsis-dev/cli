@@ -467,7 +467,6 @@ ellipsis variable list                          # names and timestamps only
 ellipsis integration                            # what is connected, in one table
 ellipsis github repos                           # also github members, slack channels,
                                              # linear teams, sentry orgs
-ellipsis file upload shot.png                   # store a PNG, print an org-gated link
 ```
 
 Most singular commands accept the plural spelling as a hidden alias, and
@@ -643,11 +642,10 @@ npx skills add ellipsis-dev/cli
 If `ELLIPSIS_SANDBOX_ID` is set in the environment, you are the agent in an
 Ellipsis session. The `ellipsis` CLI is pre-installed and pre-authenticated with a
 session-scoped token, so you can start child sessions, list the team's sessions,
-read analytics, and upload screenshots as org-gated links
-(`ellipsis file upload shot.png`) with no login.
+and read analytics with no login.
 
 That token is deliberately narrower than a human's. It can list variable names
-but not set or delete them, cannot delete a file, and cannot repoint an
+but not set or delete them, and cannot repoint an
 account or repository default. An agent cannot overwrite the team's credentials
 or destroy the evidence it posted.
 

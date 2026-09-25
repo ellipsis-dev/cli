@@ -75,14 +75,6 @@ export type CreateReviewRequest = S['CreateReviewRequest']
 export type ListReviewsResponse = S['ReviewsListResponse']
 export type CodeReviewRunStatus = S['CodeReviewRunStatus']
 
-// --------------------------------- files ----------------------------------
-
-export type FileView = S['File']
-export type CreateFileRequest = Parameters<Ellipsis['files']['create']>[0]
-export type CreateFileResponse = S['CreateFileResponse']
-export type GetFileResponse = S['GetFileResponse']
-export type ListFilesResponse = S['FilesListResponse']
-
 // ------------------------------- secrets ----------------------------------
 // Customer-scoped environment variables injected into a sandbox when an agent
 // config names them. Values are write-only: the API accepts them but never

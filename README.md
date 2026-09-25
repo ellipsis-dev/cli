@@ -108,11 +108,6 @@ ellipsis slack members               # workspace members, with linked GitHub ide
 ellipsis linear teams                # teams in the connected Linear organization
 ellipsis sentry orgs                 # connected Sentry organizations
 
-ellipsis file upload shot.png        # store a PNG; prints an org-gated link to paste into a PR comment
-ellipsis file list                   # list stored files (--session <id> scopes to one run's uploads)
-ellipsis file get <file-id> -o shot.png     # show one file, or download its bytes with -o
-ellipsis file delete <file-id>       # delete a file (it disappears from list/get and its link stops resolving)
-
 ellipsis variable list               # list sandbox env variable names (values are write-only)
 ellipsis variable set A=1 B=2        # create/update variables (or --from-file .env/.json)
 ellipsis variable delete K           # delete a variable

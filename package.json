@@ -1,6 +1,6 @@
 {
   "name": "@ellipsis/cli",
-  "version": "2.30.0",
+  "version": "2.31.0",
   "description": "Ellipsis CLI: drive the Ellipsis cloud from your terminal",
   "license": "MIT",
   "type": "module",
@@ -21,7 +21,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@ellipsis-dev/sdk": "0.30.0",
+    "@ellipsis-dev/sdk": "0.31.0",
     "commander": "^12.1.0",
     "ws": "^8.18.0",
     "yaml": "^2.9.0"
