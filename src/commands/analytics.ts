@@ -10,9 +10,9 @@ import type {
   ReviewerUsage,
 } from '../lib/types'
 
-// `agent analytics` is the same aggregation behind the dashboard's analytics
+// `ellipsis analytics` is the same aggregation behind the dashboard's analytics
 // page, so questions like "which apps review the most PRs?" are answerable
-// from the terminal (`agent analytics reviewer --account-type bot`).
+// from the terminal (`ellipsis analytics reviewer --account-type bot`).
 // Human-readable tables by default; --json prints the raw API response.
 
 // Window flags shared by every subcommand. The server defaults to the last

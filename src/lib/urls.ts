@@ -14,7 +14,7 @@ export function automationUrl(appBase: string, accountLogin: string, automationI
   return `${appBase}/${encodeURIComponent(accountLogin)}/automations/${encodeURIComponent(automationId)}`
 }
 
-// The device-code approval page for `agent auth login`. `userCode` is the user_code
+// The device-code approval page for `ellipsis auth login`. `userCode` is the user_code
 // minted by POST /cli-auth/start. Built client-side from the active host's
 // app base (not the server's verification_uri_complete) so the host always
 // matches the instance the CLI is pointed at: the backend fills its own copy

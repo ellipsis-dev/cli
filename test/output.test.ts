@@ -63,7 +63,7 @@ describe('friendlyErrorMessage', () => {
   it('maps a 401 to a re-login hint instead of the raw HTTP failure', () => {
     const err = apiError(401, 'Unauthorized', 'req_1')
     expect(friendlyErrorMessage(err)).toBe(
-      'Your login is invalid or has expired. Run `agent auth login` to re-authenticate.',
+      'Your login is invalid or has expired. Run `ellipsis auth login` to re-authenticate.',
     )
   })
 
@@ -101,14 +101,14 @@ describe('friendlyErrorMessage', () => {
       expect(msg).toContain(`${status} nope`)
       expect(msg).toContain("It's possible we shipped a breaking change to our API.")
       expect(msg).toContain('You are currently on version')
-      expect(msg).toContain('agent update')
+      expect(msg).toContain('ellipsis update')
     }
   })
 
   it('suppresses the upgrade hint where updating is the wrong remedy', () => {
     for (const status of [402, 403, 404, 408, 409, 413, 502, 503, 504]) {
       const msg = friendlyErrorMessage(apiError(status, 'nope'))
-      expect(msg).not.toContain('agent update')
+      expect(msg).not.toContain('ellipsis update')
     }
   })
 

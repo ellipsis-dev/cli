@@ -39,7 +39,7 @@ async function command(args: string[]): Promise<void> {
   registerSession(program)
   registerAutomation(program)
   registerEnvironment(program)
-  await program.parseAsync(['node', 'agent', ...args])
+  await program.parseAsync(['node', 'ellipsis', ...args])
   expect(process.exitCode).toBe(0)
 }
 

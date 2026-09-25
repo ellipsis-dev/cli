@@ -13,9 +13,9 @@ import {
 import { alsoKnownAs } from '../lib/help'
 import { printTable } from '../lib/output'
 
-// `agent host …` manages the Ellipsis instances the CLI can target — prod,
+// `ellipsis host …` manages the Ellipsis instances the CLI can target — prod,
 // beta, or a self-hosted deployment — and which one is active. It does NOT
-// authenticate: `agent host add` / `use` set WHERE the CLI points; `agent
+// authenticate: `ellipsis host add` / `use` set WHERE the CLI points; `ellipsis auth
 // login` sets the credential for wherever it's pointing. Every other command
 // resolves against the active host (unless ELLIPSIS_API_BASE_URL /
 // ELLIPSIS_API_TOKEN override it, e.g. inside a sandbox).
@@ -34,7 +34,7 @@ export function registerHost(program: Command): void {
     .action(() => {
       const hosts = listHosts()
       if (hosts.length === 0) {
-        console.log('No hosts configured. Add one with `agent host add <name> <api-url>`.')
+        console.log('No hosts configured. Add one with `ellipsis host add <name> <api-url>`.')
         return
       }
       printTable(
@@ -51,7 +51,7 @@ export function registerHost(program: Command): void {
 
   host
     .command('add <name> <api-url>')
-    .description('Add a host and switch to it, then run `agent auth login` to authenticate')
+    .description('Add a host and switch to it, then run `ellipsis auth login` to authenticate')
     .option(
       '--app-base <url>',
       'dashboard URL for building links / login (default: derived from the API URL)',
@@ -59,7 +59,7 @@ export function registerHost(program: Command): void {
     .action((name: string, apiUrl: string, opts: { appBase?: string }) => {
       addHost(name, requireUrl(apiUrl, 'api-url'), opts.appBase && requireUrl(opts.appBase, '--app-base'))
       console.log(`✓ added host "${name}", now active`)
-      console.log('Run `agent auth login` to authenticate against it.')
+      console.log('Run `ellipsis auth login` to authenticate against it.')
     })
 
   host
@@ -99,7 +99,7 @@ export function registerHost(program: Command): void {
       deleteHost(name)
       console.log(`✓ removed host "${name}"`)
       if (wasActive) {
-        console.log('That was the active host. Set a new one with `agent host use <name>`.')
+        console.log('That was the active host. Set a new one with `ellipsis host use <name>`.')
       }
     })
 

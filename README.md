@@ -14,7 +14,8 @@ curl -fsSL https://raw.githubusercontent.com/ellipsis-dev/cli/main/install.sh | 
 ```
 
 The script downloads the binary for your OS and CPU from GitHub Releases,
-checks its SHA-256, and puts it at `~/.local/bin/agent`. If that directory is
+checks its SHA-256, and puts it at `~/.local/bin/ellipsis`, with `el` linked
+next to it as a short alias. If that directory is
 not on your PATH, it appends one line to your shell's startup file
 (`--no-modify-path` to skip that). Pin a version with `ELLIPSIS_VERSION=2.30.0`
 or `sh -s -- --version 2.30.0`; choose the directory with `--dir`.
@@ -24,8 +25,8 @@ In CI the same line works: inside GitHub Actions the directory is added to
 entirely. Alpine images get the musl build automatically.
 
 ```sh
-agent update       # replace the binary with the latest release (--check to only look)
-agent uninstall    # remove the binary and the PATH line (--purge to delete ~/.ellipsis too)
+ellipsis update       # replace the binary with the latest release (--check to only look)
+ellipsis uninstall    # remove the binary and the PATH line (--purge to delete ~/.ellipsis too)
 ```
 
 An installed binary checks for a newer release once a day, in the background,
@@ -58,83 +59,83 @@ skills:
 ## Usage
 
 ```sh
-agent auth login                  # device-code auth against the active host
-agent auth logout                 # remove stored credentials (--all for every host)
-agent auth status                 # active host, where the token came from, and who you are
+ellipsis auth login                  # device-code auth against the active host
+ellipsis auth logout                 # remove stored credentials (--all for every host)
+ellipsis auth status                 # active host, where the token came from, and who you are
 
-agent host list                   # list configured hosts (the active one is marked *)
-agent host add beta https://beta-api.ellipsis.dev   # add a host and switch to it
-agent host use prod               # switch the active host
-agent host current                # show the active host and how it resolves
-agent host set beta --rename staging   # rename / re-point a host (--api-base / --app-base)
-agent host delete beta            # remove a host and its stored token
+ellipsis host list                   # list configured hosts (the active one is marked *)
+ellipsis host add beta https://beta-api.ellipsis.dev   # add a host and switch to it
+ellipsis host use prod               # switch the active host
+ellipsis host current                # show the active host and how it resolves
+ellipsis host set beta --rename staging   # rename / re-point a host (--api-base / --app-base)
+ellipsis host delete beta            # remove a host and its stored token
 
-agent session start -e backend "..."   # run a prompt in a saved environment
-agent session start --config-file f.json   # ...or from an inline config
-agent session start --template ellipsis-helper   # ...or from a maintained template
-agent session start --budget 5 "..."   # cap this session's spend, in dollars
-agent session start --image shot.png "..."   # the agent sees the picture on its first turn
-agent session start --watch "..."      # start and immediately stream it
-agent session list --limit 20         # list recent sessions (filter by --source, --author, --since, …)
-agent session get <session-id>        # inspect one session (prints a dashboard link)
-agent session get <session-id> --watch  # follow a session until it finishes
-agent session record <session-id>     # read a session's stored transcript, one line per record
-agent session stop <session-id>       # stop an in-flight session
+ellipsis session start -e backend "..."   # run a prompt in a saved environment
+ellipsis session start --config-file f.json   # ...or from an inline config
+ellipsis session start --template ellipsis-helper   # ...or from a maintained template
+ellipsis session start --budget 5 "..."   # cap this session's spend, in dollars
+ellipsis session start --image shot.png "..."   # the agent sees the picture on its first turn
+ellipsis session start --watch "..."      # start and immediately stream it
+ellipsis session list --limit 20         # list recent sessions (filter by --source, --author, --since, …)
+ellipsis session get <session-id>        # inspect one session (prints a dashboard link)
+ellipsis session get <session-id> --watch  # follow a session until it finishes
+ellipsis session record <session-id>     # read a session's stored transcript, one line per record
+ellipsis session stop <session-id>       # stop an in-flight session
 
-agent review 123                  # review a pull request now, instead of waiting for a push
-agent review get <review-id>      # a review's findings, scope, and whether it posted
-agent review list --repo api      # list a repository's reviews, newest first
-agent review init                 # scaffold a starter review pipeline (code_review.yaml)
+ellipsis review 123                  # review a pull request now, instead of waiting for a push
+ellipsis review get <review-id>      # a review's findings, scope, and whether it posted
+ellipsis review list --repo api      # list a repository's reviews, newest first
+ellipsis review init                 # scaffold a starter review pipeline (code_review.yaml)
 
-agent automation list             # list your automations
-agent automation get <id>         # show one automation as YAML (--json for JSON)
-agent automation run <id> --input '{"issue": "ENG-42"}'   # invoke it exactly as defined
-agent automation init [path]      # scaffold a starter definition (default: agents/my_agent.yaml)
-agent automation create --file agents/foo.yaml   # create one, live at once (or --template <slug>)
-agent automation create --repo api --file agents/foo.yaml   # instead define it as a file, via a pull request
-agent automation edit <id> --file agents/foo.yaml    # replace its definition, live at once
-agent automation delete <id>      # delete it; it stops and its name is freed
-agent automation link <id> --repo api   # move it into a repository, via a pull request
-agent automation unlink <id>      # take it over from its file, so the API changes it
+ellipsis automation list             # list your automations
+ellipsis automation get <id>         # show one automation as YAML (--json for JSON)
+ellipsis automation run <id> --input '{"issue": "ENG-42"}'   # invoke it exactly as defined
+ellipsis automation init [path]      # scaffold a starter definition (default: agents/my_agent.yaml)
+ellipsis automation create --file agents/foo.yaml   # create one, live at once (or --template <slug>)
+ellipsis automation create --repo api --file agents/foo.yaml   # instead define it as a file, via a pull request
+ellipsis automation edit <id> --file agents/foo.yaml    # replace its definition, live at once
+ellipsis automation delete <id>      # delete it; it stops and its name is freed
+ellipsis automation link <id> --repo api   # move it into a repository, via a pull request
+ellipsis automation unlink <id>      # take it over from its file, so the API changes it
 
-agent model list                  # list selectable agent models (the account default is marked)
+ellipsis model list                  # list selectable agent models (the account default is marked)
 
-agent integration                 # every connected integration in one table
-agent github repos                # repositories connected to the GitHub installation
-agent github members              # org roster (the logins/ids --author accepts), with linked Slack identities
-agent slack channels              # channels in the connected Slack workspace
-agent slack members               # workspace members, with linked GitHub identities
-agent linear teams                # teams in the connected Linear organization
-agent sentry orgs                 # connected Sentry organizations
+ellipsis integration                 # every connected integration in one table
+ellipsis github repos                # repositories connected to the GitHub installation
+ellipsis github members              # org roster (the logins/ids --author accepts), with linked Slack identities
+ellipsis slack channels              # channels in the connected Slack workspace
+ellipsis slack members               # workspace members, with linked GitHub identities
+ellipsis linear teams                # teams in the connected Linear organization
+ellipsis sentry orgs                 # connected Sentry organizations
 
-agent file upload shot.png        # store a PNG; prints an org-gated link to paste into a PR comment
-agent file list                   # list stored files (--session <id> scopes to one run's uploads)
-agent file get <file-id> -o shot.png     # show one file, or download its bytes with -o
-agent file delete <file-id>       # delete a file (it disappears from list/get and its link stops resolving)
+ellipsis file upload shot.png        # store a PNG; prints an org-gated link to paste into a PR comment
+ellipsis file list                   # list stored files (--session <id> scopes to one run's uploads)
+ellipsis file get <file-id> -o shot.png     # show one file, or download its bytes with -o
+ellipsis file delete <file-id>       # delete a file (it disappears from list/get and its link stops resolving)
 
-agent variable list               # list sandbox env variable names (values are write-only)
-agent variable set A=1 B=2        # create/update variables (or --from-file .env/.json)
-agent variable delete K           # delete a variable
+ellipsis variable list               # list sandbox env variable names (values are write-only)
+ellipsis variable set A=1 B=2        # create/update variables (or --from-file .env/.json)
+ellipsis variable delete K           # delete a variable
 
-agent budget                      # current budget summary
-agent usage                       # usage dashboard for the period
+ellipsis budget                      # current budget summary
+ellipsis usage                       # usage dashboard for the period
 
-agent analytics reviewer --account-type bot   # which apps review the most PRs
-agent analytics pr --days 30      # PR volume/trend with human vs bot splits
-agent analytics review --repo my-service      # review totals + top reviewers
-agent update                      # update the CLI to the latest release (--to <x.y.z> for a specific one)
-agent uninstall                   # remove the CLI from this machine (--purge to delete ~/.ellipsis too)
+ellipsis analytics reviewer --account-type bot   # which apps review the most PRs
+ellipsis analytics pr --days 30      # PR volume/trend with human vs bot splits
+ellipsis analytics review --repo my-service      # review totals + top reviewers
+ellipsis update                      # update the CLI to the latest release (--to <x.y.z> for a specific one)
+ellipsis uninstall                   # remove the CLI from this machine (--purge to delete ~/.ellipsis too)
 ```
 
-Every command shown is singular. The plural spelling of each (`agent files`,
-`agent sessions`, `agent analytics prs`) is a hidden alias that works but is
+Every command shown is singular. The plural spelling of each (`ellipsis files`,
+`ellipsis sessions`, `ellipsis analytics prs`) is a hidden alias that works but is
 left out of `--help`. See
 [`skills/cli-conventions`](skills/cli-conventions/SKILL.md) for the full
 argument, flag, and help-text conventions.
 
 Most commands accept `--json` to print the raw API response. The CLI talks to
 the public REST API. Point it at a different instance durably with
-`agent host` (below), or per-invocation with `ELLIPSIS_API_BASE_URL` (or the
+`ellipsis host` (below), or per-invocation with `ELLIPSIS_API_BASE_URL` (or the
 legacy `ELLIPSIS_API_BASE`).
 
 `--watch` (on both `session start` and `session get`) streams the session's
@@ -145,7 +146,7 @@ prints a clickable dashboard link. How the stream works is described in
 
 ### Auth
 
-`agent auth login` uses the device-code flow: it requests a code pair, prints a
+`ellipsis auth login` uses the device-code flow: it requests a code pair, prints a
 verification URL (and opens it unless `--no-browser`), and polls until you
 approve the request in the dashboard. The issued user token is stored under
 `~/.ellipsis/config.json` (mode 0600) and attributes sessions to you.
@@ -155,21 +156,21 @@ environment (`ELLIPSIS_API_TOKEN` / `ELLIPSIS_API_BASE_URL`, with the legacy
 `ELLIPSIS_API_BASE` accepted as a fallback) → the **active host** in the config
 file → default (prod). This lets the CLI run headlessly — e.g. inside an
 Ellipsis cloud sandbox where a per-sandbox token and base URL are injected into
-the environment — with no `agent auth login` and no config file on disk. `agent auth logout` only clears the on-disk token (`--all` for every host); a token supplied
+the environment — with no `ellipsis auth login` and no config file on disk. `ellipsis auth logout` only clears the on-disk token (`--all` for every host); a token supplied
 via `ELLIPSIS_API_TOKEN` lives in the environment and keeps working until you
 unset it.
 
 ### Hosts
 
-`agent host` selects which Ellipsis instance the CLI targets — Ellipsis Cloud,
+`ellipsis host` selects which Ellipsis instance the CLI targets — Ellipsis Cloud,
 a preview environment, or a self-hosted deployment — so you can switch without
-re-exporting env vars. `agent host add <name> <api-url>` registers an instance
-and makes it active; `agent host use <name>` switches; `agent host list` shows
+re-exporting env vars. `ellipsis host add <name> <api-url>` registers an instance
+and makes it active; `ellipsis host use <name>` switches; `ellipsis host list` shows
 them all (the active one marked `*`). Each host keeps its own token (so
 switching doesn't re-authenticate) and its own dashboard/app URL. The app URL
 is derived from the API URL by default (`api.` → `app.`); a self-hosted instance
-whose dashboard host isn't a mechanical swap sets it explicitly with `agent host
-add … --app-base <url>` (or `agent host set <name> --app-base <url>`). `agent auth login` then authenticates the active host, and every link the CLI prints points
+whose dashboard host isn't a mechanical swap sets it explicitly with `ellipsis host
+add … --app-base <url>` (or `ellipsis host set <name> --app-base <url>`). `ellipsis auth login` then authenticates the active host, and every link the CLI prints points
 at that host's dashboard.
 
 Hosts and tokens live in `~/.ellipsis/config.json` (mode 0600); set
@@ -247,7 +248,7 @@ npm run compile             # single-binary build (bun)
 Pushing a `v*` tag triggers `.github/workflows/release.yml`, which Bun-compiles
 one binary per target (macOS arm64 and x64, Linux arm64 and x64, both glibc
 and musl), and publishes a GitHub release with the tarballs and a
-`checksums.txt`. `install.sh` and `agent update` download from that release,
+`checksums.txt`. `install.sh` and `ellipsis update` download from that release,
 so publishing it is the whole distribution step. See
 [`docs/RELEASING.md`](docs/RELEASING.md).
 

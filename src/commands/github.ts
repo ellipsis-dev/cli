@@ -68,7 +68,7 @@ export function registerGithub(program: Command): void {
           return
         }
         // SLACK shows the linked slack_user_id when a Slack<->GitHub link row
-        // exists for the member, so `agent slack members` can go the other way.
+        // exists for the member, so `ellipsis slack members` can go the other way.
         printTable(
           ['LOGIN', 'NAME', 'ROLE', 'SLACK'],
           res.members.map((m) => [

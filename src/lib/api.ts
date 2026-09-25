@@ -26,7 +26,7 @@ function fetchWithUserAgent(
 // Both args are optional overrides; when omitted, each is resolved through the
 // precedence chain (explicit → env → config → default) in config.ts. The token
 // may legitimately be absent: the device-code auth routes are unauthenticated,
-// and the server answers 401 for anything else, which reads as "run `agent
+// and the server answers 401 for anything else, which reads as "run `ellipsis auth
 // login`" via friendlyErrorMessage.
 export function api(base?: string, token?: string): Ellipsis {
   return new Ellipsis({

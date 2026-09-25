@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import type { ImageAttachment } from './types'
 
-// Images on a message — the Claude Code paste model. `agent session start
+// Images on a message — the Claude Code paste model. `ellipsis session start
 // --image shot.png` reads the file here, and it rides the request inline
 // (base64) as `images`; the server
 // appends one `[Image #N]` placeholder per image to the message body and the

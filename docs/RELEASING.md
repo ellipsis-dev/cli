@@ -2,7 +2,7 @@
 
 The CLI ships only as Bun-compiled binaries on GitHub Releases. Users install
 with `install.sh` (`curl -fsSL https://raw.githubusercontent.com/ellipsis-dev/cli/main/install.sh | sh`)
-and stay current with `agent update`. Both download from the release assets
+and stay current with `ellipsis update`. Both download from the release assets
 and verify them against `checksums.txt`. It is never published to npm:
 `package.json` is `private`, has no `bin`, and there is no `publishConfig`.
 
@@ -37,7 +37,7 @@ validates the committed version; it does not rewrite it.
 
 `package.json` is the version source for development, local compiled binaries,
 and releases. `bun run compile` checks the CLI/SDK pair before building;
-`./agent --version` reports `2.30.0` for this version, including local builds.
+`./ellipsis --version` reports `2.30.0` for this version, including local builds.
 Run `bun run check:versions` to check the pair without building, or
 `bun run check:versions 2.30.0` to also validate an intended release version.
 

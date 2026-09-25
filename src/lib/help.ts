@@ -44,7 +44,7 @@ export function configureCliHelp(program: Command): void {
   })
 }
 
-// `agent --help`: same layout commander produces, except the flat 20-command
+// `ellipsis --help`: same layout commander produces, except the flat 20-command
 // list is split into task groups so a caller can find the right group without
 // reading every description.
 function formatTopLevelHelp(cmd: Command, helper: Help): string {

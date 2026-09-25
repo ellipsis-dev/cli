@@ -55,7 +55,7 @@ the logs of a session they do not own.
   YAML.
 
 Surfaces: the dashboard at app.ellipsis.dev, the REST API at
-api.ellipsis.dev, and the `agent` CLI. All three drive the same API.
+api.ellipsis.dev, and the `ellipsis` CLI. All three drive the same API.
 Pricing is usage based, the tokens and compute a session spent plus a platform
 fee. There are no seats.
 
@@ -69,7 +69,7 @@ fee. There are no seats.
   The built-in responder needs no configuration and answers in the thread.
 - **Catching bugs before merge**: turn code review on and every pull request is
   reviewed, or commit a pipeline file to scope and customize it.
-- **Delegation from scripts or CI**: `agent session start` or
+- **Delegation from scripts or CI**: `ellipsis session start` or
   `POST /v1/sessions`. With `--watch` it streams into the log and exits nonzero
   unless the session completes, so it works as a gate.
 
@@ -157,7 +157,7 @@ access.
 For an agent a pull request will not trigger, run the file directly instead:
 
 ```sh
-agent session start --config-file agents/recent-work-summary.yaml --watch
+ellipsis session start --config-file agents/recent-work-summary.yaml --watch
 ```
 
 That runs the file as written, without touching the deployed agent.
@@ -367,14 +367,14 @@ cost and latency.
 
 ## The agent CLI
 
-One open-source binary named `agent`, a terminal client for the same API
+One open-source binary named `ellipsis` (`el` for short), a terminal client for the same API
 the dashboard uses. Most commands accept `--json` for the raw API response,
 which makes it as comfortable for a coding agent as for a human.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ellipsis-dev/cli/main/install.sh | sh
-agent auth login   # device-code flow tied to your GitHub identity
-agent auth status  # the active host, the credential source, and who you are
+ellipsis auth login   # device-code flow tied to your GitHub identity
+ellipsis auth status  # the active host, the credential source, and who you are
 ```
 
 In CI or any headless environment, skip the login: create an API key in the
@@ -385,12 +385,12 @@ wins: the environment variable, then the token stored in `~/.ellipsis/config.jso
 Start and follow work:
 
 ```sh
-agent session start "triage the failing CI on api"   # a bare ad-hoc session
-agent automation run <automation-id> --input '{...}'   # invoke an automation as defined
-agent session start --config-file agents/my_agent.yaml --watch
-agent session start --template ellipsis-helper --watch
-agent session get <session-id> --watch               # follow a running session
-agent session stop <session-id>
+ellipsis session start "triage the failing CI on api"   # a bare ad-hoc session
+ellipsis automation run <automation-id> --input '{...}'   # invoke an automation as defined
+ellipsis session start --config-file agents/my_agent.yaml --watch
+ellipsis session start --template ellipsis-helper --watch
+ellipsis session get <session-id> --watch               # follow a running session
+ellipsis session stop <session-id>
 ```
 
 With no config source, a bare `start` runs the bare ad-hoc config — an empty
@@ -406,12 +406,12 @@ completes.
 List and audit what agents have done:
 
 ```sh
-agent session list --limit 20                # --automation, --source, --author, --days, --since
-agent session record <session-id>            # the stored transcript, one line per record
-agent session log <session-id> -o session.jsonl   # the complete archived log
-agent analytics reviewer --account-type bot  # human versus bot PR and review activity
-agent budget                                 # this period's spend against the account budget
-agent usage                                  # this period's tokens and cost by model
+ellipsis session list --limit 20                # --automation, --source, --author, --days, --since
+ellipsis session record <session-id>            # the stored transcript, one line per record
+ellipsis session log <session-id> -o session.jsonl   # the complete archived log
+ellipsis analytics reviewer --account-type bot  # human versus bot PR and review activity
+ellipsis budget                                 # this period's spend against the account budget
+ellipsis usage                                  # this period's tokens and cost by model
 ```
 
 Search covers transcripts, recaps, and pull request references, with embedding
@@ -421,12 +421,12 @@ knowledge. Facets cover repository, author, agent, status, source, and date.
 Review pull requests on demand, without waiting for a push:
 
 ```sh
-agent review 519                  # review a pull request by number
-agent review 519 --full           # re-review the whole PR, ignoring earlier reviews
-agent review 519 --no-post        # print findings instead of posting to GitHub
-agent review list --repo api      # a repository's reviews, newest first
-agent review get <review-id>      # one review's findings, scope, and whether it posted
-agent review init                 # scaffold code_review.yaml for this repository
+ellipsis review 519                  # review a pull request by number
+ellipsis review 519 --full           # re-review the whole PR, ignoring earlier reviews
+ellipsis review 519 --no-post        # print findings instead of posting to GitHub
+ellipsis review list --repo api      # a repository's reviews, newest first
+ellipsis review get <review-id>      # one review's findings, scope, and whether it posted
+ellipsis review init                 # scaffold code_review.yaml for this repository
 ```
 
 Which pipeline runs is not a parameter. An explicit review resolves the same
@@ -437,21 +437,21 @@ than an error.
 Author and deploy agents:
 
 ```sh
-agent automation init agents/my_agent.yaml   # scaffold a starter definition locally
-agent automation list                        # automations with their source file
-agent automation get <id>                    # one automation as YAML
-agent automation run <id> --input '{...}'    # invoke it exactly as defined
-agent automation create --file agents/my_agent.yaml   # create it, live at once
-agent automation edit <id> --file agents/my_agent.yaml   # replace its definition, live at once
-agent automation delete <id>                 # delete it; it stops and frees its name
-agent automation link <id> --repo api        # move it into a repo, via a pull request
-agent automation unlink <id>                 # take it over from its file
-agent template list                          # built-in templates and their slugs
-agent model list                             # model ids and their supported harnesses
+ellipsis automation init agents/my_agent.yaml   # scaffold a starter definition locally
+ellipsis automation list                        # automations with their source file
+ellipsis automation get <id>                    # one automation as YAML
+ellipsis automation run <id> --input '{...}'    # invoke it exactly as defined
+ellipsis automation create --file agents/my_agent.yaml   # create it, live at once
+ellipsis automation edit <id> --file agents/my_agent.yaml   # replace its definition, live at once
+ellipsis automation delete <id>                 # delete it; it stops and frees its name
+ellipsis automation link <id> --repo api        # move it into a repo, via a pull request
+ellipsis automation unlink <id>                 # take it over from its file
+ellipsis template list                          # built-in templates and their slugs
+ellipsis model list                             # model ids and their supported harnesses
 ```
 
 An agent is owned by one of two writers, and that is what these verbs move.
-`agent automation create` with no `--repo` creates it through the API alone: no
+`ellipsis automation create` with no `--repo` creates it through the API alone: no
 file, live immediately, changed by `config edit`. With `--repo` it instead
 opens a pull request adding the file, exactly as the dashboard does, and the
 agent goes live when that merges — thereafter the file is what changes it, and
@@ -462,16 +462,16 @@ repository (by pull request; it keeps running unchanged until the merge) and
 Platform and integrations:
 
 ```sh
-agent variable set NPM_TOKEN=...             # or --from-file .env; values are write-only
-agent variable list                          # names and timestamps only
-agent integration                            # what is connected, in one table
-agent github repos                           # also github members, slack channels,
+ellipsis variable set NPM_TOKEN=...             # or --from-file .env; values are write-only
+ellipsis variable list                          # names and timestamps only
+ellipsis integration                            # what is connected, in one table
+ellipsis github repos                           # also github members, slack channels,
                                              # linear teams, sentry orgs
-agent file upload shot.png                   # store a PNG, print an org-gated link
+ellipsis file upload shot.png                   # store a PNG, print an org-gated link
 ```
 
 Most singular commands accept the plural spelling as a hidden alias, and
-`review` also answers to `cr`. `agent --help` and `agent <command> --help` are
+`review` also answers to `cr`. `ellipsis --help` and `ellipsis <command> --help` are
 authoritative for flags.
 
 ## Writing a config
@@ -482,8 +482,8 @@ Top-level keys, all optional except `ellipsis`:
 | --- | --- |
 | `ellipsis` | `kind: agent`, `version: v1`, `name`, `description`, `metadata`, and `enabled`. Its presence marks the file as a config. |
 | `trigger` | One trigger, or omit for a manual-only agent. |
-| `input` | A JSON Schema for the payload `agent automation run` passes, and the message template it renders into. |
-| `session` | What every session runs on; the keys below. The same keys, flattened, are the body of `agent` / `POST /v1/sessions`. |
+| `input` | A JSON Schema for the payload `ellipsis automation run` passes, and the message template it renders into. |
+| `session` | What every session runs on; the keys below. The same keys, flattened, are the body of `ellipsis` / `POST /v1/sessions`. |
 
 Under `session`:
 
@@ -503,7 +503,7 @@ than being silently dropped. Points that decide whether a config works:
   message verbatim. Put repository guidance in `AGENTS.md`. The former `harness`
   and `instructions` keys are rejected.
 - `session.claude_code.model` or `session.codex.model` selects a model. Claude Code
-  inherits the organization default when omitted. `agent model list` reports
+  inherits the organization default when omitted. `ellipsis model list` reports
   the available ids and the harness certified for each. Digest and
   summary jobs run well on `claude-haiku-4-5-20251001`; judgment jobs earn the
   frontier model.
@@ -548,7 +548,7 @@ Three `environment` fields define the sandbox, each with a different lifetime:
 A non-zero exit from any of them fails the session with
 `lifecycle_hook_failed`. The image is cached per repository set, commit, and
 image definition, so repeat sessions start in seconds instead of reinstalling
-dependencies. `agent session start --config-file <path> --rebuild --watch`
+dependencies. `ellipsis session start --config-file <path> --rebuild --watch`
 provisions through a fresh full build and streams every phase, which is how you
 prove an environment before merging.
 
@@ -571,7 +571,7 @@ Credentials are scoped and short-lived:
   Because permissions are YAML in git, every agent's blast radius is explicit
   and reviewed.
 - Other credentials enter as `environment.variables`. Store the value once with
-  `agent variable set`, then name it in the config. The name list is the scope,
+  `ellipsis variable set`, then name it in the config. The name list is the scope,
   so only agents that name a variable receive it, and a compromised agent never
   sees the inventory. Stored values are write-only and never readable back
   through the dashboard, API, or CLI, so rotation is one update in one place. An
@@ -639,10 +639,10 @@ npx skills add ellipsis-dev/cli
 ## Inside an Ellipsis sandbox
 
 If `ELLIPSIS_SANDBOX_ID` is set in the environment, you are the agent in an
-Ellipsis session. The `agent` CLI is pre-installed and pre-authenticated with a
+Ellipsis session. The `ellipsis` CLI is pre-installed and pre-authenticated with a
 session-scoped token, so you can start child sessions, list the team's sessions,
 read analytics, and upload screenshots as org-gated links
-(`agent file upload shot.png`) with no login.
+(`ellipsis file upload shot.png`) with no login.
 
 That token is deliberately narrower than a human's. It can list variable names
 but not set or delete them, cannot delete a file, and cannot repoint an

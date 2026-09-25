@@ -122,7 +122,7 @@ export function registerAutomation(program: Command): void {
   // Invoke an automation. It runs exactly as defined — persona, model,
   // environment, permissions, skills, budget all bind — so the body carries
   // only its typed input, an optional tighter budget, and metadata. For a
-  // prompt of your own in an environment, `agent session start` is the door.
+  // prompt of your own in an environment, `ellipsis session start` is the door.
   apiRoutes(
     automation
       .command('run <automation-id>')
@@ -179,7 +179,7 @@ export function registerAutomation(program: Command): void {
           const me = await client.identity()
           console.log(`✓ started ${session.id}`)
           console.log(`  ${sessionUrl(resolveAppBase(), me.customer_login, session.id)}`)
-          console.log(`  follow with: agent session get ${session.id} --watch`)
+          console.log(`  follow with: ellipsis session get ${session.id} --watch`)
         })
       },
     )
@@ -202,7 +202,7 @@ export function registerAutomation(program: Command): void {
     .option('-f, --file <path>', 'definition file (.yaml/.yml or .json) to add')
     .option(
       '--template <slug>',
-      'create from an Ellipsis template instead of a file (see `agent template list`)',
+      'create from an Ellipsis template instead of a file (see `ellipsis template list`)',
     )
     .option(
       '--path <path>',
@@ -367,7 +367,7 @@ export function registerAutomation(program: Command): void {
     .option('--force', 'overwrite the file if it already exists')
     .option(
       '-t, --template <slug>',
-      'instead scaffold from a template, in a repo, by pull request (see `agent template list`)',
+      'instead scaffold from a template, in a repo, by pull request (see `ellipsis template list`)',
     )
     .option(
       '-r, --repo <name>',
@@ -437,7 +437,7 @@ function printCreated(created: CreatedAutomation): void {
     `✓ created "${automationName(created.agent)}" (${created.agent.id}) — live now`,
   )
   console.log(
-    'It has no file; change it with `agent automation edit`, or `agent automation link` to move it into a repo.',
+    'It has no file; change it with `ellipsis automation edit`, or `ellipsis automation link` to move it into a repo.',
   )
 }
 
@@ -457,7 +457,7 @@ ellipsis:
   name: ${name}
   description: What this automation does.
 
-# When it runs. Omit for an automation you invoke yourself (\`agent automation run\`).
+# When it runs. Omit for an automation you invoke yourself (\`ellipsis automation run\`).
 # trigger:
 #   type: cron
 #   schedule: "0 9 * * 1-5"   # weekdays at 09:00

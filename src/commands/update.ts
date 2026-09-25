@@ -48,11 +48,11 @@ async function check(quiet: boolean): Promise<void> {
   if (quiet) return
   const cmp = compareVersions(latest, VERSION)
   if (cmp > 0) {
-    console.log(`agent ${latest} is available (you have ${VERSION}). Run \`agent update\`.`)
+    console.log(`ellipsis ${latest} is available (you have ${VERSION}). Run \`ellipsis update\`.`)
   } else if (cmp === 0) {
-    console.log(`agent ${VERSION} is the latest release.`)
+    console.log(`ellipsis ${VERSION} is the latest release.`)
   } else {
-    console.log(`agent ${VERSION} is newer than the latest release (${latest}).`)
+    console.log(`ellipsis ${VERSION} is newer than the latest release (${latest}).`)
   }
 }
 
@@ -60,11 +60,11 @@ async function update(to: string | undefined): Promise<void> {
   const execPath = realpathSync(process.execPath)
   const kind = installKind(execPath)
   if (kind === 'source') {
-    throw new Error('agent is running from source; update only replaces an installed binary')
+    throw new Error('ellipsis is running from source; update only replaces an installed binary')
   }
   if (kind === 'homebrew') {
     throw new Error(
-      'this agent was installed with Homebrew. Run `brew uninstall agent`, then reinstall with install.sh',
+      'this binary was installed with Homebrew. Run `brew uninstall agent`, then reinstall with install.sh',
     )
   }
   const target = releaseTarget(process.platform, process.arch, isMusl())
@@ -80,19 +80,19 @@ async function update(to: string | undefined): Promise<void> {
     writeUpdateState({ checkedAt: new Date().toISOString(), latest: version })
     const cmp = compareVersions(version, VERSION)
     if (cmp === 0) {
-      console.log(`agent ${VERSION} is already the latest release.`)
+      console.log(`ellipsis ${VERSION} is already the latest release.`)
       return
     }
     if (cmp < 0) {
       console.log(
-        `agent ${VERSION} is newer than the latest release (${version}). Pass --to ${version} to downgrade.`,
+        `ellipsis ${VERSION} is newer than the latest release (${version}). Pass --to ${version} to downgrade.`,
       )
       return
     }
   }
 
-  console.log(`Updating agent from ${VERSION} to ${version} (${target})...`)
+  console.log(`Updating ellipsis from ${VERSION} to ${version} (${target})...`)
   await replaceBinary(execPath, version, target)
   const reported = execFileSync(execPath, ['--version'], { stdio: 'pipe' }).toString().trim()
-  console.log(`Updated agent to ${reported} at ${execPath}`)
+  console.log(`Updated ellipsis to ${reported} at ${execPath}`)
 }

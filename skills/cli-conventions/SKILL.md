@@ -5,7 +5,7 @@ description: How to name commands, arguments, and flags in the Ellipsis agent CL
 
 # Ellipsis CLI conventions
 
-The primary reader of `agent --help` is a coding agent deciding its next call.
+The primary reader of `ellipsis --help` is a coding agent deciding its next call.
 It reads once, from a cold start, with no memory of the last release. Every
 rule here follows from that: **one spelling per concept, intent over
 transport, no clutter to scan past.**
@@ -18,17 +18,17 @@ route text.
 Singular nouns, one verb per action.
 
 ```
-agent file list           agent file delete <file-id>
-agent session start       agent automation edit <automation-id>
+ellipsis file list           ellipsis file delete <file-id>
+ellipsis session start       ellipsis automation edit <automation-id>
 ```
 
 - **The noun is singular, always.** `file`, not `files`. `hook`, not
   `hooks`. `analytics` is the sole exception: it is a mass noun with no
   singular form.
 - **The plural still works, hidden.** Register it with `alsoKnownAs`, which
-  keeps it callable but strips it from every help surface. `agent files list`
+  keeps it callable but strips it from every help surface. `ellipsis files list`
   runs and prints nothing extra.
-- **A renamed command keeps its old name, hidden.** `agent file` was `agent
+- **A renamed command keeps its old name, hidden.** `ellipsis file` was `agent
   asset`, so it registers `asset` and `assets` alongside `files`. A caller who
   learned the old spelling is never told it is wrong.
 - **Read-only integration browsers use a bare plural leaf**: `github repos`,
@@ -109,11 +109,11 @@ One line, imperative verb first, no trailing period.
 - **No `a|b` alias spellings in prose.** `model|models` tells the reader
   nothing and doubles the width of the term column.
 - Point at the command that answers the follow-up question:
-  `(see \`agent model list\`)`, `(see \`agent github members\`)`.
+  `(see \`ellipsis model list\`)`, `(see \`ellipsis github members\`)`.
 
 ## Top-level help
 
-`agent --help` is grouped, not flat: Sessions, Agents, Platform,
+`ellipsis --help` is grouped, not flat: Sessions, Agents, Platform,
 Integrations, Spend, Account. Groups live in `TOP_LEVEL_GROUPS` in
 `src/lib/help.ts`. **A new top-level command must be added to a group** or it
 falls through to "Other", which is the signal that someone forgot.

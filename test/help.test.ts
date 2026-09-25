@@ -4,17 +4,17 @@ import { resolveCommandPath } from '../src/commands/help'
 import { alsoKnownAs } from '../src/lib/help'
 
 function tree(): Command {
-  const program = new Command().name('agent')
+  const program = new Command().name('ellipsis')
   const session = alsoKnownAs(program.command('session'), 'sessions')
   alsoKnownAs(session.command('list'), 'ls')
   return program
 }
 
 // Registering our own `help` command replaces commander's built-in one, so the
-// `agent help <command>` passthrough is ours to keep working.
+// `ellipsis help <command>` passthrough is ours to keep working.
 describe('resolveCommandPath', () => {
-  it('resolves the program itself for a bare `agent help`', () => {
-    expect(resolveCommandPath(tree(), [])?.name()).toBe('agent')
+  it('resolves the program itself for a bare `ellipsis help`', () => {
+    expect(resolveCommandPath(tree(), [])?.name()).toBe('ellipsis')
   })
 
   it('walks nested paths, which the built-in help never did', () => {

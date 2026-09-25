@@ -36,7 +36,7 @@ export function registerTemplate(program: Command): void {
           ['SLUG', 'NAME', 'DESCRIPTION'],
           templates.map((t) => [t.slug, t.name, t.description]),
         )
-        console.log('\nCreate one: agent automation init --template <slug> --repo <name>')
+        console.log('\nCreate one: ellipsis automation init --template <slug> --repo <name>')
       })
     })
 }

@@ -79,7 +79,7 @@ export function registerAuth(program: Command): void {
     .option('--all', 'clear the stored token for every host, not just the active one')
     .action((opts: { all?: boolean }) => {
       // Clear only the on-disk token(s); the host entries (api/app base) stay
-      // so the next `agent auth login` targets the same instance.
+      // so the next `ellipsis auth login` targets the same instance.
       if (opts.all) {
         clearAllTokens()
       } else {
@@ -108,7 +108,7 @@ export function registerAuth(program: Command): void {
 }
 
 // Exit 1 whenever the CLI could not make an authenticated call, so a CI step
-// can use `agent auth status` as its readiness check.
+// can use `ellipsis auth status` as its readiness check.
 async function status(json: boolean): Promise<void> {
   const host = activeHostName() ?? null
   const apiBase = resolveApiBase()
@@ -123,7 +123,7 @@ async function status(json: boolean): Promise<void> {
   let identity: WhoAmI | null = null
   let error: string | undefined
   if (source === 'none') {
-    error = 'Not logged in. Run `agent auth login`, or set ELLIPSIS_API_TOKEN.'
+    error = 'Not logged in. Run `ellipsis auth login`, or set ELLIPSIS_API_TOKEN.'
   } else {
     try {
       identity = await api().identity()
@@ -131,8 +131,8 @@ async function status(json: boolean): Promise<void> {
       if (err instanceof APIError && err.status === 401) {
         error =
           source === 'env'
-            ? 'The server rejected ELLIPSIS_API_TOKEN. Check the token, or unset it and run `agent auth login`.'
-            : 'The stored token is invalid or has expired. Run `agent auth login` again.'
+            ? 'The server rejected ELLIPSIS_API_TOKEN. Check the token, or unset it and run `ellipsis auth login`.'
+            : 'The stored token is invalid or has expired. Run `ellipsis auth login` again.'
       } else if (err instanceof APIError) {
         error = `${err.status} ${err.message}`
       } else {

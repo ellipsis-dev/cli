@@ -84,7 +84,7 @@ export function registerEnvironment(program: Command): void {
         console.log(
           'Reference it from automations (`environment: ' +
             e.name +
-            '`) or start a session in it: `agent session start -e ' +
+            '`) or start a session in it: `ellipsis session start -e ' +
             e.name +
             '`.',
         )
@@ -150,7 +150,7 @@ export function registerEnvironment(program: Command): void {
       writeFileSync(target, STARTER_ENVIRONMENT)
       console.log(`✓ wrote ${target}`)
       console.log(
-        'Commit it to your default branch (Ellipsis syncs it from GitHub), or create it now: `agent environment create -f ' +
+        'Commit it to your default branch (Ellipsis syncs it from GitHub), or create it now: `ellipsis environment create -f ' +
           target +
           '`.',
       )
@@ -164,7 +164,7 @@ function environmentSource(e: SavedEnvironment): string {
 
 const STARTER_ENVIRONMENT = `# Ellipsis environment: the machine your agents run in, defined once for the
 # team. Commit to your default branch (synced locations: agents/, .agents/,
-# ellipsis/, .ellipsis/), or create it live with \`agent environment create -f\`.
+# ellipsis/, .ellipsis/), or create it live with \`ellipsis environment create -f\`.
 ellipsis:
   kind: environment
   name: my-environment
@@ -174,7 +174,7 @@ repositories:
   - name: my-repo
 
 # Environment variables injected into the sandbox. Omit \`value\` to resolve
-# the name from your stored secrets (\`agent variable set NAME=...\`).
+# the name from your stored secrets (\`ellipsis variable set NAME=...\`).
 variables:
   - name: MY_TOKEN
 

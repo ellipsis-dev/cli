@@ -95,7 +95,7 @@ describe('parsePullRequest', () => {
   })
 
   it('teaches the fix when `review` swallowed a bare prompt', () => {
-    // `agent review the auth changes` reaches here because the verb reserves
+    // `ellipsis review the auth changes` reaches here because the verb reserves
     // the word — the error has to name the quoted form.
     expect(() => parsePullRequest('the')).toThrow(/quote it/)
   })
