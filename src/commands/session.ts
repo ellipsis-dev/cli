@@ -658,11 +658,11 @@ function renderFrameHuman(frame: StreamFrame, statusWord?: string): void {
     case 'done':
       break // handled by the caller
     default:
-      break // unknown frame types are ignored (protocol §3.6)
+      break // unknown frame types are ignored (see docs/SESSION_STREAMING.md)
   }
 }
 
-// Exit 0 for a successful terminal status, non-zero otherwise (spec §4.1).
+// Exit 0 for a successful terminal status, non-zero otherwise (see docs/SESSION_STREAMING.md).
 export function exitCodeForStatus(status: string): number {
   return ['completed', 'closed', 'idle'].includes(status) ? 0 : 1
 }

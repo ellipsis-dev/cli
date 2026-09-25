@@ -122,8 +122,8 @@ legacy `ELLIPSIS_API_BASE`).
 `--watch` (on both `session start` and `session get`) streams the session's
 output live over WebSocket until it reaches a terminal status, falling back to
 periodic status polling if the live stream is unavailable. Either way it first
-prints a clickable dashboard link. The stream protocol is specified in
-[`docs/RUN_STREAMING_SPEC.md`](docs/RUN_STREAMING_SPEC.md).
+prints a clickable dashboard link. How the stream works is described in
+[`docs/SESSION_STREAMING.md`](docs/SESSION_STREAMING.md).
 
 ### Auth
 
