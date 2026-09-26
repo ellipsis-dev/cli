@@ -1,26 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Ellipsis } from '@ellipsis-dev/sdk'
 import { formatStepLine, recordText, resolveAuthorId } from '../src/commands/session'
-import type { AgentSession, SessionRecord } from '../src/lib/types'
-
-function session(overrides: Partial<AgentSession> = {}): AgentSession {
-  return {
-    id: 'session_1',
-    created_at: '2026-07-03T12:00:00+00:00',
-    updated_at: '2026-07-03T12:00:00+00:00',
-    status: 'completed',
-    status_reason: null,
-    config_id: null,
-    source: 'api',
-    harness: 'claude_code',
-    prompting: { enabled: true },
-    budget: { cents: 0, source: 'system' },
-    cost: { llm: 0, sandbox_cpu: 0, sandbox_memory: 0, fee: 0, total: 0 },
-    tokens: { input: 0, output: 0, cache_read: 0, cache_creation: 0, total: 0, model: '' },
-    metadata: {},
-    ...overrides,
-  }
-}
+import type { SessionRecord } from '../src/lib/types'
 
 describe('getAgentSessionRecords', () => {
   afterEach(() => vi.unstubAllGlobals())
@@ -96,10 +77,9 @@ describe('recordText / formatStepLine', () => {
     id: 'rec_1',
     session_id: 'session_1',
     kind: overrides.source === 'lifecycle' ? 'platform' : 'claude_sdk',
-    session_execution_id: 'exec_1',
+    turn_id: 'turn_1',
     created_at: '2026-07-03T12:00:00+00:00',
     feed_seq: 3,
-    stream_seq: 3,
     source: 'claude_code',
     record_type: (payload.kind as string) ?? 'assistant',
     record_format: overrides.source === 'lifecycle' ? 'ellipsis_lifecycle@1' : 'claude_sdk@1',
@@ -142,7 +122,7 @@ describe('recordText / formatStepLine', () => {
   })
 
   it('formats one line with index, timestamp, type, and truncated text', () => {
-    // record_type + payload.subtype drive the type column; stream_seq the index.
+    // record_type + payload.subtype drive the type column; feed_seq the index.
     const line = formatStepLine(
       record(
         { subtype: 'init', content: 'line one\nline two' },
@@ -152,30 +132,61 @@ describe('recordText / formatStepLine', () => {
     expect(line).toBe('   3  2026-07-03 12:00  system/init       line one line two')
   })
 
-  it('renders a lifecycle record as its notification line', () => {
+  it('renders a platform record as its notification line', () => {
     const line = formatStepLine(
-      record({}, { source: 'lifecycle', record_type: 'sandbox_ready', stream_seq: -2 }),
+      record(
+        { repositories: ['acme/repo'], duration_ms: 1200 },
+        { source: 'lifecycle', record_type: 'environment_ready', feed_seq: 2 },
+      ),
     )
-    expect(line).toBe('  -2  2026-07-03 12:00  sandbox_ready     Sandbox ready')
+    expect(line).toMatch(/^   2  2026-07-03 12:00  environment_ready  Environment ready/)
   })
 
-  it('renders sandbox_ready cache tier and setup-output chunks', () => {
-    // sandbox_ready carries the image-cache tier so a slow start explains itself.
-    const ready = formatStepLine(
-      record(
-        { repositories: ['acme/repo'], cache_tier: 'full' },
-        { source: 'lifecycle', record_type: 'sandbox_ready', stream_seq: -2 },
-      ),
-    )
-    expect(ready).toContain('Sandbox ready, acme/repo, full build')
-    // A sandbox-output chunk reads as the script's latest non-empty line.
+  it('renders hook output and how a turn ended', () => {
+    // An environment_output chunk carries the customer's own hook output.
     const chunk = formatStepLine(
       record(
-        { phase: 'setup', chunk: 3, lines: ['Installing pandas (3.0.3)', '  '] },
-        { source: 'lifecycle', record_type: 'sandbox_output', stream_seq: -3 },
+        {
+          phase: 'hooks',
+          step: 'after_checkout',
+          stream: 'stdout',
+          chunk: 3,
+          lines: ['Installing pandas (3.0.3)', '  '],
+        },
+        { source: 'lifecycle', record_type: 'environment_output', feed_seq: 3 },
       ),
     )
-    expect(chunk).toContain('setup, Installing pandas (3.0.3)')
+    expect(chunk).toContain('Installing pandas (3.0.3)')
+    const ended = formatStepLine(
+      record(
+        {
+          turn_id: 'turn_1',
+          turn_index: 0,
+          status: 'failed',
+          reason: 'budget_hit',
+          detail: 'The session reached its budget.',
+        },
+        { source: 'lifecycle', record_type: 'turn_ended', feed_seq: 4 },
+      ),
+    )
+    // The SDK's wording: the platform's explanation when the turn carries
+    // one, else the bare outcome.
+    expect(ended).toContain('The session reached its budget.')
+    const bare = formatStepLine(
+      record(
+        { turn_id: 'turn_1', turn_index: 0, status: 'stopped', reason: null, detail: null },
+        { source: 'lifecycle', record_type: 'turn_ended', feed_seq: 4 },
+      ),
+    )
+    expect(bare).toContain('Turn stopped')
+  })
+
+  it('renders a record type it does not know as its bare type', () => {
+    // Historical feeds can still hold record types the platform no longer emits.
+    const line = formatStepLine(
+      record({}, { source: 'lifecycle', record_type: 'session_idle', feed_seq: 5 }),
+    )
+    expect(line).toBe('   5  2026-07-03 12:00  session_idle      session_idle')
   })
 
   it('truncates long text to about 120 characters', () => {

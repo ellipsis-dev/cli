@@ -75,12 +75,12 @@ ellipsis session start --config-file f.json   # ...or from an inline config
 ellipsis session start --template ellipsis-helper   # ...or from a maintained template
 ellipsis session start --budget 5 "..."   # cap this session's spend, in dollars
 ellipsis session start --image shot.png "..."   # the agent sees the picture on its first turn
-ellipsis session start --watch "..."      # start and immediately stream it
+ellipsis session start --watch "..."      # start and stream it until its opening turn ends
 ellipsis session list --limit 20         # list recent sessions (filter by --source, --author, --since, …)
 ellipsis session get <session-id>        # inspect one session (prints a dashboard link)
-ellipsis session get <session-id> --watch  # follow a session until it finishes
+ellipsis session get <session-id> --watch  # follow the turn in progress until it ends
 ellipsis session record <session-id>     # read a session's stored transcript, one line per record
-ellipsis session stop <session-id>       # stop an in-flight session
+ellipsis session stop <session-id>       # stop a session's turn in progress
 
 ellipsis review 123                  # review a pull request now, instead of waiting for a push
 ellipsis review get <review-id>      # a review's findings, scope, and whether it posted
@@ -108,11 +108,6 @@ ellipsis slack members               # workspace members, with linked GitHub ide
 ellipsis linear teams                # teams in the connected Linear organization
 ellipsis sentry orgs                 # connected Sentry organizations
 
-ellipsis file upload shot.png        # store a PNG; prints an org-gated link to paste into a PR comment
-ellipsis file list                   # list stored files (--session <id> scopes to one run's uploads)
-ellipsis file get <file-id> -o shot.png     # show one file, or download its bytes with -o
-ellipsis file delete <file-id>       # delete a file (it disappears from list/get and its link stops resolving)
-
 ellipsis variable list               # list sandbox env variable names (values are write-only)
 ellipsis variable set A=1 B=2        # create/update variables (or --from-file .env/.json)
 ellipsis variable delete K           # delete a variable
@@ -139,9 +134,10 @@ the public REST API. Point it at a different instance durably with
 legacy `ELLIPSIS_API_BASE`).
 
 `--watch` (on both `session start` and `session get`) streams the session's
-output live over WebSocket until it reaches a terminal status, falling back to
-periodic status polling if the live stream is unavailable. Either way it first
-prints a clickable dashboard link. How the stream works is described in
+output live over WebSocket until the turn it is waiting on ends (`completed`,
+`failed`, `stopped`, or `cancelled`), falling back to polling the turn if the
+live stream is unavailable. It exits 0 only for `completed`. Either way it
+first prints a clickable dashboard link. How the stream works is described in
 [`docs/SESSION_STREAMING.md`](docs/SESSION_STREAMING.md).
 
 ### Auth

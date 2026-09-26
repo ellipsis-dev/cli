@@ -9,7 +9,7 @@ function base(overrides: Partial<WhoAmI> = {}): WhoAmI {
     user_id: null,
     gh_user: null,
     api_key_id: null,
-    sandbox_id: null,
+    session_id: null,
     ...overrides,
   }
 }

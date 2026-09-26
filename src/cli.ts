@@ -6,7 +6,6 @@ import { registerReview } from './commands/review'
 import { registerAutomation } from './commands/automation'
 import { registerEnvironment } from './commands/environment'
 import { registerVariable } from './commands/variable'
-import { registerFile } from './commands/file'
 import { registerTemplate } from './commands/template'
 import { registerModel } from './commands/model'
 import { registerIntegration } from './commands/integrations'
@@ -42,7 +41,6 @@ registerReview(program)
 registerAutomation(program)
 registerEnvironment(program)
 registerVariable(program)
-registerFile(program)
 registerTemplate(program)
 registerModel(program)
 registerIntegration(program)

@@ -59,8 +59,8 @@ export function registerUsage(program: Command): void {
           for (const m of u.by_model) {
             const cost = usdFromMillicents(
               m.cost_tokens_millicents +
-                m.cost_sandbox_cpu_millicents +
-                m.cost_sandbox_memory_millicents +
+                m.cost_cpu_millicents +
+                m.cost_memory_millicents +
                 m.cost_fee_millicents,
             )
             console.log(

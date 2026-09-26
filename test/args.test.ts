@@ -61,7 +61,7 @@ describe('collectSource / collectStatus', () => {
 
   it('reject unknown values listing the valid ones', () => {
     expect(() => collectSource('slack', [])).toThrow(/source must be one of: react, web/)
-    expect(() => collectStatus('done', [])).toThrow(/status must be one of: scheduled/)
+    expect(() => collectStatus('done', [])).toThrow(/status must be one of: pending, running/)
   })
 })
 

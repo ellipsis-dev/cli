@@ -15,7 +15,8 @@ type S = components['schemas']
 
 export type AgentSession = S['Session']
 export type AgentSessionSource = S['SessionSource']
-export type AgentSessionStatus = S['SessionLifecycleStatus']
+export type SessionTurn = S['SessionTurn']
+export type TurnStatus = S['TurnStatus']
 // The frames flavor, not `S['SessionRecord']`: the spec marks defaulted fields
 // optional, but on the wire the server always serializes every field, and the
 // SDK's transcript store types its inputs this way. Using it here keeps records
@@ -73,14 +74,6 @@ export type Finding = S['ReviewFinding']
 export type CreateReviewRequest = S['CreateReviewRequest']
 export type ListReviewsResponse = S['ReviewsListResponse']
 export type CodeReviewRunStatus = S['CodeReviewRunStatus']
-
-// --------------------------------- files ----------------------------------
-
-export type FileView = S['File']
-export type CreateFileRequest = Parameters<Ellipsis['files']['create']>[0]
-export type CreateFileResponse = S['CreateFileResponse']
-export type GetFileResponse = S['GetFileResponse']
-export type ListFilesResponse = S['FilesListResponse']
 
 // ------------------------------- secrets ----------------------------------
 // Customer-scoped environment variables injected into a sandbox when an agent

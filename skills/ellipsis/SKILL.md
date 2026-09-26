@@ -71,7 +71,7 @@ fee. There are no seats.
   reviewed, or commit a pipeline file to scope and customize it.
 - **Delegation from scripts or CI**: `ellipsis session start` or
   `POST /v1/sessions`. With `--watch` it streams into the log and exits nonzero
-  unless the session completes, so it works as a gate.
+  unless the turn completes, so it works as a gate.
 
 Things teams actually build: screenshot every pull request that touches the
 frontend so reviewers see the change; investigate Sentry alerts when they fire
@@ -236,9 +236,9 @@ session:
   conversation, so an alert storm produces one investigation, not dozens of
   duplicates. Webhook deliveries are deduplicated, so a replay never
   double-runs an agent.
-- React and cron sessions are single-shot. Mention and on-demand sessions are
+- React and cron sessions run once. Mention and on-demand sessions are
   durable conversations: follow-ups keep the whole exchange and the working
-  tree, and an idle conversation costs near nothing between turns.
+  tree, and a conversation costs near nothing between turns.
 
 ## Code review
 
@@ -389,7 +389,7 @@ ellipsis session start "triage the failing CI on api"   # a bare ad-hoc session
 ellipsis automation run <automation-id> --input '{...}'   # invoke an automation as defined
 ellipsis session start --config-file agents/my_agent.yaml --watch
 ellipsis session start --template ellipsis-helper --watch
-ellipsis session get <session-id> --watch               # follow a running session
+ellipsis session get <session-id> --watch               # follow the turn in progress
 ellipsis session stop <session-id>
 ```
 
@@ -399,9 +399,9 @@ prompt is the sole instruction. The CLI also sends the repository you are standi
 the server clones it. Per-session overrides need no config edit: `--model`,
 `--system`, `--repo`, `--cpu`, `--memory`, `--timeout`, `--budget`, and
 `--override` for a full partial config patch. `--rebuild` skips the image
-cache. `--detach` returns immediately. `--watch --quiet` prints only status
-transitions and the result, and either watch form exits `0` only when the session
-completes.
+cache. `--detach` returns immediately. `--watch --quiet` prints only the turn's
+status transitions and how it ended, and either watch form exits `0` only when
+the turn completes.
 
 List and audit what agents have done:
 
@@ -467,7 +467,6 @@ ellipsis variable list                          # names and timestamps only
 ellipsis integration                            # what is connected, in one table
 ellipsis github repos                           # also github members, slack channels,
                                              # linear teams, sentry orgs
-ellipsis file upload shot.png                   # store a PNG, print an org-gated link
 ```
 
 Most singular commands accept the plural spelling as a hidden alias, and
@@ -510,19 +509,21 @@ than being silently dropped. Points that decide whether a config works:
 - `session.budget.session` defaults to $250, which is also the platform maximum, so it
   can only be lowered. `day`, `week`, and `month` are trailing 1, 7, and 28 day
   caps on this agent, with ceilings of $1,000, $10,000, and $40,000. A session
-  that reaches a cap stops mid-task and records `budget_hit`, which is a distinct
-  exit status from an error. Accounts also have their own trailing caps, plus
+  that reaches a cap stops mid-task and its turn fails with reason `budget_hit`,
+  distinct from an error. Accounts also have their own trailing caps, plus
   opt-in per-developer caps.
 - `session.output` makes an agent a function with a contract: it exits through
   your JSON Schema, so downstream automation gets typed data instead of prose to
-  parse. Schema failures exit loudly as `tool_call_failed`. It does not go
+  parse. Schema failures fail the turn with reason `tool_call_failed`. It does not go
   together with a mention trigger.
-- Raw session starts accept `lifecycle.interactive: false` to run once. The
-  returned `lifecycle.prompting` describes whether direct messages are accepted.
+- Raw session starts accept `conversation.interactive: false` to run once. The
+  returned `conversation.prompting` describes whether direct messages are
+  accepted, and `turn` is the turn to wait on: a message is answered when its
+  turn's status is `completed`, `failed`, `stopped`, or `cancelled`.
 
 Validation surfaces on push to the default branch, on config pull requests, in
 the dashboard editor, and at session start for checks that need the session's
-own commit. Session-start failures record an exit status that names the cause:
+own commit. A turn that cannot start fails with a reason that names the cause:
 `lifecycle_hook_failed`, `missing_repo_access`, `missing_token_permissions`,
 `missing_sandbox_variables`, `tool_call_failed`, `budget_hit`.
 
@@ -545,7 +546,7 @@ Three `environment` fields define the sandbox, each with a different lifetime:
   never cached, for session-scoped setup such as authenticating a CLI. Capped at
   5 minutes each.
 
-A non-zero exit from any of them fails the session with
+A non-zero exit from any of them fails the turn with reason
 `lifecycle_hook_failed`. The image is cached per repository set, commit, and
 image definition, so repeat sessions start in seconds instead of reinstalling
 dependencies. `ellipsis session start --config-file <path> --rebuild --watch`
@@ -589,9 +590,9 @@ print, so keep `image.setup` and hooks from echoing a value.
 Every session outlives its sandbox, which is what makes agent work reviewable
 rather than a black box.
 
-- The live feed interleaves the agent's own output with lifecycle events, and
-  streams with lossless resume, so you can watch an agent work and catch a wrong
-  turn before it compounds.
+- The live feed interleaves the agent's own output with environment and turn
+  events, and streams with lossless resume, so you can watch an agent work and
+  catch a wrong turn before it compounds.
 - Every turn and tool call is recorded, with the config version it ran and the
   exact instructions it launched with, so "what did the agent do" and "what was
   the agent told" are both reads rather than reconstructions.
@@ -641,11 +642,10 @@ npx skills add ellipsis-dev/cli
 If `ELLIPSIS_SANDBOX_ID` is set in the environment, you are the agent in an
 Ellipsis session. The `ellipsis` CLI is pre-installed and pre-authenticated with a
 session-scoped token, so you can start child sessions, list the team's sessions,
-read analytics, and upload screenshots as org-gated links
-(`ellipsis file upload shot.png`) with no login.
+and read analytics with no login.
 
 That token is deliberately narrower than a human's. It can list variable names
-but not set or delete them, cannot delete a file, and cannot repoint an
+but not set or delete them, and cannot repoint an
 account or repository default. An agent cannot overwrite the team's credentials
 or destroy the evidence it posted.
 

@@ -34,7 +34,7 @@ export function renderIdentity(me: WhoAmI): void {
   if (me.gh_user) console.log(`user:      ${me.gh_user.login} (${me.user_id})`)
   else if (me.user_id) console.log(`user:      ${me.user_id}`)
   if (me.api_key_id) console.log(`api key:   ${me.api_key_id}`)
-  if (me.sandbox_id) console.log(`sandbox:   ${me.sandbox_id}`)
+  if (me.session_id) console.log(`session:   ${me.session_id}`)
 }
 
 export function registerAuth(program: Command): void {

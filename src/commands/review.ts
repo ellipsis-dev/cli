@@ -5,7 +5,7 @@ import { api, APIError } from '../lib/api'
 import { alsoKnownAs, apiRoutes } from '../lib/help'
 import { repoFromCwd } from '../lib/git'
 import { formatTs, printJson, printTable, relativeAge, runAction, usdFromMillicents } from '../lib/output'
-import { watchSessionStreaming } from './session'
+import { followConversation } from './session'
 import type { Ellipsis } from '@ellipsis-dev/sdk'
 import type {
   CodeReviewRunStatus,
@@ -29,9 +29,6 @@ import type {
 //
 // A review is a pipeline of stage sessions, not a single session: its id is a
 // `crun_…`, and each stage's session id lives in `stages[]`.
-
-// How long to wait between REST polls when the stream isn't available.
-const FALLBACK_POLL_INTERVAL_SECONDS = 3
 
 // The only paths a committed pipeline may live at, in the precedence order the
 // server resolves them (CODE_REVIEW_CONFIG_PATHS). A file anywhere else is a
@@ -91,8 +88,9 @@ export function registerReview(program: Command): void {
           return
         }
 
-        // Block-and-stream, then re-read: the findings are collected from the
-        // sandbox at teardown, so they only exist once the review finalizes.
+        // Follow the conversation to its close, then re-read: the findings
+        // are collected when the review's environment is torn down, after
+        // its turn ended, so they only exist once the conversation closes.
         // Same two-step `ellipsis file get` uses.
         if (!opts.json) {
           console.log(
@@ -100,7 +98,7 @@ export function registerReview(program: Command): void {
               `(${started.id})`,
           )
         }
-        await watchSessionStreaming(client, started.id, FALLBACK_POLL_INTERVAL_SECONDS, false)
+        await followConversation(client, started.id, false)
         const finished = await client.reviews.get(started.id)
         if (opts.json) printJson(finished)
         else renderReview(finished)

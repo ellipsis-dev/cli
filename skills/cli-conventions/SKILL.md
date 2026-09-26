@@ -18,45 +18,43 @@ route text.
 Singular nouns, one verb per action.
 
 ```
-ellipsis file list           ellipsis file delete <file-id>
+ellipsis environment list    ellipsis environment delete <environment-id>
 ellipsis session start       ellipsis automation edit <automation-id>
 ```
 
-- **The noun is singular, always.** `file`, not `files`. `hook`, not
+- **The noun is singular, always.** `environment`, not `environments`. `hook`, not
   `hooks`. `analytics` is the sole exception: it is a mass noun with no
   singular form.
 - **The plural still works, hidden.** Register it with `alsoKnownAs`, which
-  keeps it callable but strips it from every help surface. `ellipsis files list`
+  keeps it callable but strips it from every help surface. `ellipsis environments list`
   runs and prints nothing extra.
-- **A renamed command keeps its old name, hidden.** `ellipsis file` was `agent
-  asset`, so it registers `asset` and `assets` alongside `files`. A caller who
-  learned the old spelling is never told it is wrong.
+- **A renamed command keeps its old name, hidden.** Register the old spelling
+  with `alsoKnownAs` beside the new one. A caller who learned the old spelling
+  is never told it is wrong.
 - **Read-only integration browsers use a bare plural leaf**: `github repos`,
   `slack channels`, `linear teams`, `sentry orgs`. They have no
   get/create/delete to disambiguate against, so the extra `list` is noise.
-  Anything with more than one verb gets `<noun> <verb>`: `file list`,
-  `file get`, `file upload`, `file delete`.
+  Anything with more than one verb gets `<noun> <verb>`: `environment list`,
+  `environment get`, `environment create`, `environment delete`.
 - **`delete` is the shown verb**, with `rm` as a hidden alias. Never the
   reverse.
 - **`list` is the shown verb**, with `ls` hidden.
 
 ```ts
-const file = alsoKnownAs(
-  program.command('file').description('...'),
-  'files',
-  'asset',
-  'assets',
+const environment = alsoKnownAs(
+  program.command('environment').description('...'),
+  'environments',
 )
 
 apiRoutes(
-  alsoKnownAs(file.command('delete <file-id>').description('...'), 'rm'),
-  'DELETE /v1/files/{id}',
+  alsoKnownAs(environment.command('delete <environment-id>').description('...'), 'rm'),
+  'DELETE /v1/environments/{id}',
 )
 ```
 
 ## Arguments
 
-Kebab-case placeholders: `<session-id>`, `<config-id>`, `<file-id>`,
+Kebab-case placeholders: `<session-id>`, `<config-id>`, `<environment-id>`,
 `<api-url>`, `<owner/name>`. Never camelCase, and never a bare `<id>` when the
 type matters.
 
