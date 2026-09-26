@@ -5,7 +5,7 @@
     "": {
       "name": "@ellipsis/cli",
       "dependencies": {
-        "@ellipsis-dev/sdk": "0.30.0",
+        "@ellipsis-dev/sdk": "0.31.0",
         "commander": "^12.1.0",
         "ws": "^8.18.0",
         "yaml": "^2.9.0",
@@ -21,7 +21,7 @@
     },
   },
   "packages": {
-    "@ellipsis-dev/sdk": ["@ellipsis-dev/sdk@0.30.0", "", {}, "sha512-UfLdqiekpM9myblwFXamztC4+UtP2oU2xGtB0H6XCUbEEHHDvKrEzT4eotf/F4rvZcS9HMXvSOXC7APjym2CRw=="],
+    "@ellipsis-dev/sdk": ["@ellipsis-dev/sdk@0.31.0", "", {}, "sha512-wYcVrZT1Mu6Oz8Z7rHgE59279rZ0vncuIFJk4iV5wGTgL/hkc7h1+36pNGw8P9e7Ta7q1dmB6vk0Di0KK0/CEA=="],
 
     "@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.27.7", "", { "os": "aix", "cpu": "ppc64" }, "sha512-EKX3Qwmhz1eMdEJokhALr0YiD0lhQNwDqkPYyPhiSwKrh7/4KRjQc04sZ8db+5DVVnZ1LmbNDI1uAMPEUBnQPg=="],
 
