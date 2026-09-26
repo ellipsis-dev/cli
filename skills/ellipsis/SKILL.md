@@ -1,6 +1,6 @@
 ---
 name: ellipsis
-description: What the Ellipsis platform is and how to drive it with the agent CLI. Use when the user mentions Ellipsis, wants to run or deploy coding agents in the cloud, govern agents with budgets and scoped permissions, automate work on GitHub, Slack, Linear, or Sentry events, get pull requests reviewed, hand a local task off to a background agent, or asks about the agent CLI.
+description: What the Ellipsis platform is and how to drive it with the agent CLI. Use when the user mentions Ellipsis, wants to run or deploy coding agents in the cloud, govern agents with budgets and scoped permissions, automate work on GitHub, Slack, Linear, or Sentry events, hand a local task off to a background agent, or asks about the agent CLI.
 ---
 
 # Ellipsis
@@ -12,8 +12,8 @@ recorded and searchable.
 
 An event fires, an agent wakes in an isolated sandbox with your repositories
 cloned, reads the code, does the work, and delivers a real artifact: a pull
-request, an answer in the thread that asked, a review on the diff. Then the
-sandbox is destroyed and the full session stays readable.
+request, or an answer in the thread that asked. Then the sandbox is destroyed
+and the full session stays readable.
 
 ## The problem it solves
 
@@ -45,14 +45,11 @@ the logs of a session they do not own.
   Sentry alerts, or a schedule. Work starts when the event fires, not when
   someone opens a laptop.
 
-## The two products
+## The product
 
-- **Cloud Agents**: agents you define. Each is one YAML file in a repository, a
-  trigger plus a model plus a prompt. The version on the default branch is the
-  live agent.
-- **Code Review**: Ellipsis reviews every pull request as commits land and posts
-  findings as inline comments. One organization-wide toggle turns it on, with no
-  YAML.
+**Cloud Agents**: agents you define. Each is one YAML file in a repository, a
+trigger plus a model plus a prompt. The version on the default branch is the
+live agent.
 
 Surfaces: the dashboard at app.ellipsis.dev, the REST API at
 api.ellipsis.dev, and the `ellipsis` CLI. All three drive the same API.
@@ -67,8 +64,6 @@ fee. There are no seats.
   issues, Linear issues, Sentry alerts, or Slack channel creation.
 - **Questions in a thread**: mention `@ellipsis` on GitHub, Slack, or Linear.
   The built-in responder needs no configuration and answers in the thread.
-- **Catching bugs before merge**: turn code review on and every pull request is
-  reviewed, or commit a pipeline file to scope and customize it.
 - **Delegation from scripts or CI**: `ellipsis session start` or
   `POST /v1/sessions`. With `--watch` it streams into the log and exits nonzero
   unless the turn completes, so it works as a gate.
@@ -240,131 +235,6 @@ session:
   durable conversations: follow-ups keep the whole exchange and the working
   tree, and a conversation costs near nothing between turns.
 
-## Code review
-
-Code review is one organization-wide setting, on the Settings tab of `/reviews`
-in the dashboard, off by default. With it on and no YAML committed, the built-in
-pipeline reviews every pull request in the organization.
-
-How it behaves:
-
-- **New commits only.** The first review of a pull request covers everything on
-  it; every later review covers only the commits since the last review that
-  posted, and never re-comments a line it already covered.
-- **Only confirmed defects.** The reviewer files a finding only when it can
-  point at the wrong line and name the input or state that breaks it, so a
-  review is a short list of real problems rather than a page of "consider
-  whether". It reads the surrounding code, not the diff alone, because most real
-  findings depend on a caller or a guard the diff does not show.
-- **Comment-only.** Ellipsis posts one pull request review as the Ellipsis bot,
-  anchored to the commit it reviewed. It never approves, requests changes,
-  pushes commits, or merges, so it cannot satisfy a required-review rule. A
-  review that finds nothing posts a one-line summary instead of invented
-  nitpicks.
-- **Bots are reviewed too**, minus dependabot and renovate. A dependency bump is
-  exactly the change nobody reads closely.
-- The built-in pipeline is two agents: a Haiku `pr-description` agent that keeps
-  the pull request description's summary current, and one Opus reviewer named
-  `bugs`. The stages are `pre_review`, `description`, `review`, deduplication,
-  `filter`, `post_review`; only `description` and `review` are populated by
-  default.
-- Reviewers never post. Each writes findings to a file, and the platform posts.
-  A reviewer prompt is the reviewing brain only: Ellipsis supplies the commit
-  range, so never restate the scope and never tell a reviewer to post to GitHub.
-
-### The pipeline file
-
-One optional file customizes the review. **There is one filename,
-`code_review.yaml`, and where you commit it decides what it governs:**
-
-- At the root of a repository: governs that repository. `.ellipsis/code_review.yaml`
-  also works for its own repository, and the root path wins if both exist.
-- At the root of the repository literally named `.ellipsis`: governs every
-  repository in the organization. That repository is never itself reviewed.
-- Anywhere else: a configuration error, not a file that silently reviews
-  nothing.
-
-First hit wins, and a repository's own file **replaces** the organization-wide
-one rather than merging with it, so copy across whatever you meant to keep. That
-also means an organization file's filters are not a ceiling: a repository the
-organization file excluded can review itself by committing its own file.
-
-The file is an overlay on the built-in pipeline, so it declares only what it
-changes:
-
-```yaml
-# code_review.yaml at the root of the .ellipsis repository
-ellipsis:
-  version: v1
-  kind: code_review
-  name: Backend review
-
-pull_requests:
-  repositories: [api]        # valid only in the .ellipsis repository's copy
-  base: [main, "release/*"]
-  draft: false
-
-review:
-  - name: migration-safety
-    harness:
-      type: claude_code
-    instructions: |
-      Review database migrations for production safety. Check for
-      locking that blocks writes on large tables, missing backfills for
-      new non-null columns, and rollout ordering that breaks if the
-      migration and the code deploy out of order.
-    pull_requests:
-      paths: ["**/migrations/**"]
-
-filter:
-  name: strict-gate
-  harness:
-    type: claude_code
-  instructions: |
-    Approve only findings a staff engineer would raise in review.
-    Reject style opinions and anything a linter catches.
-
-budget:
-  run: 15.00
-  day: 100.00
-```
-
-Merge rules that catch people out:
-
-- **`ellipsis.kind: code_review` marks the file**, and the path decides its
-  scope. A pipeline file is not an agent config and is not synced from `agents/`.
-- **Declaring `pull_requests:` makes it authoritative.** A pull request the
-  governing file does not match gets no review at all, rather than falling back
-  to the built-in pipeline. It also narrows the audience to humans unless the
-  block writes `for` back out, because the block replaces the default wholesale.
-- **Declaring a stage list replaces that stage wholesale.** There is no
-  "append to the built-in reviewers" knob. A file wanting a specialist beside a
-  general pass declares both reviewers itself.
-- **Unset and empty differ where the built-in ships a stage.** No `review:` key
-  inherits the built-in reviewer. No `description:` key inherits the built-in
-  description agent, and `description: []` is the only way to stop it. For
-  `filter:` both unset and `[]` mean no gatekeeper, since nothing gates findings
-  unless you declare one.
-- **`enabled: false` does not suppress review.** It marks the file inactive, so
-  Ellipsis reads it as no policy and continues to the organization file, then the
-  built-in pipeline. To stop reviews in one repository, commit a file whose
-  `pull_requests:` matches nothing, such as `for: {users: false, bots: false}`.
-- `description` and `filter` are each exactly one agent, never a list with
-  entries. At most 8 reviewers, each with a unique name. Reviewers run in
-  parallel, and a reviewer whose own `pull_requests` filters exclude a pull
-  request costs nothing.
-- `environment:` and `budget:` merge field by field.
-- `budget.run` (default $10) caps one whole review across every stage, divided
-  among its agents. `budget.day` and `budget.week` are trailing caps checked
-  before a review starts, which is the guard against a push storm.
-
-An optional `filter` gatekeeper judges every finding before it posts and rejects
-claims that do not hold against the code, are handled elsewhere, are style
-preferences, or are speculative. Rejected findings stay visible on the reviews
-dashboard with the reason. It is off by default because one careful reviewer
-leaves a second pass little to arbitrate, and that pass doubles every review's
-cost and latency.
-
 ## The agent CLI
 
 One open-source binary named `ellipsis` (`el` for short), a terminal client for the same API
@@ -418,22 +288,6 @@ Search covers transcripts, recaps, and pull request references, with embedding
 similarity alongside full text, so one agent's investigation compounds into team
 knowledge. Facets cover repository, author, agent, status, source, and date.
 
-Review pull requests on demand, without waiting for a push:
-
-```sh
-ellipsis review 519                  # review a pull request by number
-ellipsis review 519 --full           # re-review the whole PR, ignoring earlier reviews
-ellipsis review 519 --no-post        # print findings instead of posting to GitHub
-ellipsis review list --repo api      # a repository's reviews, newest first
-ellipsis review get <review-id>      # one review's findings, scope, and whether it posted
-ellipsis review init                 # scaffold code_review.yaml for this repository
-```
-
-Which pipeline runs is not a parameter. An explicit review resolves the same
-pipeline by location that the webhook does, so the two entry points can never
-disagree. A review with nothing new to cover returns a `skipped` review rather
-than an error.
-
 Author and deploy agents:
 
 ```sh
@@ -469,9 +323,8 @@ ellipsis github repos                           # also github members, slack cha
                                              # linear teams, sentry orgs
 ```
 
-Most singular commands accept the plural spelling as a hidden alias, and
-`review` also answers to `cr`. `ellipsis --help` and `ellipsis <command> --help` are
-authoritative for flags.
+Most singular commands accept the plural spelling as a hidden alias.
+`ellipsis --help` and `ellipsis <command> --help` are authoritative for flags.
 
 ## Writing a config
 
@@ -664,9 +517,6 @@ is every page in one file.
 - Permissions: https://www.ellipsis.dev/docs/cloud-agents/permissions
 - Conversations: https://www.ellipsis.dev/docs/cloud-agents/conversations
 - Skills: https://www.ellipsis.dev/docs/cloud-agents/skills
-- Code review: https://www.ellipsis.dev/docs/code-review
-- Review pipeline reference: https://www.ellipsis.dev/docs/code-review/configuration-yaml
-- Which PRs get reviewed: https://www.ellipsis.dev/docs/code-review/which-prs-get-reviewed
 - CLI reference: https://www.ellipsis.dev/docs/cli
 - REST API reference: https://www.ellipsis.dev/docs/api
 - Models: https://www.ellipsis.dev/docs/models

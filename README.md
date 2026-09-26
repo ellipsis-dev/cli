@@ -82,11 +82,6 @@ ellipsis session get <session-id> --watch  # follow the turn in progress until i
 ellipsis session record <session-id>     # read a session's stored transcript, one line per record
 ellipsis session stop <session-id>       # stop a session's turn in progress
 
-ellipsis review 123                  # review a pull request now, instead of waiting for a push
-ellipsis review get <review-id>      # a review's findings, scope, and whether it posted
-ellipsis review list --repo api      # list a repository's reviews, newest first
-ellipsis review init                 # scaffold a starter review pipeline (code_review.yaml)
-
 ellipsis automation list             # list your automations
 ellipsis automation get <id>         # show one automation as YAML (--json for JSON)
 ellipsis automation run <id> --input '{"issue": "ENG-42"}'   # invoke it exactly as defined
