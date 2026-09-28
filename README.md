@@ -4,13 +4,12 @@ Drive the [Ellipsis](https://ellipsis.dev) cloud from your terminal: start agent
 sessions, stream their output live, and manage configurations.
 
 This is a thin client. The agent runs in the Ellipsis cloud; the CLI
-authenticates, opens a WebSocket, and streams results. It is open source
-(MIT), and the proprietary engine stays server-side.
+authenticates, opens a WebSocket, and streams results.
 
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ellipsis-dev/cli/main/install.sh | sh
+curl -fsSL https://ellipsis.dev/install.sh | sh
 ```
 
 The script downloads the binary for your OS and CPU from GitHub Releases,
@@ -48,12 +47,13 @@ Or copy `skills/ellipsis/` into your agent's skills directory
 (`~/.claude/skills/` for Claude Code). Ellipsis agents can load it straight
 from their config, no clone required:
 
-```yaml
-skills:
-  - path: skills/ellipsis
-    repository:
-      owner: ellipsis-dev
-      name: cli
+```yaml fragment
+session:
+  skills:
+    - path: skills/ellipsis
+      repository:
+        owner: ellipsis-dev
+        name: cli
 ```
 
 ## Usage
@@ -119,9 +119,7 @@ ellipsis uninstall                   # remove the CLI from this machine (--purge
 
 Every command shown is singular. The plural spelling of each (`ellipsis files`,
 `ellipsis sessions`, `ellipsis analytics prs`) is a hidden alias that works but is
-left out of `--help`. See
-[`skills/cli-conventions`](skills/cli-conventions/SKILL.md) for the full
-argument, flag, and help-text conventions.
+left out of `--help`.
 
 Most commands accept `--json` to print the raw API response. The CLI talks to
 the public REST API. Point it at a different instance durably with
@@ -132,8 +130,7 @@ legacy `ELLIPSIS_API_BASE`).
 output live over WebSocket until the turn it is waiting on ends (`completed`,
 `failed`, `stopped`, or `cancelled`), falling back to polling the turn if the
 live stream is unavailable. It exits 0 only for `completed`. Either way it
-first prints a clickable dashboard link. How the stream works is described in
-[`docs/SESSION_STREAMING.md`](docs/SESSION_STREAMING.md).
+first prints a clickable dashboard link.
 
 ### Auth
 
@@ -168,89 +165,3 @@ Hosts and tokens live in `~/.ellipsis/config.json` (mode 0600); set
 `ELLIPSIS_CONFIG_DIR` to relocate it. A config file from before hosts existed
 is migrated on first use — your existing login becomes a host named for its API
 base.
-
-## SDK 0.30 configuration
-
-Session configs select one native block. Put the first message inside it:
-
-```yaml
-session:
-  claude_code:
-    prompt: Fix the failing tests.
-  # Or: codex: {model: gpt-6-astra, prompt: Fix the failing tests.}
-```
-
-The old `harness`, `instructions`, and top-level `prompt` fields are no longer
-accepted. `--system` now reports an error; put task instructions in the prompt
-or a repository `AGENTS.md` file. Environment build scripts use
-`hooks.build_base` and `hooks.after_checkout`; the old `image` block is removed.
-
-## Develop
-
-```sh
-npm install
-npm run dev -- --help       # run from source (tsx)
-npm run typecheck           # tsc --noEmit
-npm test                    # unit tests (vitest)
-npm run build               # bundle to dist/ (tsup)
-npm run compile             # single-binary build (bun)
-```
-
-### Testing
-
-- `npm test` runs the [vitest](https://vitest.dev) unit suite (`test/`): query
-  building and error parsing in the API client, the option coercions, money
-  formatting, and the `deviceLogin` poll loop (driven with fake timers, no
-  network).
-- `scripts/smoke-local.sh` is a **fully-automated** end-to-end check against a
-  local `docker compose` backend. It drives the device-code login itself —
-  scraping the verification code and approving it headlessly through the
-  running `public_api` container — then exercises the authenticated API calls
-  with a throwaway config dir. One command, no manual approval:
-
-  ```sh
-  ./scripts/smoke-local.sh
-  # overrides: ELLIPSIS_API_BASE, ELLIPSIS_PUBLIC_API_CONTAINER, ELLIPSIS_SMOKE_CUSTOMER_ID
-  ```
-
-- `scripts/smoke.sh` is the manual variant for any backend (incl. staging/prod):
-  it drives login and the API calls but waits for you to approve in the
-  dashboard. See its header for the approval options.
-
-  ```sh
-  ELLIPSIS_API_BASE=http://localhost:5000 ./scripts/smoke.sh
-  ```
-
-> Note: the `verification_uri` the backend returns points at `app.ellipsis.dev`
-> unless the container sets `ELLIPSIS_APP_BASE_URL=http://localhost:3000`, so
-> for local runs prefer `smoke-local.sh`'s headless container approval over the
-> browser link.
-
-### Layout
-
-| Path              | Purpose                                          |
-| ----------------- | ------------------------------------------------ |
-| `src/cli.ts`      | entry point; wires up the command tree           |
-| `src/commands/`   | one module per top-level command group           |
-| `src/lib/`        | API client, WebSocket client, config, constants  |
-
-### Releasing
-
-Pushing a `v*` tag triggers `.github/workflows/release.yml`, which Bun-compiles
-one binary per target (macOS arm64 and x64, Linux arm64 and x64, both glibc
-and musl), and publishes a GitHub release with the tarballs and a
-`checksums.txt`. `install.sh` and `ellipsis update` download from that release,
-so publishing it is the whole distribution step. See
-[`docs/RELEASING.md`](docs/RELEASING.md).
-
-```sh
-git tag v2.30.0 && git push origin v2.30.0
-```
-
-### Status
-
-The full public REST surface (auth, sessions, session steps, configs,
-integration discovery, budget/usage) is wired against the live API, including
-live WebSocket streaming and `session stop`.
-Still pending: replacing the hand-rolled request/response types with the
-generated `@ellipsis/sdk` package.
