@@ -271,7 +271,7 @@ Start and follow work:
 
 ```sh
 el "triage the failing CI on api"                  # a bare ad-hoc session
-el automation run <agent-id> --input '{...}'         # invoke an agent as defined
+el agent run <agent-id> --input '{...}'              # invoke an agent as defined
 el --config-file .ellipsis/agents/my-agent.yaml --watch
 el --template ellipsis-helper --watch
 el session get <session-id> --watch                 # follow the turn in progress
@@ -291,7 +291,7 @@ the turn completes.
 List and audit what agents have done:
 
 ```sh
-el session list --limit 20                  # --automation, --source, --author, --days, --since
+el session list --limit 20                  # --agent, --source, --author, --days, --since
 el session record <session-id>              # the stored transcript, one line per record
 el session export <session-id> -o session.jsonl   # the complete archived log
 el analytics pr                             # pull request volume and trend, human versus bot
@@ -306,27 +306,27 @@ one agent's investigation compounds into team knowledge. Facets cover repository
 Author and deploy agents:
 
 ```sh
-el automation init .ellipsis/agents/my-agent.yaml   # scaffold a starter definition locally
-el automation list                        # agents with their source file
-el automation get <agent-id>              # one agent as YAML
-el automation run <agent-id> --input '{...}'   # invoke it exactly as defined
-el automation create --file .ellipsis/agents/my-agent.yaml   # create it, live at once
-el automation edit <agent-id> --file .ellipsis/agents/my-agent.yaml   # replace its definition, live at once
-el automation delete <agent-id>           # delete it; it stops and frees its name
-el automation link <agent-id> --repo api  # move it into a repository, via a pull request
-el automation unlink <agent-id>           # take it over from its file
+el agent init .ellipsis/agents/my-agent.yaml   # scaffold a starter definition locally
+el agent list                             # agents with their source file
+el agent get <agent-id>                   # one agent as YAML
+el agent run <agent-id> --input '{...}'   # invoke it exactly as defined
+el agent create --file .ellipsis/agents/my-agent.yaml   # create it, live at once
+el agent edit <agent-id> --file .ellipsis/agents/my-agent.yaml   # replace its definition, live at once
+el agent delete <agent-id>                # delete it; it stops and frees its name
+el agent link <agent-id> --repo api       # move it into a repository, via a pull request
+el agent unlink <agent-id>                # take it over from its file
 el template list                          # built-in templates and their slugs
 el model list                             # model ids and their supported harnesses
 ```
 
 An agent is owned by one of two writers, and that is what these verbs move.
-`el automation create` with no `--repo` creates it through the API alone: no
-file, live immediately, changed by `el automation edit`. With `--repo` it instead
+`el agent create` with no `--repo` creates it through the API alone: no
+file, live immediately, changed by `el agent edit`. With `--repo` it instead
 opens a pull request adding the file, exactly as the dashboard does, and the
 agent goes live when that merges; thereafter the file is what changes it, and
-`el automation edit` is refused. `el automation link` moves an API-owned agent
+`el agent edit` is refused. `el agent link` moves an API-owned agent
 into a repository (by pull request; it keeps running unchanged until the merge)
-and `el automation unlink` takes one back from its file, leaving the file in
+and `el agent unlink` takes one back from its file, leaving the file in
 place, inert.
 
 Platform and integrations:
@@ -350,7 +350,7 @@ Top-level keys; `ellipsis` and `session` are required:
 | --- | --- |
 | `ellipsis` | `kind: agent`, `version: v1`, `name`, `description`, `metadata`, and `enabled`. Its presence marks the file as a config. |
 | `trigger` | One trigger, or omit for a manual-only agent. |
-| `input` | A JSON Schema for the payload `el automation run` passes, and the message template it renders into. |
+| `input` | A JSON Schema for the payload `el agent run` passes, and the message template it renders into. |
 | `session` | What every session runs on; the keys below. The same keys, flattened, are the body of `POST /v1/sessions`, except that `budget` there is one dollar amount. |
 
 Under `session`:

@@ -82,16 +82,16 @@ ellipsis session get <session-id> --watch  # follow the turn in progress until i
 ellipsis session record <session-id>     # read a session's stored transcript, one line per record
 ellipsis session stop <session-id>       # stop a session's turn in progress
 
-ellipsis automation list             # list your automations
-ellipsis automation get <id>         # show one automation as YAML (--json for JSON)
-ellipsis automation run <id> --input '{"issue": "ENG-42"}'   # invoke it exactly as defined
-ellipsis automation init [path]      # scaffold a starter definition (default: agents/my_agent.yaml)
-ellipsis automation create --file agents/foo.yaml   # create one, live at once (or --template <slug>)
-ellipsis automation create --repo api --file agents/foo.yaml   # instead define it as a file, via a pull request
-ellipsis automation edit <id> --file agents/foo.yaml    # replace its definition, live at once
-ellipsis automation delete <id>      # delete it; it stops and its name is freed
-ellipsis automation link <id> --repo api   # move it into a repository, via a pull request
-ellipsis automation unlink <id>      # take it over from its file, so the API changes it
+ellipsis agent list                  # list your agents
+ellipsis agent get <id>              # show one agent as YAML (--json for JSON)
+ellipsis agent run <id> --input '{"issue": "ENG-42"}'   # invoke it exactly as defined
+ellipsis agent init [path]           # scaffold a starter definition (default: agents/my_agent.yaml)
+ellipsis agent create --file agents/foo.yaml   # create one, live at once (or --template <slug>)
+ellipsis agent create --repo api --file agents/foo.yaml   # instead define it as a file, via a pull request
+ellipsis agent edit <id> --file agents/foo.yaml   # replace its definition, live at once
+ellipsis agent delete <id>           # delete it; it stops and its name is freed
+ellipsis agent link <id> --repo api  # move it into a repository, via a pull request
+ellipsis agent unlink <id>           # take it over from its file, so the API changes it
 
 ellipsis model list                  # list selectable agent models (the account default is marked)
 
