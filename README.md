@@ -70,12 +70,12 @@ ellipsis host current                # show the active host and how it resolves
 ellipsis host set beta --rename staging   # rename / re-point a host (--api-base / --app-base)
 ellipsis host delete beta            # remove a host and its stored token
 
-ellipsis session start -e backend "..."   # run a prompt in a saved environment
+ellipsis session start --model claude-opus-5-5 -e backend "..."   # start a session in a saved environment
 ellipsis session start --config-file f.json   # ...or from an inline config
 ellipsis session start --template ellipsis-helper   # ...or from a maintained template
-ellipsis session start --budget 5 "..."   # cap this session's spend, in dollars
-ellipsis session start --image shot.png "..."   # the agent sees the picture on its first turn
-ellipsis session start --watch "..."      # start and stream it until its opening turn ends
+ellipsis session start --model claude-opus-5-5 --budget 5 "..."   # cap this session's spend, in dollars
+ellipsis session start --model claude-opus-5-5 --image shot.png "..."   # the agent sees the picture on its first turn
+ellipsis session start --model claude-opus-5-5 --watch "..."   # start and stream it until its opening turn ends
 ellipsis session list --limit 20         # list recent sessions (filter by --source, --author, --since, …)
 ellipsis session get <session-id>        # inspect one session (prints a dashboard link)
 ellipsis session get <session-id> --watch  # follow the turn in progress until it ends
@@ -84,7 +84,8 @@ ellipsis session stop <session-id>       # stop a session's turn in progress
 
 ellipsis agent list                  # list your agents
 ellipsis agent get <id>              # show one agent as YAML (--json for JSON)
-ellipsis agent run <id> --input '{"issue": "ENG-42"}'   # invoke it exactly as defined
+el agent start <agent-id> ["..."]   # start a session from its saved settings; a prompt replaces its own
+el agent start <agent-id> --input '{"issue": "ENG-42"}'   # start it with its typed input
 ellipsis agent init [path]           # scaffold a starter definition (default: agents/my_agent.yaml)
 ellipsis agent create --file agents/foo.yaml   # create one, live at once (or --template <slug>)
 ellipsis agent create --repo api --file agents/foo.yaml   # instead define it as a file, via a pull request
@@ -93,7 +94,7 @@ ellipsis agent delete <id>           # delete it; it stops and its name is freed
 ellipsis agent link <id> --repo api  # move it into a repository, via a pull request
 ellipsis agent unlink <id>           # take it over from its file, so the API changes it
 
-ellipsis model list                  # list selectable agent models (the account default is marked)
+ellipsis model list                  # list selectable agent models
 
 ellipsis integration                 # every connected integration in one table
 ellipsis github repos                # repositories connected to the GitHub installation

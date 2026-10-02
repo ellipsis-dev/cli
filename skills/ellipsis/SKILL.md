@@ -66,7 +66,7 @@ fee on each purchase. There are no seats.
   issues, Linear issues, Sentry alerts, or Slack channel creation.
 - **Questions in a thread**: mention `@ellipsis` on GitHub, Slack, or Linear.
   The built-in responder needs no configuration and answers in the thread.
-- **Delegation from scripts or CI**: `el "..."` or `POST /v1/sessions`. With `--watch` it streams into the log and exits nonzero
+- **Delegation from scripts or CI**: `el --model claude-opus-5-5 "..."` or `POST /v1/sessions`. With `--watch` it streams into the log and exits nonzero
   unless the turn completes, so it works as a gate.
 
 Things teams actually build: screenshot every pull request that touches the
@@ -205,6 +205,7 @@ trigger:
 
 session:
   claude_code:
+    model: claude-opus-5-5
     prompt: |
       Review the database migrations in this pull request for production
       safety: locking that blocks writes on large tables, missing backfills
@@ -246,9 +247,10 @@ session:
   an alert storm produces one investigation, not dozens of duplicates; a metric
   alert starts one only when it turns critical. Webhook deliveries are deduplicated, so a replay never
   double-runs an agent.
-- React and cron sessions run once. Mention and on-demand sessions are
-  durable conversations: follow-ups keep the whole exchange and the working
-  tree, and a conversation costs near nothing between turns.
+- A session stays open for follow-ups unless `conversation.interactive` is
+  `false`, for cron and react sessions too: follow-ups keep the whole exchange
+  and the working tree, and a conversation costs near nothing between turns.
+  Mention conversations take replies on their original surface.
 
 ## The CLI
 
@@ -270,17 +272,17 @@ wins: the environment variable, then the token stored in `~/.ellipsis/config.jso
 Start and follow work:
 
 ```sh
-el "triage the failing CI on api"                  # a bare ad-hoc session
-el agent run <agent-id> --input '{...}'              # invoke an agent as defined
+el --model claude-opus-5-5 "triage the failing CI on api"   # a bare ad-hoc session
+el agent start <agent-id> ["..."]                   # start an agent session; a prompt replaces its own
 el --config-file .ellipsis/agents/my-agent.yaml --watch
 el --template ellipsis-helper --watch
 el session get <session-id> --watch                 # follow the turn in progress
 el session stop <session-id>
 ```
 
-With no config source, a bare prompt runs the bare ad-hoc config (no
-instructions of your own, on the account's default model in the built-in basic
-environment), so the prompt is the sole instruction. The CLI also sends the repository you are standing in, and
+With no config source, a bare prompt needs `--model` and runs the bare ad-hoc
+config (no instructions of your own, in the built-in basic environment), so the
+prompt is the sole instruction. The CLI also sends the repository you are standing in, and
 the server clones it. Per-session overrides need no config edit: `--model`,
 `--harness`, `--repo`, `--timeout`, `--budget`, and `--override` for a full
 partial config patch. `--rebuild` skips the saved
@@ -309,7 +311,7 @@ Author and deploy agents:
 el agent init .ellipsis/agents/my-agent.yaml   # scaffold a starter definition locally
 el agent list                             # agents with their source file
 el agent get <agent-id>                   # one agent as YAML
-el agent run <agent-id> --input '{...}'   # invoke it exactly as defined
+el agent start <agent-id> --input '{...}' # start it with its typed input
 el agent create --file .ellipsis/agents/my-agent.yaml   # create it, live at once
 el agent edit <agent-id> --file .ellipsis/agents/my-agent.yaml   # replace its definition, live at once
 el agent delete <agent-id>                # delete it; it stops and frees its name
@@ -350,8 +352,8 @@ Top-level keys; `ellipsis` and `session` are required:
 | --- | --- |
 | `ellipsis` | `kind: agent`, `version: v1`, `name`, `description`, `metadata`, and `enabled`. Its presence marks the file as a config. |
 | `trigger` | One trigger, or omit for a manual-only agent. |
-| `input` | A JSON Schema for the payload `el agent run` passes, and the message template it renders into. |
-| `session` | What every session runs on; the keys below. The same keys, flattened, are the body of `POST /v1/sessions`, except that `budget` there is one dollar amount. |
+| `input` | A JSON Schema for the payload `el agent start` passes, and the message template it renders into. |
+| `session` | What every session runs on; the keys below. The same keys, flattened, are the body of `POST /v1/sessions`, except that `budget` there takes only `session`. |
 
 Under `session`:
 
@@ -363,6 +365,8 @@ Under `session`:
 | `skills` | Skills to install beyond what the cloned repositories provide (Codex). |
 | `output` | `json_schema`: a JSON Schema contract, so downstream code gets typed data. |
 | `budget` | `session`, `day`, `week`, `month`, in US dollars. |
+| `conversation` | `interactive`: whether the session stays open for follow-ups; default `true`. |
+| `metadata` | String keys and values stored on every session. |
 
 The schema is strict, so an unknown or misplaced key fails validation rather
 than being silently dropped. Points that decide whether a config works:
@@ -370,8 +374,8 @@ than being silently dropped. Points that decide whether a config works:
 - `session.claude_code.prompt` or `session.codex.prompt` supplies the first user
   message verbatim. Put repository guidance in `CLAUDE.md` for Claude Code or
   `AGENTS.md` for Codex.
-- `session.claude_code.model` or `session.codex.model` selects a model. Claude Code
-  inherits the organization default when omitted. `el model list` reports
+- `session.claude_code.model` or `session.codex.model` selects a model and is
+  required. `el model list` reports
   the available ids and the harness certified for each. Digest and
   summary jobs run well on `claude-haiku-4-5-20251001`; judgment jobs earn the
   frontier model.
@@ -384,7 +388,7 @@ than being silently dropped. Points that decide whether a config works:
 - `session.output.json_schema` makes an agent a function with a contract: it
   exits through your JSON Schema, so downstream code gets typed data instead of
   prose to parse. Schema failures fail the turn with reason `error`.
-- Raw session starts accept `conversation.interactive: false` to run once. The
+- Set `conversation.interactive: false`, in a config or a session start, to run once. The
   returned `conversation.prompting` describes whether direct messages are
   accepted, and `turn` is the turn to wait on: a message is answered when its
   turn's status is `completed`, `failed`, `stopped`, or `cancelled`.
@@ -448,8 +452,8 @@ Credentials are scoped and short-lived:
   inline `value:` is for non-secret settings only.
 - Model calls route through Ellipsis with a per-session key. A real provider key
   never enters an environment. To pay with your own plan instead of credits,
-  connect a Claude or Codex subscription in **Models > Subscriptions**; custom
-  Anthropic API keys and your own LLM gateway are not supported.
+  connect a Claude or Codex subscription in **Models > Subscriptions**; your
+  own LLM gateway is not supported.
 
 Session logs are not redacted: they record whatever setup scripts and the agent
 print, so keep your hooks from echoing a value.
@@ -467,9 +471,10 @@ rather than a black box.
   the agent told" are both reads rather than reconstructions.
 - The complete log downloads as archived segments, so audit and compliance get
   first-party records. Retention is configurable.
-- Every session is attributed to a person or an API key, and a session an agent
-  starts inherits its starter's attribution, which is what per-developer spend
-  limits and author search hang off.
+- A session a person starts is attributed to that person, and one an API key
+  starts to that key, which is what per-developer spend limits and author
+  search hang off. React and cron sessions have no attribution. A session an
+  agent starts keeps its starter's API key and never a person.
 - Analytics split every metric by human and bot, so agent contribution is
   measured next to your team's, over the same merge funnel and time-to-merge.
 
@@ -526,15 +531,15 @@ Everything above in depth at https://www.ellipsis.dev/docs. The agent-readable
 index is https://www.ellipsis.dev/llms.txt, and https://www.ellipsis.dev/llms-full.txt
 is every page in one file.
 
-- Agents as code: https://www.ellipsis.dev/docs/automations#deploy-from-git
+- Agents as code: https://www.ellipsis.dev/docs/agents#deploy-from-git
 - Sessions: https://www.ellipsis.dev/docs/sessions
 - Quick start: https://www.ellipsis.dev/docs/quick-start
-- Agent config reference: https://www.ellipsis.dev/docs/automations/schema
-- Triggers: https://www.ellipsis.dev/docs/triggers
+- Agent config reference: https://www.ellipsis.dev/docs/agents/schema
+- Triggers: https://www.ellipsis.dev/docs/agents/triggers
 - Environments: https://www.ellipsis.dev/docs/environments
 - Permissions: https://www.ellipsis.dev/docs/permissions
-- Conversations: https://www.ellipsis.dev/docs/lifecycle#conversation
-- Skills: https://www.ellipsis.dev/docs/automations/schema#add-a-codex-skill
+- Conversations: https://www.ellipsis.dev/docs/sessions/lifecycle#conversation
+- Skills: https://www.ellipsis.dev/docs/agents/schema#add-a-codex-skill
 - REST API reference: https://www.ellipsis.dev/docs/api
 - Models: https://www.ellipsis.dev/docs/models
 - Budgets: https://www.ellipsis.dev/docs/budgets
