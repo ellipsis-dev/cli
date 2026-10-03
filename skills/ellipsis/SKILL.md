@@ -280,11 +280,11 @@ el session get <session-id> --watch                 # follow the turn in progres
 el session stop <session-id>
 ```
 
-With no config source, a bare prompt needs `--model` and runs the bare ad-hoc
+With no config source, a bare prompt needs a model, from `--model` or `el model use <model-id>`, and runs the bare ad-hoc
 config (no instructions of your own, in the built-in basic environment), so the
 prompt is the sole instruction. The CLI also sends the repository you are standing in, and
 the server clones it. Per-session overrides need no config edit: `--model`,
-`--harness`, `--repo`, `--timeout`, `--budget`, and `--override` for a full
+`--repo`, `--timeout`, `--budget`, and `--override` for a full
 partial config patch. `--rebuild` skips the saved
 environment. `--detach` returns immediately. `--watch --quiet` prints only the turn's
 status transitions and how it ended, and either watch form exits `0` only when
@@ -318,7 +318,8 @@ el agent delete <agent-id>                # delete it; it stops and frees its na
 el agent link <agent-id> --repo api       # move it into a repository, via a pull request
 el agent unlink <agent-id>                # take it over from its file
 el template list                          # built-in templates and their slugs
-el model list                             # model ids and their supported harnesses
+el model list                             # model ids, the harness each runs in, and the default
+el model use claude-opus-5-5              # set the model a bare prompt runs on
 ```
 
 An agent is owned by one of two writers, and that is what these verbs move.

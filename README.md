@@ -94,7 +94,8 @@ ellipsis agent delete <id>           # delete it; it stops and its name is freed
 ellipsis agent link <id> --repo api  # move it into a repository, via a pull request
 ellipsis agent unlink <id>           # take it over from its file, so the API changes it
 
-ellipsis model list                  # list selectable agent models
+ellipsis model list                  # list selectable agent models (the default is marked *)
+ellipsis model use claude-opus-5-5   # set the model a session runs on when --model is absent
 
 ellipsis integration                 # every connected integration in one table
 ellipsis github repos                # repositories connected to the GitHub installation
