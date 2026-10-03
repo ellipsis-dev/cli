@@ -32,6 +32,19 @@ An installed binary checks for a newer release once a day, in the background,
 and prints one line on stderr when it finds one. `ELLIPSIS_NO_UPDATE_CHECK=1`
 turns that off; it is already off when `CI` is set or stderr is not a terminal.
 
+### Verify a download by hand
+
+Every release publishes a `checksums.txt` next to its archives. To check an
+archive you downloaded yourself, run the helper with the version and the file:
+
+```sh
+scripts/verify-release.sh 2.35.0 ~/Downloads/ellipsis-2.35.0-darwin-arm64.tar.gz
+```
+
+It prints `ok` when the SHA-256 matches and exits non-zero on a mismatch, so it
+is safe to chain before an install step with `&&`. Pass `--quiet` to print
+nothing on success.
+
 ## Teach your coding agent about Ellipsis
 
 [`skills/ellipsis`](skills/ellipsis/SKILL.md) is an

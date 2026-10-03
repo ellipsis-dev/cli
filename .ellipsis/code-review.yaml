@@ -1,0 +1,30 @@
+ellipsis:
+  kind: code_review
+  name: cli-code-review
+  description: One review per push on every pull request to the CLI repository.
+
+pull_requests:
+  draft: false
+
+reviewers:
+  - name: bugs
+    claude_code:
+      prompt: |
+        Find bugs in this pull request: logic errors, unhandled failure
+        cases, shell quoting and portability mistakes, and anything that
+        would break the installer or a documented command. Comment on the
+        line that introduces each problem and say what breaks. Skip style.
+      model: claude-opus-5-5
+  - name: docs
+    paths: ["*.md"]
+    claude_code:
+      prompt: |
+        Check the Markdown changes against what they describe. A command,
+        flag, environment variable, exit code, or file path the docs name
+        must exist and behave as stated in the scripts and in
+        skills/ellipsis/SKILL.md. Flag every contradiction with a comment
+        on the line that states it.
+      model: claude-sonnet-5-5
+
+budget:
+  session: 3
