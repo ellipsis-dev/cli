@@ -63,7 +63,8 @@ fee on each purchase. There are no seats.
 - **Recurring toil** (digests, dependency sweeps, triage, standups): a cron
   trigger. Schedules deploy on merge, with no CI workflow or scheduler to host.
 - **"Do X when Y happens"**: a react trigger on pull requests, pushes, GitHub
-  issues, Linear issues, Sentry alerts, or Slack channel creation.
+  issues, failing CI checks, published releases, Linear issues, Sentry alerts,
+  or Slack channel creation.
 - **Questions in a thread**: mention `@ellipsis` on GitHub, Slack, or Linear.
   The built-in responder needs no configuration and answers in the thread.
 - **Delegation from scripts or CI**: `el --model claude-opus-5-5 "..."` or `POST /v1/sessions`. With `--watch` it streams into the log and exits nonzero
