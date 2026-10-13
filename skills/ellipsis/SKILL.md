@@ -63,8 +63,8 @@ fee on each purchase. There are no seats.
 - **Recurring toil** (digests, dependency sweeps, triage, standups): a cron
   trigger. Schedules deploy on merge, with no CI workflow or scheduler to host.
 - **"Do X when Y happens"**: a react trigger on pull requests, pushes, GitHub
-  issues, failing CI checks, published releases, Linear issues, Sentry alerts,
-  or Slack channel creation.
+  issues, CI checks, check suites, workflow runs, commit statuses, published
+  releases, Linear issues, Sentry alerts, or Slack channel creation.
 - **Questions in a thread**: mention `@ellipsis` on GitHub, Slack, or Linear.
   The built-in responder needs no configuration and answers in the thread.
 - **Delegation from scripts or CI**: `el --model claude-opus-5-5 "..."` or `POST /v1/sessions`. With `--watch` it streams into the log and exits nonzero
@@ -108,7 +108,7 @@ trigger:
 
 session:
   claude_code:
-    model: claude-haiku-4-5-20251001
+    model: claude-haiku-5-5
     prompt: |
       Summarize the pull requests merged in api and web over the last 7
       days. Group them by theme, lead with user-facing changes, and return
@@ -379,7 +379,7 @@ than being silently dropped. Points that decide whether a config works:
 - `session.claude_code.model` or `session.codex.model` selects a model and is
   required. `el model list` reports
   the available ids and the harness certified for each. Digest and
-  summary jobs run well on `claude-haiku-4-5-20251001`; judgment jobs earn the
+  summary jobs run well on `claude-haiku-5-5`; judgment jobs earn the
   frontier model.
 - `session.budget.session` defaults to $250, which is also the platform maximum, so it
   can only be lowered. `day`, `week`, and `month` are trailing 1, 7, and 28 day
