@@ -89,8 +89,8 @@ Ellipsis syncs `.yaml` and `.yml` files at any depth under `.ellipsis/` on the
 default branch; in your organization's `.ellipsis` repository, the whole
 repository is that directory. A file there is a config when it declares a
 top-level `ellipsis:` mapping, and `ellipsis.kind` says what it is (`kind: agent`
-for an agent). Other YAML there is ignored, as are files named `*.example.*`,
-`*.template.*`, or `*.fixture.*`.
+for an agent). Other YAML there is ignored, as are files named `*.example.*`
+or `*.fixture.*`.
 
 A complete, deployable config. Substitute your own repository names for `api`
 and `web`:
@@ -276,7 +276,6 @@ Start and follow work:
 el --model claude-opus-5-5 "triage the failing CI on api"   # a bare ad-hoc session
 el agent start <agent-id> ["..."]                   # start an agent session; a prompt replaces its own
 el --config-file .ellipsis/agents/my-agent.yaml --watch
-el --template ellipsis-helper --watch
 el session get <session-id> --watch                 # follow the turn in progress
 el session stop <session-id>
 ```
@@ -318,7 +317,6 @@ el agent edit <agent-id> --file .ellipsis/agents/my-agent.yaml   # replace its d
 el agent delete <agent-id>                # delete it; it stops and frees its name
 el agent link <agent-id> --repo api       # move it into a repository, via a pull request
 el agent unlink <agent-id>                # take it over from its file
-el template list                          # built-in templates and their slugs
 el model list                             # model ids, the harness each runs in, and the default
 el model use claude-opus-5-5              # set the model a bare prompt runs on
 ```
@@ -409,7 +407,7 @@ repositories already cloned and destroyed when the session ends. The base image
 carries Python 3.13, Node.js 22, `git`, the `gh` CLI, `curl`, and a C/C++
 toolchain. Your agents can build and test your product, not just read it.
 
-Three `environment.hooks` define setup, each with a different lifetime:
+Four `environment.hooks` define setup and checks, each with a different lifetime:
 
 - `hooks.build_base`: installs toolchains and dependencies before the full
   checkout, seeing only the files in `inputs`; cached. Capped at 10 minutes.
@@ -421,6 +419,10 @@ Three `environment.hooks` define setup, each with a different lifetime:
   cached, for session-scoped setup such as authenticating a CLI. Capped at 5
   minutes. Legacy `post_start` and `post_clone` run at this point but cannot be
   combined with the three above.
+- `hooks.validate`: runs last, after `before_start`, every time a session
+  starts or resumes and in a pull request's environment check; never cached.
+  Use it to check that the environment has what the agent needs, for example
+  `command -v jq`. Capped at 5 minutes.
 
 A non-zero exit from any of them fails the turn with reason
 `lifecycle_hook_failed`. The prepared environment is cached per repository set
@@ -453,9 +455,8 @@ Credentials are scoped and short-lived:
   through the dashboard, API, or CLI, so rotation is one update in one place. An
   inline `value:` is for non-secret settings only.
 - Model calls route through Ellipsis with a per-session key. A real provider key
-  never enters an environment. To pay with your own plan instead of credits,
-  connect a Claude or Codex subscription in **Models > Subscriptions**; your
-  own LLM gateway is not supported.
+  never enters an environment. Every session pays for tokens from Ellipsis
+  credits. Your own plan or LLM gateway is not supported.
 
 Session logs are not redacted: they record whatever setup scripts and the agent
 print, so keep your hooks from echoing a value.

@@ -72,7 +72,6 @@ ellipsis host delete beta            # remove a host and its stored token
 
 ellipsis session start --model claude-opus-5-5 -e backend "..."   # start a session in a saved environment
 ellipsis session start --config-file f.json   # ...or from an inline config
-ellipsis session start --template ellipsis-helper   # ...or from a maintained template
 ellipsis session start --model claude-opus-5-5 --budget 5 "..."   # cap this session's spend, in dollars
 ellipsis session start --model claude-opus-5-5 --image shot.png "..."   # the agent sees the picture on its first turn
 ellipsis session start --model claude-opus-5-5 --watch "..."   # start and stream it until its opening turn ends
@@ -87,7 +86,7 @@ ellipsis agent get <id>              # show one agent as YAML (--json for JSON)
 el agent start <agent-id> ["..."]   # start a session from its saved settings; a prompt replaces its own
 el agent start <agent-id> --input '{"issue": "ENG-42"}'   # start it with its typed input
 ellipsis agent init [path]           # scaffold a starter definition (default: agents/my_agent.yaml)
-ellipsis agent create --file agents/foo.yaml   # create one, live at once (or --template <slug>)
+ellipsis agent create --file agents/foo.yaml   # create one, live at once
 ellipsis agent create --repo api --file agents/foo.yaml   # instead define it as a file, via a pull request
 ellipsis agent edit <id> --file agents/foo.yaml   # replace its definition, live at once
 ellipsis agent delete <id>           # delete it; it stops and its name is freed
@@ -130,8 +129,7 @@ legacy `ELLIPSIS_API_BASE`).
 
 `--watch` (on both `session start` and `session get`) streams the session's
 output live over WebSocket until the turn it is waiting on ends (`completed`,
-`failed`, `stopped`, or `cancelled`), falling back to polling the turn if the
-live stream is unavailable. It exits 0 only for `completed`. Either way it
+`failed`, `stopped`, or `cancelled`). It exits 0 only for `completed`, and it
 first prints a clickable dashboard link.
 
 ### Auth
