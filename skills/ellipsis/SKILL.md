@@ -68,7 +68,7 @@ fee on each purchase. There are no seats.
 - **Questions in a thread**: mention `@ellipsis` on GitHub, Slack, or Linear.
   The built-in responder needs no configuration and answers in the thread.
 - **Delegation from scripts or CI**: `el --model claude-opus-5-5 "..."` or `POST /v1/sessions`. With `--watch` it streams into the log and exits nonzero
-  unless the turn completes, so it works as a gate.
+  when the session ends with an error, so it works as a gate.
 
 Things teams actually build: screenshot every pull request that touches the
 frontend so reviewers see the change; investigate Sentry alerts when they fire
@@ -276,7 +276,7 @@ Start and follow work:
 el --model claude-opus-5-5 "triage the failing CI on api"   # a bare ad-hoc session
 el agent start <agent-id> ["..."]                   # start an agent session; a prompt replaces its own
 el --config-file .ellipsis/agents/my-agent.yaml --watch
-el session get <session-id> --watch                 # follow the turn in progress
+el session get <session-id> --watch                 # follow the session until it is idle or closed
 el session stop <session-id>
 ```
 
@@ -286,16 +286,16 @@ prompt is the sole instruction. The CLI also sends the repository you are standi
 the server clones it. Per-session overrides need no config edit: `--model`,
 `--repo`, `--timeout`, `--budget`, and `--override` for a full
 partial config patch. `--rebuild` skips the saved
-environment. `--detach` returns immediately. `--watch --quiet` prints only the turn's
+environment. `--detach` returns immediately. `--watch --quiet` prints only the session's
 status transitions and how it ended, and either watch form exits `0` only when
-the turn completes.
+the session ends without an error.
 
 List and audit what agents have done:
 
 ```sh
 el session list --limit 20                  # --agent, --source, --author, --days, --since
 el session record <session-id>              # the stored transcript, one line per record
-el session export <session-id> -o session.jsonl   # the complete archived log
+el session export <session-id>              # a link to a zip of the whole session
 el analytics pr                             # pull request volume and trend, human versus bot
 el budget                                   # prepaid credit and trailing 1, 7, and 28 day spend
 el usage                                    # this period's tokens and cost by model
@@ -382,20 +382,21 @@ than being silently dropped. Points that decide whether a config works:
 - `session.budget.session` defaults to $250, which is also the platform maximum, so it
   can only be lowered. `day`, `week`, and `month` are trailing 1, 7, and 28 day
   caps on this agent, with ceilings of $1,000, $10,000, and $40,000. A session
-  that reaches a cap stops mid-task and its turn fails with reason `budget_hit`,
+  that reaches a cap stops mid-task and its message fails with reason `budget_hit`,
   distinct from an error. Accounts also have their own trailing caps, plus
   opt-in per-developer caps.
 - `session.output.json_schema` makes an agent a function with a contract: it
   exits through your JSON Schema, so downstream code gets typed data instead of
-  prose to parse. Schema failures fail the turn with reason `error`.
+  prose to parse. Schema failures fail the message with reason `error`.
 - Set `conversation.interactive: false`, in a config or a session start, to run once. The
   returned `conversation.prompting` describes whether direct messages are
-  accepted, and `turn` is the turn to wait on: a message is answered when its
-  turn's status is `completed`, `failed`, `stopped`, or `cancelled`.
+  accepted, and `status` says where the session is: a message is answered
+  once the status is `idle` or `closed`, and its `message_ended` record says
+  how (`completed`, `failed`, `stopped`, or `cancelled`).
 
 Validation surfaces on push to the default branch, on config pull requests, in
 the dashboard editor, and at session start for checks that need the session's
-own commit. A turn that cannot start fails or is cancelled with a reason that
+own commit. A message that cannot start fails or is cancelled with a reason that
 names the cause, such as `lifecycle_hook_failed`, `missing_repo_access`,
 `missing_token_permissions`, `missing_environment_variables`,
 `unsupported_configuration`, or `budget_hit`.
@@ -424,7 +425,7 @@ Four `environment.hooks` define setup and checks, each with a different lifetime
   Use it to check that the environment has what the agent needs, for example
   `command -v jq`. Capped at 5 minutes.
 
-A non-zero exit from any of them fails the turn with reason
+A non-zero exit from any of them fails the message with reason
 `lifecycle_hook_failed`. The prepared environment is cached per repository set
 and commit, keyed also on the `build_base` and `after_checkout` scripts, the
 `build_base.inputs` files, variable values, and GitHub token scope; a new commit reruns only `after_checkout`, so repeat sessions start in
@@ -466,13 +467,13 @@ print, so keep your hooks from echoing a value.
 Every session outlives its environment, which is what makes agent work reviewable
 rather than a black box.
 
-- The live feed interleaves the agent's own output with environment and turn
+- The live feed interleaves the agent's own output with environment and message
   events, and streams with lossless resume, so you can watch an agent work and
   catch a wrong turn before it compounds.
-- Every turn and tool call is recorded, with the config version it ran and the
+- Every message and tool call is recorded, with the config version it ran and the
   exact instructions it launched with, so "what did the agent do" and "what was
   the agent told" are both reads rather than reconstructions.
-- The complete log downloads as archived segments, so audit and compliance get
+- The whole session downloads as one zip, so audit and compliance get
   first-party records. Retention is configurable.
 - A session a person starts is attributed to that person, and one an API key
   starts to that key, which is what per-developer spend limits and author
