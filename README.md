@@ -111,15 +111,12 @@ ellipsis variable delete K           # delete a variable
 ellipsis budget                      # current budget summary
 ellipsis usage                       # usage dashboard for the period
 
-ellipsis analytics reviewer --account-type bot   # which apps review the most PRs
-ellipsis analytics pr --days 30      # PR volume/trend with human vs bot splits
-ellipsis analytics review --repo my-service      # review totals + top reviewers
 ellipsis update                      # update the CLI to the latest release (--to <x.y.z> for a specific one)
 ellipsis uninstall                   # remove the CLI from this machine (--purge to delete ~/.ellipsis too)
 ```
 
 Every command shown is singular. The plural spelling of each (`ellipsis files`,
-`ellipsis sessions`, `ellipsis analytics prs`) is a hidden alias that works but is
+`ellipsis sessions`) is a hidden alias that works but is
 left out of `--help`.
 
 Most commands accept `--json` to print the raw API response. The CLI talks to

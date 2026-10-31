@@ -8,7 +8,7 @@ description: What the Ellipsis platform is and how to drive it with the `ellipsi
 Ellipsis (https://www.ellipsis.dev) is a cloud platform for coding agents. It
 runs them like managed infrastructure: defined in your repository, deployed by
 git push, governed by scoped credentials and hard budgets, with every session
-recorded and searchable.
+recorded.
 
 An event fires, an agent starts in an isolated environment with your repositories
 cloned, reads the code, does the work, and delivers a real artifact: a pull
@@ -301,10 +301,6 @@ el budget                                   # prepaid credit and trailing 1, 7, 
 el usage                                    # this period's tokens and cost by model
 ```
 
-Search (`GET /v1/sessions/search` and the dashboard) matches every query term
-against transcripts and recaps, and matches pull request references exactly, so
-one agent's investigation compounds into team knowledge. Facets cover repository, author, agent, status, source, and date.
-
 Author and deploy agents:
 
 ```sh
@@ -477,7 +473,7 @@ rather than a black box.
   first-party records. Retention is configurable.
 - A session a person starts is attributed to that person, and one an API key
   starts to that key, which is what per-developer spend limits and author
-  search hang off. React and cron sessions have no attribution. A session an
+  filters hang off. React and cron sessions have no attribution. A session an
   agent starts keeps its starter's API key and never a person.
 - Analytics split every metric by human and bot, so agent contribution is
   measured next to your team's, over the same merge funnel and time-to-merge.
