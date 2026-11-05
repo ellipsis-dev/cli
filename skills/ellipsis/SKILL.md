@@ -76,9 +76,9 @@ and post the root cause on the issue; require a migration file on any pull
 request that touches the database; keep pull request descriptions current on
 every push.
 
-Not a fit: a single task that needs more than 1 hour of continuous work (each
-environment run is capped at 1 hour), or a workflow that must run on the user's
-own machine.
+Not a fit: a single task that needs more than 22 hours of continuous work (one
+message's work is capped by `environment.compute.timeout`, 4 hours by default
+and 22 hours at most), or a workflow that must run on the user's own machine.
 
 ## Agents as code
 
@@ -430,8 +430,11 @@ seconds instead of reinstalling dependencies.
 provisions through a fresh full build and streams every phase, which is how you
 prove an environment before merging.
 
-`environment.compute.timeout` is 60s to 1h, and defaults to 1h. One hour is also
-the maximum, because an environment never outlives its GitHub token.
+`environment.compute.timeout` is the longest one message's work may run before
+it is stopped, 1m to 22h, default 4h; the message ends `stopped` with reason
+`timeout`. `environment.compute.idle` is how long the environment stays awake
+after the agent finishes with no message waiting, 10s to 1h, default 10m; then
+it pauses, and the next message resumes it with its files and processes.
 
 Credentials are scoped and short-lived:
 
