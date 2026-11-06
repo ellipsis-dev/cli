@@ -438,8 +438,10 @@ it pauses, and the next message resumes it with its files and processes.
 
 Credentials are scoped and short-lived:
 
-- Each session gets its own `GH_TOKEN`, minted from the GitHub App installation
-  and living 1 hour; by default it carries the installation's full permissions on
+- Each session reaches GitHub through the Ellipsis GitHub proxy: `GH_HOST` names
+  the proxy host and `GH_TOKEN` (also `GH_ENTERPRISE_TOKEN`) holds the sandbox's
+  token, which the proxy swaps for a GitHub App installation token on every
+  request; by default it carries the installation's full permissions on
   every repository the installation can reach. `permissions.github.permissions`
   narrows it, either the string
   `read_only` (read on contents, issues, metadata, pull requests) or a map such
