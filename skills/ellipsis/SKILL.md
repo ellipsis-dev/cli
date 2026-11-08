@@ -293,12 +293,25 @@ the session ends without an error.
 List and audit what agents have done:
 
 ```sh
-el session list --limit 20                  # --agent, --source, --author, --days, --since
+el session list --limit 20                  # one page; --agent, --source, --author, --days, --since
+el session list --cursor <cursor>           # the next page, from the previous page's next_cursor
 el session record <session-id>              # the stored transcript, one line per record
 el session export <session-id>              # a link to a zip of the whole session
 el analytics pr                             # pull request volume and trend, human versus bot
 el budget                                   # prepaid credit and trailing 1, 7, and 28 day spend
 el usage                                    # this period's tokens and cost by model
+```
+
+`el session list` returns one page of up to 50 sessions. `el session record`
+returns the whole log unless `--limit` is passed, and then pages the same way.
+With `--json` the body is printed as the API sent it, so `has_more` and
+`next_cursor` are in it. Read `next_cursor` from the body and repeat the same
+call with `--cursor <next_cursor>` until `has_more` is false. Without `--json`
+the output ends with `next: --cursor <cursor>` while more exist.
+
+```sh
+el session list --since "2026-11-01" --json                        # page 1: {"sessions": [...], "has_more": true, "next_cursor": "..."}
+el session list --since "2026-11-01" --json --cursor <next_cursor> # page 2, same filters
 ```
 
 Author and deploy agents:

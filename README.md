@@ -75,7 +75,8 @@ ellipsis session start --config-file f.json   # ...or from an inline config
 ellipsis session start --model claude-opus-5-5 --budget 5 "..."   # cap this session's spend, in dollars
 ellipsis session start --model claude-opus-5-5 --image shot.png "..."   # the agent sees the picture on its first turn
 ellipsis session start --model claude-opus-5-5 --watch "..."   # start and stream it until its opening turn ends
-ellipsis session list --limit 20         # list recent sessions (filter by --source, --author, --since, …)
+ellipsis session list --limit 20         # one page of recent sessions (filter by --source, --author, --since, …)
+ellipsis session list --cursor <cursor>  # the next page, from the previous page's next_cursor
 ellipsis session get <session-id>        # inspect one session (prints a dashboard link)
 ellipsis session get <session-id> --watch  # follow the turn in progress until it ends
 ellipsis session record <session-id>     # read a session's stored transcript, one line per record
@@ -119,10 +120,26 @@ Every command shown is singular. The plural spelling of each (`ellipsis files`,
 `ellipsis sessions`) is a hidden alias that works but is
 left out of `--help`.
 
-Most commands accept `--json` to print the raw API response. The CLI talks to
-the public REST API. Point it at a different instance durably with
-`ellipsis host` (below), or per-invocation with `ELLIPSIS_API_BASE_URL` (or the
-legacy `ELLIPSIS_API_BASE`).
+Most commands accept `--json` to print the response body exactly as the API
+sent it. `session list` returns one page of up to 50 sessions; `session record`
+returns the whole log unless `--limit` is passed, and then pages the same way.
+Both take `--limit` and `--cursor` and answer with `has_more` and `next_cursor`.
+Repeat the call with `--cursor` set to `next_cursor` until `has_more` is false.
+Without `--json` the output ends with that cursor on a `next:` line.
+
+```sh
+cursor=
+while :; do
+  page=$(el session list --since "2026-11-01" --json ${cursor:+--cursor "$cursor"})
+  echo "$page" | jq -c '.sessions[]'
+  [ "$(echo "$page" | jq -r .has_more)" = true ] || break
+  cursor=$(echo "$page" | jq -r .next_cursor)
+done
+```
+
+The CLI talks to the public REST API. Point it at a different instance durably
+with `ellipsis host` (below), or per-invocation with `ELLIPSIS_API_BASE_URL`
+(or the legacy `ELLIPSIS_API_BASE`).
 
 `--watch` (on both `session start` and `session get`) streams the session's
 output live over WebSocket until the turn it is waiting on ends (`completed`,
