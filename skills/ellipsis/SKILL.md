@@ -293,8 +293,9 @@ the session ends without an error.
 List and audit what agents have done:
 
 ```sh
-el session list --limit 20                  # one page; --agent, --source, --author, --days, --since
+el session list --limit 20                  # one page; --agent, --status, --source, --author, --days, --since, -m key=value
 el session list --cursor <cursor>           # the next page, from the previous page's next_cursor
+el session list --event '{"body": {"pull_request": {"number": 42}}}' --json   # sessions whose webhook contains these fields; event is {integration, headers, body}
 el session record <session-id>              # the stored transcript, one line per record
 el session export <session-id>              # a link to a zip of the whole session
 el analytics pr                             # pull request volume and trend, human versus bot
@@ -321,6 +322,7 @@ el agent init .ellipsis/agents/my-agent.yaml   # scaffold a starter definition l
 el agent list                             # agents with their source file
 el agent get <agent-id>                   # one agent as YAML
 el agent start <agent-id> --input '{...}' # start it with its typed input
+el agent start <agent-id> --idempotency-key <key>   # a retry with the same key returns the same session, never a second one
 el agent create --file .ellipsis/agents/my-agent.yaml   # create it, live at once
 el agent edit <agent-id> --file .ellipsis/agents/my-agent.yaml   # replace its definition, live at once
 el agent delete <agent-id>                # delete it; it stops and frees its name

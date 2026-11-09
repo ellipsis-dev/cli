@@ -75,8 +75,9 @@ ellipsis session start --config-file f.json   # ...or from an inline config
 ellipsis session start --model claude-opus-5-5 --budget 5 "..."   # cap this session's spend, in dollars
 ellipsis session start --model claude-opus-5-5 --image shot.png "..."   # the agent sees the picture on its first turn
 ellipsis session start --model claude-opus-5-5 --watch "..."   # start and stream it until its opening turn ends
-ellipsis session list --limit 20         # one page of recent sessions (filter by --source, --author, --since, …)
+ellipsis session list --limit 20         # one page of recent sessions (filter by --agent, --status, --source, --author, --since, …)
 ellipsis session list --cursor <cursor>  # the next page, from the previous page's next_cursor
+el session list --event '{"body": {"pull_request": {"number": 42}}}'   # sessions whose webhook contains these fields
 ellipsis session get <session-id>        # inspect one session (prints a dashboard link)
 ellipsis session get <session-id> --watch  # follow the turn in progress until it ends
 ellipsis session record <session-id>     # read a session's stored transcript, one line per record
@@ -86,6 +87,7 @@ ellipsis agent list                  # list your agents
 ellipsis agent get <id>              # show one agent as YAML (--json for JSON)
 el agent start <agent-id> ["..."]   # start a session from its saved settings; a prompt replaces its own
 el agent start <agent-id> --input '{"issue": "ENG-42"}'   # start it with its typed input
+el agent start <agent-id> --idempotency-key eng-42-run-1   # a retry with the same key returns the same session
 ellipsis agent init [path]           # scaffold a starter definition (default: agents/my_agent.yaml)
 ellipsis agent create --file agents/foo.yaml   # create one, live at once
 ellipsis agent create --repo api --file agents/foo.yaml   # instead define it as a file, via a pull request
