@@ -122,7 +122,7 @@ session:
 
   permissions:
     github:
-      permissions: read_only
+      - action: read
 
   budget:
     session: 1.00
