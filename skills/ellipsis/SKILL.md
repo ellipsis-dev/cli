@@ -121,8 +121,7 @@ session:
       - name: web
 
   permissions:
-    github:
-      - action: read
+    github: read_only
 
   budget:
     session: 1.00
@@ -220,9 +219,8 @@ session:
 
   permissions:
     github:
-      permissions:
-        contents: read
-        pull_requests: write
+      - allow: [contents.read, pull_requests.write]
+        repository: api
 
   budget:
     session: 2.00
@@ -363,7 +361,7 @@ Top-level keys; `ellipsis` and `session` are required:
 | --- | --- |
 | `ellipsis` | `kind: agent`, `version: v1`, `name`, `description`, `metadata`, and `enabled`. Its presence marks the file as a config. |
 | `trigger` | One trigger, or omit for a manual-only agent. |
-| `input` | A JSON Schema for the payload `el agent start` passes, and the message template it renders into. |
+| `input` | A JSON Schema for the payload `el agent start` passes. Each `{{field}}` in the prompt is replaced with that field's value. |
 | `session` | What every session runs on; the keys below. The same keys, flattened, are the body of `POST /v1/sessions`, except that `budget` there takes only `session`. |
 
 Under `session`:
@@ -372,7 +370,7 @@ Under `session`:
 | --- | --- |
 | `claude_code` or `codex` | Exactly one native block, with `prompt`, `model`, and `effort`. Claude Code also accepts `max_turns`. |
 | `environment` | A saved environment by name, or an inline block: `repositories`, `variables`, `compute`, `hooks`, `mcp_servers`. |
-| `permissions` | What it may do: `github` scopes its GitHub token, `ellipsis` its API token. |
+| `permissions` | What it may do with GitHub (`github`) and the Ellipsis API (`ellipsis`): `all`, `read_only`, a list of rules, or left out for nothing. |
 | `skills` | Skills to install beyond what the cloned repositories provide (Codex). |
 | `output` | `json_schema`: a JSON Schema contract, so downstream code gets typed data. |
 | `budget` | `session`, `day`, `week`, `month`, in US dollars. |
@@ -456,16 +454,18 @@ Credentials are scoped and short-lived:
 - Each session reaches GitHub through the Ellipsis GitHub proxy: `GH_HOST` names
   the proxy host and `GH_TOKEN` (also `GH_ENTERPRISE_TOKEN`) holds the sandbox's
   token, which the proxy swaps for a GitHub App installation token on every
-  request; by default it carries the installation's full permissions on
-  every repository the installation can reach. `permissions.github.permissions`
-  narrows it, either the string
-  `read_only` (read on contents, issues, metadata, pull requests) or a map such
-  as `{contents: read, pull_requests: write}`. GitHub mints the reduced token, so
-  nothing in the environment can exceed it, not a misbehaving tool and not a prompt
-  injection in a pull request description. `permissions.github.repositories` narrows
-  which repositories the token may touch, independently of what is cloned.
-  Because permissions are YAML in git, every agent's blast radius is explicit
-  and reviewed.
+  request. `permissions.github` says what the agent may do there: `all` for
+  everything the installation allows, `read_only` for every read in every
+  repository, or a list whose entries are action names such as
+  `- contents.push` or rules such as
+  `- allow: [contents.read, pull_requests.write]`, each with an optional
+  `repository`. Left out, every GitHub request the agent makes is refused.
+  The proxy checks each request against the rules, so nothing in the
+  environment can exceed them, not a misbehaving tool and not a prompt
+  injection in a pull request description. `permissions.ellipsis` does the
+  same for the session's Ellipsis API token: `all`, `read_only`, a list of
+  rules, or left out for nothing. Because permissions are YAML in git, every
+  agent's blast radius is explicit and reviewed.
 - Other credentials enter as `environment.variables`. Store the value once with
   `el variable set`, then name it in the config. The name list is the scope, so
   only agents that name a variable receive its value. Stored values are write-only and never readable back
