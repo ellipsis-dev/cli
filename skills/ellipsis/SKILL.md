@@ -52,6 +52,11 @@ the logs of a session they do not own.
 trigger plus a model plus a prompt. The version on the default branch is the
 live agent.
 
+**Code Review**: reviewers you define. One `kind: code_review` file names which
+pull requests to review and a list of reviewers, each a session with its own
+prompt and model. Each push gets at most one review on the pull request,
+combining every reviewer's comments.
+
 Surfaces: the dashboard at app.ellipsis.dev, the REST API at
 api.ellipsis.dev, and the `ellipsis` CLI. All three drive the same API.
 Pricing is usage based: sessions spend USD credits on tokens at the model's rate,
@@ -173,10 +178,12 @@ demand from the CLI, API, or dashboard.
 - `type: cron` with `schedule`: a five-field cron expression (minute, hour, day
   of month, month, day of week). All schedules fire in UTC. When both day of
   month and day of week are restricted, the schedule fires on days matching
-  either.
-- `type: react` plus exactly one typed surface block. The six surfaces are
-  `pull_request`, `push`, `issue`, `linear_issue`, `sentry`, and
-  `slack_channel`. Zero or two surface blocks fail validation.
+  either. A cron agent needs a `prompt`, because a scheduled session starts with
+  no event.
+- `type: react` plus exactly one typed surface block. The surfaces are
+  `pull_request`, `push`, `issue`, `check_run`, `check_suite`, `workflow_run`,
+  `status`, `release`, `linear_issue`, `sentry`, and `slack_channel`. Zero or two surface blocks
+  fail validation.
 
 Mentions are not a trigger. To replace the built-in `@ellipsis` responder,
 commit `github.yaml`, `slack.yaml`, or `linear.yaml` (`kind: github`, `slack`, or
@@ -230,8 +237,11 @@ session:
   `review_submitted`, `commented`. `pushed` fires on every head advance
   including the open, so `on: [pushed]` covers a pull request's whole life.
 - `issue.on` takes `opened`, `closed`, `commented`. `linear_issue.on` takes
-  `opened` only. `sentry.on` takes `issue_alert` and `metric_alert`. `push` and
-  `slack_channel` have no `on` list.
+  `opened`, `updated`, and `delegated`. `check_run.on`, `check_suite.on`,
+  `workflow_run.on`, and `status.on` take the state GitHub reports, such as
+  `passed` and `failed`, and `release.on` takes `published`. `sentry.on` takes
+  `issue_alert` and `metric_alert`. `push` and `slack_channel` have no `on`
+  list.
 - Every filter except `for` defaults to matching everything: `repositories`,
   `base`, `head`, `branch`, `draft`, `labels`, `paths`, `projects`. `paths` globs are
   include-only, and a negated `!` pattern fails validation.
@@ -296,7 +306,6 @@ el session list --cursor <cursor>           # the next page, from the previous p
 el session list --event '{"body": {"pull_request": {"number": 42}}}' --json   # sessions whose webhook contains these fields; event is {integration, headers, body}
 el session record <session-id>              # the stored transcript, one line per record
 el session export <session-id>              # a link to a zip of the whole session
-el analytics pr                             # pull request volume and trend, human versus bot
 el budget                                   # prepaid credit and trailing 1, 7, and 28 day spend
 el usage                                    # this period's tokens and cost by model
 ```
@@ -368,7 +377,7 @@ Under `session`:
 
 | Key | Purpose |
 | --- | --- |
-| `claude_code` or `codex` | Exactly one native block, with `prompt`, `model`, and `effort`. Claude Code also accepts `max_turns`. |
+| `claude_code`, `codex`, or `gemini` | Exactly one native block, with `prompt` and `model`. Claude Code and Codex also accept `effort`, and Claude Code `max_turns`. |
 | `environment` | A saved environment by name, or an inline block: `repositories`, `variables`, `compute`, `hooks`, `mcp_servers`. |
 | `permissions` | What it may do with GitHub (`github`) and the Ellipsis API (`ellipsis`): `all`, `read_only`, a list of rules, or left out for nothing. |
 | `skills` | Skills to install beyond what the cloned repositories provide (Codex). |
@@ -380,10 +389,11 @@ Under `session`:
 The schema is strict, so an unknown or misplaced key fails validation rather
 than being silently dropped. Points that decide whether a config works:
 
-- `session.claude_code.prompt` or `session.codex.prompt` supplies the first user
-  message verbatim. Put repository guidance in `CLAUDE.md` for Claude Code or
-  `AGENTS.md` for Codex.
-- `session.claude_code.model` or `session.codex.model` selects a model and is
+- The native block's `prompt` (`session.claude_code.prompt`,
+  `session.codex.prompt`, or `session.gemini.prompt`) supplies the first user
+  message verbatim. Put repository guidance in `CLAUDE.md` for Claude Code,
+  `AGENTS.md` for Codex, or `GEMINI.md` for Gemini CLI.
+- The native block's `model` selects a model and is
   required. `el model list` reports
   the available ids and the harness certified for each. Digest and
   summary jobs run well on `claude-haiku-5-5`; judgment jobs earn the
@@ -414,8 +424,10 @@ names the cause, such as `lifecycle_hook_failed`, `missing_repo_access`,
 
 Every session runs in its own Linux environment, created for that session with its
 repositories already cloned and destroyed when the session ends. The base image
-carries Python 3.13, Node.js 22, `git`, the `gh` CLI, `curl`, and a C/C++
-toolchain. Your agents can build and test your product, not just read it.
+is Debian 12 with Python 3.11, Node.js 22, `git`, the `gh` CLI, `curl`, and
+`sudo`. It has no Docker and no compiler, so install what your product needs in
+`hooks.build_base`. Your agents can build and test your product, not just read
+it.
 
 Four `environment.hooks` define setup and checks, each with a different lifetime:
 
@@ -536,11 +548,13 @@ npx skills add ellipsis-dev/cli
 ## Inside an Ellipsis session
 
 If `ELLIPSIS_SANDBOX_ID` is set in the environment, you are the agent in an
-Ellipsis session. The `ellipsis` CLI (`el`) is pre-installed and pre-authenticated with a
-session-scoped token, so you can start child sessions, list the team's sessions,
-and read analytics with no login.
+Ellipsis session. The `ellipsis` CLI (`el`) is pre-installed and holds a
+session-scoped token, with no login. What that token may do is the session's
+`permissions.ellipsis`: with `all` you can start child sessions and list the
+team's sessions, with `read_only` you can only read, and with the block left
+out every call is refused with a 403.
 
-That token is deliberately narrower than a human's. It can list variable names
+Even with `all`, that token is deliberately narrower than a human's. It can list variable names
 but not set or delete them, and cannot repoint an
 account or repository default. An agent cannot overwrite the team's credentials
 or destroy the evidence it posted.
@@ -564,4 +578,5 @@ is every page in one file.
 - Models: https://www.ellipsis.dev/docs/models
 - Budgets: https://www.ellipsis.dev/docs/budgets
 - Pricing: https://www.ellipsis.dev/docs/pricing
+- Code review: https://www.ellipsis.dev/docs/code-review
 - Security: https://www.ellipsis.dev/docs/security
