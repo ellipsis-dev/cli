@@ -1,0 +1,8 @@
+ellipsis:
+  kind: code_review
+  name: code-review
+reviewers:
+- name: bugs
+  claude_code:
+    prompt: a
+    model: claude-opus-5-5
