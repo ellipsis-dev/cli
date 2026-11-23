@@ -378,7 +378,8 @@ Under `session`:
 | Key | Purpose |
 | --- | --- |
 | `claude_code`, `codex`, or `gemini` | Exactly one native block, with `prompt` and `model`. Claude Code and Codex also accept `effort`, and Claude Code `max_turns`. |
-| `environment` | A saved environment by name, or an inline block: `repositories`, `variables`, `compute`, `hooks`, `mcp_servers`. |
+| `environment` | A saved environment by name, or an inline block: `repositories`, `variables`, `compute`, `hooks`, `mcp`. |
+| `mcp` | MCP servers whose tools the session gets: `slack` or `linear` by name, a remote server with `name`, `url`, and optional `headers`, or a command server with `name`, `command`, and optional `args` and `env`, installed by the environment's `hooks.build_base`. An environment's own `mcp` takes the same entries, and the session gets both lists. |
 | `permissions` | What it may do with GitHub (`github`) and the Ellipsis API (`ellipsis`): `all`, `read_only`, a list of rules, or left out for nothing. |
 | `skills` | Skills to install beyond what the cloned repositories provide (Codex). |
 | `output` | `json_schema`: a JSON Schema contract, so downstream code gets typed data. |
